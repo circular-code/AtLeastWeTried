@@ -1,0 +1,49 @@
+# IDE and editor state
+.vs/
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# .NET build output
+**/bin/
+**/obj/
+**/publish/
+TestResults/
+
+# User-specific Visual Studio files
+*.suo
+*.user
+*.userosscache
+*.rsuser
+
+# JavaScript and frontend build output
+**/node_modules/
+**/dist/
+**/dist-ssr/
+**/coverage/
+**/*.tsbuildinfo
+**/.eslintcache
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Local environment files
+**/.env
+**/.env.*
+!**/.env.example
+
+# Local-only config files
+*.local
+
+# Vite temp files
+*.timestamp-*-*.mjs

@@ -1,0 +1,24 @@
+{
+  "name": "flattiverse-webui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "generate:types": "node -e \"console.log('Using checked-in generated gateway types.')\"",
+    "predev": "npm run generate:types",
+    "dev": "vite",
+    "prebuild": "npm run generate:types",
+    "build": "vue-tsc --noEmit && vite build"
+  },
+  "dependencies": {
+    "three": "^0.176.0",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@types/three": "^0.176.0",
+    "@vitejs/plugin-vue": "^5.2.3",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5",
+    "vue-tsc": "^2.2.10"
+  }
+}
