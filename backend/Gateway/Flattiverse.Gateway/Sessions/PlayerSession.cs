@@ -3,32 +3,34 @@ using Flattiverse.Connector.Events;
 using Flattiverse.Connector.GalaxyHierarchy;
 using Flattiverse.Connector.Network;
 using Flattiverse.Connector.Units;
+using Flattiverse.Gateway.Connector;
 using Flattiverse.Gateway.Protocol.Dtos;
 using Flattiverse.Gateway.Protocol.ServerMessages;
+using Flattiverse.Gateway.Services;
 using Microsoft.Extensions.Logging;
 
 namespace Flattiverse.Gateway.Sessions;
 
-public sealed class PlayerSession : IDisposable
+public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 {
     private readonly string _apiKey;
     private readonly string? _teamName;
     private readonly ILogger _logger;
     private readonly string _id;
-    private Galaxy? _galaxy;
-    private Task? _eventLoopTask;
-    private readonly CancellationTokenSource _cts = new();
+    private GalaxyConnectionManager? _connectionManager;
     private readonly object _lock = new();
     private readonly HashSet<BrowserConnection> _attachedConnections = new();
     private string _displayName = "";
     private bool _connected;
     private string _galaxyUrl;
+    private readonly MappingService _mappingService = new();
 
     public string Id => _id;
     public string DisplayName => _displayName;
     public bool Connected => _connected;
     public string? TeamName => _teamName;
-    public Galaxy? Galaxy => _galaxy;
+    public Galaxy? Galaxy => _connectionManager?.Galaxy;
+    public MappingService MappingService => _mappingService;
 
     public PlayerSession(string id, string apiKey, string? teamName, string galaxyUrl, ILogger logger)
     {
@@ -43,16 +45,39 @@ public sealed class PlayerSession : IDisposable
     {
         try
         {
-            _galaxy = await Connector.GalaxyHierarchy.Galaxy.Connect(_galaxyUrl, _apiKey, _teamName);
+            _connectionManager = new GalaxyConnectionManager(_galaxyUrl, _apiKey, _teamName, _logger);
+            _connectionManager.ConnectionLost += OnConnectionLost;
+
+            var handlers = new List<IConnectorEventHandler> { _mappingService, this };
+            await _connectionManager.ConnectAsync(handlers);
+
             _connected = true;
-            _displayName = _galaxy.Player.Name;
-            _eventLoopTask = Task.Run(EventLoop);
+            _displayName = _connectionManager.Galaxy!.Player.Name;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to connect player session {Id}", _id);
             throw;
         }
+    }
+
+    private void OnConnectionLost()
+    {
+        _connected = false;
+
+        List<BrowserConnection> connections;
+        lock (_lock)
+            connections = _attachedConnections.ToList();
+
+        var statusMsg = new ServerStatusMessage
+        {
+            Kind = "error",
+            Code = "session_lost",
+            Message = "Connection lost",
+            Recoverable = false
+        };
+        foreach (var conn in connections)
+            conn.EnqueueMessage(statusMsg);
     }
 
     public void AttachConnection(BrowserConnection connection)
@@ -74,17 +99,18 @@ public sealed class PlayerSession : IDisposable
 
     public GalaxySnapshotDto BuildSnapshot()
     {
-        if (_galaxy is null)
+        var galaxy = Galaxy;
+        if (galaxy is null)
             return new GalaxySnapshotDto();
 
         var dto = new GalaxySnapshotDto
         {
-            Name = _galaxy.Name,
-            Description = _galaxy.Description,
-            GameMode = _galaxy.GameMode.ToString()
+            Name = galaxy.Name,
+            Description = galaxy.Description,
+            GameMode = galaxy.GameMode.ToString()
         };
 
-        foreach (var team in _galaxy.Teams)
+        foreach (var team in galaxy.Teams)
         {
             if (team is null) continue;
             dto.Teams.Add(new TeamSnapshotDto
@@ -96,7 +122,7 @@ public sealed class PlayerSession : IDisposable
             });
         }
 
-        foreach (var cluster in _galaxy.Clusters)
+        foreach (var cluster in galaxy.Clusters)
         {
             if (cluster is null) continue;
             dto.Clusters.Add(new ClusterSnapshotDto
@@ -108,18 +134,9 @@ public sealed class PlayerSession : IDisposable
             });
         }
 
-        foreach (var cluster in _galaxy.Clusters)
-        {
-            if (cluster is null) continue;
-            foreach (var unit in cluster.Units)
-            {
-                var unitDto = MapUnit(unit, cluster.Id);
-                if (unitDto is not null)
-                    dto.Units.Add(unitDto);
-            }
-        }
+        dto.Units = _mappingService.BuildUnitSnapshots();
 
-        foreach (var player in _galaxy.Players)
+        foreach (var player in galaxy.Players)
         {
             if (player is null) continue;
             foreach (var info in player.ControllableInfos)
@@ -141,12 +158,13 @@ public sealed class PlayerSession : IDisposable
 
     public List<OwnerOverlayDeltaDto> BuildOverlaySnapshot()
     {
-        if (_galaxy is null)
+        var galaxy = Galaxy;
+        if (galaxy is null)
             return new List<OwnerOverlayDeltaDto>();
 
         var events = new List<OwnerOverlayDeltaDto>();
 
-        foreach (var controllable in _galaxy.Controllables)
+        foreach (var controllable in galaxy.Controllables)
         {
             if (controllable is null) continue;
             events.Add(BuildControllableOverlay(controllable));
@@ -159,11 +177,11 @@ public sealed class PlayerSession : IDisposable
     {
         var changes = new Dictionary<string, object?>();
         changes["displayName"] = controllable.Name;
-        changes["kind"] = MapUnitKind(controllable.Kind);
+        changes["kind"] = MappingService.MapUnitKind(controllable.Kind);
         changes["clusterId"] = controllable.Cluster?.Id ?? 0;
         changes["clusterName"] = controllable.Cluster?.Name ?? "Unknown";
         changes["radius"] = controllable.Size;
-        changes["teamName"] = _galaxy?.Player?.Team?.Name ?? "";
+        changes["teamName"] = Galaxy?.Player?.Team?.Name ?? "";
         changes["alive"] = controllable.Alive;
         changes["active"] = controllable.Active;
 
@@ -207,7 +225,7 @@ public sealed class PlayerSession : IDisposable
                 { "current", controllable.EnergyBattery.Current },
                 { "maximum", controllable.EnergyBattery.Maximum }
             };
-            var cId = $"p{_galaxy!.Player.Id}-c{controllable.Id}";
+            var cId = $"p{Galaxy!.Player.Id}-c{controllable.Id}";
             var navTarget = GetNavigationTarget(cId);
             changes["navigation"] = new Dictionary<string, object>
             {
@@ -220,14 +238,14 @@ public sealed class PlayerSession : IDisposable
         return new OwnerOverlayDeltaDto
         {
             EventType = "overlay.snapshot",
-            ControllableId = $"p{_galaxy!.Player.Id}-c{controllable.Id}",
+            ControllableId = $"p{Galaxy!.Player.Id}-c{controllable.Id}",
             Changes = changes
         };
     }
 
     public async Task<CommandReplyMessage> HandleCommandAsync(string commandType, string commandId, System.Text.Json.JsonElement? payload)
     {
-        if (_galaxy is null || !_connected)
+        if (Galaxy is null || !_connected)
             return Rejected(commandId, "not_connected", "Player session is not connected.");
 
         try
@@ -266,16 +284,16 @@ public sealed class PlayerSession : IDisposable
         switch (scope)
         {
             case "galaxy":
-                await _galaxy!.Chat(message);
+                await Galaxy!.Chat(message);
                 break;
             case "team":
-                await _galaxy!.Player.Team.Chat(message);
+                await Galaxy!.Player.Team.Chat(message);
                 break;
             case "private":
                 var recipientId = payload?.GetProperty("recipientPlayerSessionId").GetString();
                 // Find player by session ID and send private chat
                 // For MVP, fall back to galaxy chat
-                await _galaxy!.Chat(message);
+                await Galaxy!.Chat(message);
                 break;
         }
 
@@ -299,20 +317,20 @@ public sealed class PlayerSession : IDisposable
         Controllable controllable;
         if (shipClass == "modern")
         {
-            controllable = await _galaxy!.CreateModernShip(name,
+            controllable = await Galaxy!.CreateModernShip(name,
                 crystalNames.ElementAtOrDefault(0) ?? "",
                 crystalNames.ElementAtOrDefault(1) ?? "",
                 crystalNames.ElementAtOrDefault(2) ?? "");
         }
         else
         {
-            controllable = await _galaxy!.CreateClassicShip(name,
+            controllable = await Galaxy!.CreateClassicShip(name,
                 crystalNames.ElementAtOrDefault(0) ?? "",
                 crystalNames.ElementAtOrDefault(1) ?? "",
                 crystalNames.ElementAtOrDefault(2) ?? "");
         }
 
-        var controllableId = $"p{_galaxy.Player.Id}-c{controllable.Id}";
+        var controllableId = $"p{Galaxy.Player.Id}-c{controllable.Id}";
 
         return new CommandReplyMessage
         {
@@ -491,46 +509,45 @@ public sealed class PlayerSession : IDisposable
     private Controllable? FindControllable(string controllableId)
     {
         // controllableId format: "p{playerId}-c{controllableId}"
-        if (_galaxy is null) return null;
+        var galaxy = Galaxy;
+        if (galaxy is null) return null;
 
-        foreach (var c in _galaxy.Controllables)
+        foreach (var c in galaxy.Controllables)
         {
             if (c is null) continue;
-            if ($"p{_galaxy.Player.Id}-c{c.Id}" == controllableId)
+            if ($"p{galaxy.Player.Id}-c{c.Id}" == controllableId)
                 return c;
         }
 
         return null;
     }
 
-    private async Task EventLoop()
+    /// <summary>
+    /// Called by TickService every 40ms. Collects pending deltas from
+    /// MappingService and overlay state, then delivers to browser connections.
+    /// </summary>
+    public void FlushTickDeltas()
     {
-        var galaxy = _galaxy;
-        if (galaxy is null) return;
+        List<BrowserConnection> connections;
+        lock (_lock)
+            connections = _attachedConnections.ToList();
 
-        try
-        {
-            while (galaxy.Active && !_cts.Token.IsCancellationRequested)
-            {
-                var @event = await galaxy.NextEvent();
-                DispatchEvent(@event);
-            }
-        }
-        catch (ConnectionTerminatedGameException)
-        {
-            _logger.LogWarning("Galaxy connection terminated for session {Id}", _id);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Event loop error for session {Id}", _id);
-        }
-        finally
-        {
-            _connected = false;
-        }
+        if (connections.Count == 0) return;
+
+        // Collect and broadcast pending world deltas
+        var worldDeltas = _mappingService.CollectPendingDeltas();
+        BroadcastWorldDelta(connections, worldDeltas);
+
+        // Broadcast owner overlay
+        BroadcastOwnerOverlay(connections);
     }
 
-    private void DispatchEvent(FlattiverseEvent @event)
+    /// <summary>
+    /// IConnectorEventHandler — receives events from the ConnectorEventLoop.
+    /// Handles session-specific events (chat, controllable lifecycle, connection terminated).
+    /// Unit events are handled by MappingService (registered as a separate handler).
+    /// </summary>
+    public void Handle(FlattiverseEvent @event)
     {
         List<BrowserConnection> connections;
         lock (_lock)
@@ -538,43 +555,6 @@ public sealed class PlayerSession : IDisposable
 
         switch (@event)
         {
-            case NewUnitFlattiverseEvent newUnit:
-                var created = MapUnit(newUnit.Unit, newUnit.Unit.Cluster?.Id ?? 0);
-                if (created is null) break;
-                var createDelta = new WorldDeltaDto
-                {
-                    EventType = "unit.created",
-                    EntityId = created.UnitId,
-                    Changes = UnitToChanges(created)
-                };
-                BroadcastWorldDelta(connections, new List<WorldDeltaDto> { createDelta });
-                break;
-
-            case UpdatedUnitFlattiverseEvent updatedUnit:
-                var updated = MapUnit(updatedUnit.Unit, updatedUnit.Unit.Cluster?.Id ?? 0);
-                if (updated is null) break;
-                var updateDelta = new WorldDeltaDto
-                {
-                    EventType = "unit.updated",
-                    EntityId = updated.UnitId,
-                    Changes = UnitToChanges(updated)
-                };
-                BroadcastWorldDelta(connections, new List<WorldDeltaDto> { updateDelta });
-                break;
-
-            case RemovedUnitFlattiverseEvent removedUnit:
-                var removedId = removedUnit.Unit.Name;
-                var removeDelta = new WorldDeltaDto
-                {
-                    EventType = "unit.removed",
-                    EntityId = removedId
-                };
-                BroadcastWorldDelta(connections, new List<WorldDeltaDto> { removeDelta });
-                break;
-
-            case GalaxyTickEvent:
-                BroadcastOwnerOverlay(connections);
-                break;
 
             case ChatPlayerEvent chatEvent:
                 var scope = chatEvent.Kind switch
@@ -645,19 +625,6 @@ public sealed class PlayerSession : IDisposable
                     BroadcastWorldDelta(connections, new List<WorldDeltaDto> { cDelta });
                 }
                 break;
-
-            case ConnectionTerminatedEvent terminated:
-                _connected = false;
-                var statusMsg = new ServerStatusMessage
-                {
-                    Kind = "error",
-                    Code = "session_lost",
-                    Message = terminated.Message ?? "Connection lost",
-                    Recoverable = false
-                };
-                foreach (var conn in connections)
-                    conn.EnqueueMessage(statusMsg);
-                break;
         }
     }
 
@@ -671,11 +638,12 @@ public sealed class PlayerSession : IDisposable
 
     private void BroadcastOwnerOverlay(List<BrowserConnection> connections)
     {
-        if (_galaxy is null) return;
+        var galaxy = Galaxy;
+        if (galaxy is null) return;
 
         var events = new List<OwnerOverlayDeltaDto>();
 
-        foreach (var controllable in _galaxy.Controllables)
+        foreach (var controllable in galaxy.Controllables)
         {
             if (controllable is null) continue;
             events.Add(BuildControllableOverlay(controllable));
@@ -696,86 +664,6 @@ public sealed class PlayerSession : IDisposable
         }
     }
 
-    private static Dictionary<string, object?> UnitToChanges(UnitSnapshotDto unit)
-    {
-        var changes = new Dictionary<string, object?>
-        {
-            { "unitId", unit.UnitId },
-            { "clusterId", unit.ClusterId },
-            { "kind", unit.Kind },
-            { "x", unit.X },
-            { "y", unit.Y },
-            { "angle", unit.Angle },
-            { "radius", unit.Radius }
-        };
-        if (unit.TeamName is not null) changes["teamName"] = unit.TeamName;
-        if (unit.SunEnergy.HasValue) changes["sunEnergy"] = unit.SunEnergy;
-        if (unit.SunIons.HasValue) changes["sunIons"] = unit.SunIons;
-        if (unit.SunNeutrinos.HasValue) changes["sunNeutrinos"] = unit.SunNeutrinos;
-        if (unit.SunHeat.HasValue) changes["sunHeat"] = unit.SunHeat;
-        if (unit.SunDrain.HasValue) changes["sunDrain"] = unit.SunDrain;
-        return changes;
-    }
-
-    internal static UnitSnapshotDto? MapUnit(Unit unit, int clusterId)
-    {
-        var dto = new UnitSnapshotDto
-        {
-            UnitId = unit.Name,
-            ClusterId = clusterId,
-            Kind = MapUnitKind(unit.Kind),
-            X = unit.Position.X,
-            Y = unit.Position.Y,
-            Angle = unit.Angle,
-            Radius = unit.Radius,
-            TeamName = unit.Team?.Name
-        };
-
-        if (unit is Sun sun)
-        {
-            dto.SunEnergy = sun.Energy;
-            dto.SunIons = sun.Ions;
-            dto.SunNeutrinos = sun.Neutrinos;
-            dto.SunHeat = sun.Heat;
-            dto.SunDrain = sun.Drain;
-        }
-
-        return dto;
-    }
-
-    internal static string MapUnitKind(UnitKind kind)
-    {
-        return kind switch
-        {
-            UnitKind.Sun => "sun",
-            UnitKind.BlackHole => "black-hole",
-            UnitKind.Planet => "planet",
-            UnitKind.Moon => "moon",
-            UnitKind.Meteoroid => "meteoroid",
-            UnitKind.Buoy => "buoy",
-            UnitKind.WormHole => "wormhole",
-            UnitKind.MissionTarget => "mission-target",
-            UnitKind.Flag => "flag",
-            UnitKind.DominationPoint => "domination-point",
-            UnitKind.CurrentField => "current-field",
-            UnitKind.Nebula => "nebula",
-            UnitKind.Storm => "storm",
-            UnitKind.StormCommencingWhirl => "storm-whirl",
-            UnitKind.StormActiveWhirl => "storm-whirl-active",
-            UnitKind.ClassicShipPlayerUnit => "classic-ship",
-            UnitKind.ModernShipPlayerUnit => "modern-ship",
-            UnitKind.EnergyChargePowerUp => "powerup-energy",
-            UnitKind.IonChargePowerUp => "powerup-ion",
-            UnitKind.NeutrinoChargePowerUp => "powerup-neutrino",
-            UnitKind.MetalCargoPowerUp => "powerup-metal",
-            UnitKind.CarbonCargoPowerUp => "powerup-carbon",
-            UnitKind.HydrogenCargoPowerUp => "powerup-hydrogen",
-            UnitKind.SiliconCargoPowerUp => "powerup-silicon",
-            UnitKind.ShieldChargePowerUp => "powerup-shield",
-            _ => kind.ToString().ToLowerInvariant()
-        };
-    }
-
     private static CommandReplyMessage Completed(string commandId)
     {
         return new CommandReplyMessage { CommandId = commandId, Status = "completed" };
@@ -793,8 +681,10 @@ public sealed class PlayerSession : IDisposable
 
     public void Dispose()
     {
-        _cts.Cancel();
-        _galaxy?.Dispose();
-        _cts.Dispose();
+        if (_connectionManager is not null)
+        {
+            _connectionManager.ConnectionLost -= OnConnectionLost;
+            _connectionManager.Dispose();
+        }
     }
 }

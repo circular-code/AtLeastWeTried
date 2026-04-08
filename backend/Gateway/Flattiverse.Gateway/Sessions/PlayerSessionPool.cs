@@ -49,6 +49,11 @@ public sealed class PlayerSessionPool : IDisposable
         }
     }
 
+    public IEnumerable<PlayerSession> GetActiveSessions()
+    {
+        return _sessions.Values.Where(s => s.Connected);
+    }
+
     public void Dispose()
     {
         foreach (var kvp in _sessions)

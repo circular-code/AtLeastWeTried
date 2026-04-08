@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Flattiverse.Gateway.Protocol;
 using Flattiverse.Gateway.Protocol.ServerMessages;
+using Flattiverse.Gateway.Services;
 using Flattiverse.Gateway.Sessions;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -14,6 +15,8 @@ builder.Services.AddSingleton(sp =>
     var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
     return new PlayerSessionPool(galaxyUrl, loggerFactory);
 });
+
+builder.Services.AddHostedService<TickService>();
 
 var app = builder.Build();
 

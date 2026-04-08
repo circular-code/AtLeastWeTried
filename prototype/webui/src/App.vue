@@ -838,17 +838,13 @@ function applyOwnerOverlay(current: Record<string, unknown>, message: OwnerOverl
   const next: Record<string, unknown> = message.events.some((event) => event.eventType === 'overlay.snapshot') ? {} : { ...current };
 
   for (const event of message.events) {
-    if (event.eventType === 'overlay.snapshot') {
-      continue;
-    }
-
     if (!event.changes) {
       delete next[event.controllableId];
       continue;
     }
 
     next[event.controllableId] = {
-      ...(typeof next[event.controllableId] === 'object' && next[event.controllableId] !== null
+      ...(event.eventType !== 'overlay.snapshot' && typeof next[event.controllableId] === 'object' && next[event.controllableId] !== null
         ? (next[event.controllableId] as Record<string, unknown>)
         : {}),
       ...event.changes,
