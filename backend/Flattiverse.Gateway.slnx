@@ -4,14 +4,7 @@
     <Project Path="Connector/Flattiverse.Connector/Flattiverse.Connector/Flattiverse.Connector.csproj" />
   </Folder>
   <Folder Name="/Gateway/">
-    <Project Path="Gateway/Flattiverse.Gateway.Application/Flattiverse.Gateway.Application.csproj" />
-    <Project Path="Gateway/Flattiverse.Gateway.Contracts/Flattiverse.Gateway.Contracts.csproj" />
-    <Project Path="Gateway/Flattiverse.Gateway.Domain/Flattiverse.Gateway.Domain.csproj" />
+    <Project Path="Gateway/Flattiverse.Gateway/Flattiverse.Gateway.csproj" />
     <Project Path="Gateway/Flattiverse.Gateway.Host/Flattiverse.Gateway.Host.csproj" />
-    <Project Path="Gateway/Flattiverse.Gateway.Infrastructure/Flattiverse.Gateway.Infrastructure.csproj" />
-  </Folder>
-  <Folder Name="/Gateway/tests/">
-    <Project Path="Gateway/tests/Flattiverse.Gateway.Tests.Integration/Flattiverse.Gateway.Tests.Integration.csproj" />
-    <Project Path="Gateway/tests/Flattiverse.Gateway.Tests.Unit/Flattiverse.Gateway.Tests.Unit.csproj" />
   </Folder>
 </Solution>
