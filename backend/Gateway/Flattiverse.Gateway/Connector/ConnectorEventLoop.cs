@@ -38,6 +38,7 @@ public sealed class ConnectorEventLoop : IDisposable
             while (_galaxy.Active && !_cts.Token.IsCancellationRequested)
             {
                 var @event = await _galaxy.NextEvent();
+                _logger.LogDebug("Received event {EventType} details {EventDetails}", @event.GetType().Name, @event.ToString());
 
                 foreach (var handler in _handlers)
                 {

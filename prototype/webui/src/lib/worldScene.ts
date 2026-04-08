@@ -57,6 +57,91 @@ const DEBUG_SUN_BOUNDS_Y = 2600;
 const MIN_PICK_RADIUS_PX = 12;
 const PICK_RADIUS_PADDING_PX = 4;
 
+// --- Scanner Cone Shader ---
+
+const SCANNER_CONE_VERTEX_SHADER = `
+  varying vec2 vLocalUv;
+
+  void main() {
+    vLocalUv = uv * 2.0 - 1.0;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const SCANNER_CONE_FRAGMENT_SHADER = `
+  uniform float time;
+  uniform float halfWidthRad;
+  uniform float coneLength;
+  uniform float targetHalfWidthRad;
+  uniform float targetLength;
+  uniform vec3 color;
+  uniform float opacity;
+
+  varying vec2 vLocalUv;
+
+  const float PI = 3.14159265359;
+
+  void main() {
+    // vLocalUv goes -1..+1; the cone points in +X direction (angle=0)
+    float dist = length(vLocalUv);
+    float angle = atan(vLocalUv.y, vLocalUv.x);
+
+    // Discard behind origin
+    if (vLocalUv.x < -0.02) discard;
+
+    float r = length(vLocalUv);
+    // Normalize radial distance: 0 at center, 1 at cone range
+    float radialNorm = r;
+
+    // Angular mask: inside the current scan cone half-angle
+    float absAngle = abs(angle);
+    float edgeSoftness = 0.006;
+    float angleMask = 1.0 - smoothstep(halfWidthRad - edgeSoftness, halfWidthRad + edgeSoftness, absAngle);
+
+    // Radial mask: hard cutoff at range
+    float radialMask = 1.0 - step(1.0, radialNorm);
+
+    // Combine
+    float coneMask = angleMask * radialMask;
+
+    // Sweep effect: radial pulse lines
+    float sweep = 0.5 + 0.5 * sin(radialNorm * 28.0 - time * 3.0);
+    float sweepMask = sweep * 0.3;
+
+    // Inner glow near origin
+    float innerGlow = (1.0 - smoothstep(0.0, 0.35, radialNorm)) * 0.4;
+
+    // Edge highlight — thin crisp border along the cone sides
+    float edgeInner = smoothstep(halfWidthRad - 0.012, halfWidthRad - 0.004, absAngle);
+    float edgeOuter = 1.0 - smoothstep(halfWidthRad - 0.004, halfWidthRad + 0.004, absAngle);
+    float edgeGlow = edgeInner * edgeOuter * radialMask * 0.8;
+
+    // Radial arc at the range limit
+    float arcEdge = smoothstep(0.96, 0.98, radialNorm) * (1.0 - smoothstep(0.99, 1.0, radialNorm)) * angleMask * 0.7;
+
+    // Target cone outline (faint dashed)
+    float targetAngleMask = smoothstep(targetHalfWidthRad - 0.005, targetHalfWidthRad, absAngle)
+                          * (1.0 - smoothstep(targetHalfWidthRad, targetHalfWidthRad + 0.008, absAngle));
+    float targetRadialEdge = smoothstep(targetLength - 0.01, targetLength, radialNorm)
+                           * (1.0 - smoothstep(targetLength, targetLength + 0.008, radialNorm));
+    float targetInsideAngle = 1.0 - smoothstep(targetHalfWidthRad - 0.004, targetHalfWidthRad + 0.004, absAngle);
+    float dash = step(0.5, fract(radialNorm * 12.0));
+    float targetOutline = (targetAngleMask * radialMask + targetRadialEdge * targetInsideAngle) * dash * 0.35;
+
+    float alpha = (coneMask * (0.08 + sweepMask + innerGlow) + edgeGlow + arcEdge + targetOutline) * opacity;
+
+    if (alpha < 0.005) discard;
+
+    vec3 finalColor = color * (1.0 + innerGlow * 0.8 + edgeGlow * 1.2);
+    gl_FragColor = vec4(finalColor, alpha);
+  }
+`;
+
+type ScannerConeVisual = {
+  mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
+  controllableId: string;
+};
+
 const UNIT_BODY_VERTEX_SHADER = `
   attribute vec3 instanceBodyColor;
   attribute float instanceKind;
@@ -310,6 +395,7 @@ export class WorldScene {
   private selectedControllableId: string;
   private selectedUnitId: string;
   private selectedNavigationTarget: WorldSceneNavigationTarget;
+  private readonly scannerCones: Map<string, ScannerConeVisual>;
   private animationFrame: number | null;
   private dragStartClient: { x: number; y: number } | null;
   private dragStartCamera: { x: number; y: number } | null;
@@ -348,6 +434,7 @@ export class WorldScene {
     this.bodyOpacityAttribute = unitBodyMesh.opacityAttribute;
     this.selectedRing = createSelectionRing();
     this.navigationMarker = createNavigationMarker();
+    this.scannerCones = new Map();
     this.scene.add(this.grid);
     this.scene.add(this.bodyMesh);
     this.scene.add(this.root);
@@ -410,6 +497,7 @@ export class WorldScene {
     this.container.removeEventListener('wheel', this.handleWheel);
     this.disposeBodyMesh();
     this.disposeVisuals();
+    this.disposeScannerCones();
     this.unitBodyMaterial.dispose();
     this.renderer.dispose();
     this.container.innerHTML = '';
@@ -584,7 +672,13 @@ export class WorldScene {
       return;
     }
 
-    this.unitBodyMaterial.uniforms.time.value = timestamp * 0.001;
+    const time = timestamp * 0.001;
+    this.unitBodyMaterial.uniforms.time.value = time;
+
+    for (const [, cone] of this.scannerCones) {
+      cone.mesh.material.uniforms.time.value = time;
+    }
+
     this.renderer.render(this.scene, this.camera);
     this.animationFrame = window.requestAnimationFrame(this.renderFrame);
   };
@@ -635,6 +729,7 @@ export class WorldScene {
     this.bodyOpacityAttribute.needsUpdate = true;
     this.updateSelectionRing();
     this.updateNavigationMarker();
+    this.updateScannerCones(units);
   }
 
   private buildRenderableUnits(): NormalizedUnit[] {
@@ -761,6 +856,93 @@ export class WorldScene {
     this.navigationMarker.scale.set(markerScale, markerScale, 1);
   }
 
+  private updateScannerCones(units: NormalizedUnit[]) {
+    // Collect controllable IDs that have active scanners in the overlay
+    const activeScanners = new Map<string, {
+      unit: NormalizedUnit;
+      scannerState: OwnerOverlayState;
+      teamColor: string;
+    }>();
+
+    for (const [controllableId, overlay] of Object.entries(this.ownerOverlay)) {
+      const scannerState = overlay.scanner as OwnerOverlayState | undefined;
+      if (!scannerState || scannerState.active !== true) continue;
+
+      const unit = units.find((u) => u.unitId === controllableId);
+      if (!unit) continue;
+
+      const teamColor = this.teamColors.get(unit.teamName ?? '') ?? '#7cb3dd';
+      activeScanners.set(controllableId, { unit, scannerState, teamColor });
+    }
+
+    // Remove cones for controllables no longer active
+    for (const [cId, cone] of this.scannerCones) {
+      if (!activeScanners.has(cId)) {
+        this.root.remove(cone.mesh);
+        cone.mesh.geometry.dispose();
+        cone.mesh.material.dispose();
+        this.scannerCones.delete(cId);
+      }
+    }
+
+    // Create or update cones
+    for (const [cId, { unit, scannerState, teamColor }] of activeScanners) {
+      const currentWidth = numberValue(scannerState.currentWidth, 90);
+      const currentLength = numberValue(scannerState.currentLength, 200);
+      const currentAngle = numberValue(scannerState.currentAngle, 0);
+      const targetWidth = numberValue(scannerState.targetWidth, currentWidth);
+      const targetLength = numberValue(scannerState.targetLength, currentLength);
+
+      // Half-angle in radians
+      const halfWidthRad = (currentWidth / 2) * (Math.PI / 180);
+      const targetHalfWidthRad = (targetWidth / 2) * (Math.PI / 180);
+      // Normalize target length relative to current length for shader
+      const normalizedTargetLength = currentLength > 0 ? targetLength / currentLength : 1;
+
+      let cone = this.scannerCones.get(cId);
+      if (!cone) {
+        const geo = new THREE.PlaneGeometry(2, 2);
+        const mat = new THREE.ShaderMaterial({
+          uniforms: {
+            time: { value: 0 },
+            halfWidthRad: { value: halfWidthRad },
+            coneLength: { value: currentLength },
+            targetHalfWidthRad: { value: targetHalfWidthRad },
+            targetLength: { value: normalizedTargetLength },
+            color: { value: new THREE.Color(teamColor) },
+            opacity: { value: 0.7 },
+          },
+          vertexShader: SCANNER_CONE_VERTEX_SHADER,
+          fragmentShader: SCANNER_CONE_FRAGMENT_SHADER,
+          blending: THREE.AdditiveBlending,
+          transparent: true,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.frustumCulled = false;
+        cone = { mesh, controllableId: cId };
+        this.scannerCones.set(cId, cone);
+        this.root.add(mesh);
+      }
+
+      // Update uniforms
+      const uniforms = cone.mesh.material.uniforms;
+      uniforms.time.value = this.unitBodyMaterial.uniforms.time.value;
+      uniforms.halfWidthRad.value = halfWidthRad;
+      uniforms.coneLength.value = currentLength;
+      uniforms.targetHalfWidthRad.value = targetHalfWidthRad;
+      uniforms.targetLength.value = normalizedTargetLength;
+      (uniforms.color.value as THREE.Color).set(teamColor);
+
+      // Position: at the controllable, rotated so +X aligns with scanner angle
+      const scale = currentLength;
+      cone.mesh.position.set(unit.x, -unit.y, 0);
+      cone.mesh.rotation.set(0, 0, -currentAngle * (Math.PI / 180));
+      cone.mesh.scale.set(scale, scale, 1);
+    }
+  }
+
   private findNearestUnit(worldX: number, worldY: number): NormalizedUnit | null {
     const units = this.renderableUnits;
     if (units.length === 0) {
@@ -877,6 +1059,15 @@ export class WorldScene {
 
   private disposeBodyMesh() {
     this.bodyMesh.geometry.dispose();
+  }
+
+  private disposeScannerCones() {
+    for (const [, cone] of this.scannerCones) {
+      this.root.remove(cone.mesh);
+      cone.mesh.geometry.dispose();
+      cone.mesh.material.dispose();
+    }
+    this.scannerCones.clear();
   }
 
   private ensureBodyMeshCapacity(requiredCount: number) {

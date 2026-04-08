@@ -95,7 +95,8 @@ const selectedControllableId = ref('');
 const chatDraft = ref('');
 const shipName = ref('Aurora Wing');
 const thrust = ref(0.25);
-const subsystemMode = ref('pinpoint');
+const scannerMode = ref<'360' | 'forward' | 'off'>('off');
+const tacticalMode = ref<'enemy' | 'target' | 'off'>('off');
 const apiKeyDraft = ref('');
 const teamNameDraft = ref('');
 const rememberKey = ref(true);
@@ -249,7 +250,7 @@ const ownerOverlayEntries = computed<OverlayEntry[]>(() => {
     const statusLabel = !alive
       ? 'Destroyed'
       : scannerActive
-        ? 'Scanner online'
+        ? `Scanner ${stringValue(scannerState?.mode, 'on')}`
         : 'Scanner offline';
 
     return {
@@ -333,7 +334,8 @@ const clickedUnitEntry = computed<ClickedUnitEntry | null>(() => {
   }
 
   if (hasRecordKey(overlayState, 'scanner') || scannerActive) {
-    badges.push({ label: scannerActive ? 'scan' : 'scan off', tone: scannerActive ? 'accent' : 'muted' });
+    const scanLabel = scannerActive ? `scan ${stringValue(scannerState?.mode, '')}`.trim() : 'scan off';
+    badges.push({ label: scanLabel, tone: scannerActive ? 'accent' : 'muted' });
   }
 
   const stats: OverlayStat[] = [
@@ -644,13 +646,28 @@ function fireWeapon() {
   trackCommand(commandId, 'Fire weapon', getControllableLabel(activeControllableId.value));
 }
 
-function applySubsystemMode() {
-  if (!activeControllableId.value) {
-    return;
-  }
+function setScannerMode(mode: '360' | 'forward' | 'off') {
+  if (!activeControllableId.value) return;
+  scannerMode.value = mode;
 
-  const commandId = client.setSubsystemMode(activeControllableId.value, 'primary_scanner', subsystemMode.value);
-  trackCommand(commandId, `Set subsystem mode to ${subsystemMode.value}`, getControllableLabel(activeControllableId.value));
+  let commandId: string;
+  if (mode === 'off') {
+    commandId = client.setSubsystemMode(activeControllableId.value, 'scanner', 'off');
+  } else if (mode === '360') {
+    commandId = client.setSubsystemMode(activeControllableId.value, 'scanner', 'set', 360);
+  } else {
+    commandId = client.setSubsystemMode(activeControllableId.value, 'scanner', 'set', 90);
+  }
+  trackCommand(commandId, `Scanner ${mode}`, getControllableLabel(activeControllableId.value));
+}
+
+function setTacticalMode(mode: 'enemy' | 'target' | 'off') {
+  if (!activeControllableId.value) return;
+  tacticalMode.value = mode;
+
+  if (mode === 'off') return;
+  const commandId = client.fireWeapon(activeControllableId.value, 'shot', 0);
+  trackCommand(commandId, `Tactical ${mode}`, getControllableLabel(activeControllableId.value));
 }
 
 function handleWorldSelect(selection: WorldSceneSelection) {
@@ -1420,28 +1437,27 @@ onBeforeUnmount(() => {
           </ul>
         </section>
 
-        <section class="command-dock">
-          <article class="panel panel-glass">
-            <h2>Tactical</h2>
-            <label class="field">
-              <span>Thrust {{ thrust.toFixed(2) }}</span>
-              <input v-model="thrust" type="range" min="-1" max="1" step="0.05" />
-            </label>
-            <div class="actions">
-              <button class="primary full" type="button" @click="updateEngine">Apply Thrust</button>
-              <button class="primary full" type="button" @click="fireWeapon">Fire Weapon</button>
-            </div>
-          </article>
-
-          <article class="panel panel-glass">
-            <h2>Subsystem</h2>
-            <label class="field">
-              <span>Mode</span>
-              <input v-model="subsystemMode" type="text" placeholder="pinpoint" />
-            </label>
-            <button class="primary full" type="button" @click="applySubsystemMode">Apply Mode</button>
-          </article>
-
+        <section class="command-dock panel-glass" v-if="activeControllableId">
+          <div class="dock-group">
+            <span class="dock-label">Thrust</span>
+            <input v-model="thrust" type="range" min="-1" max="1" step="0.05" class="dock-slider" />
+            <span class="dock-value">{{ thrust.toFixed(2) }}</span>
+            <button class="dock-btn" type="button" @click="updateEngine">Apply</button>
+          </div>
+          <div class="dock-sep"></div>
+          <div class="dock-group">
+            <span class="dock-label">Scanner</span>
+            <button :class="['dock-btn', { active: scannerMode === '360' }]" type="button" @click="setScannerMode('360')">360°</button>
+            <button :class="['dock-btn', { active: scannerMode === 'forward' }]" type="button" @click="setScannerMode('forward')">Fwd</button>
+            <button :class="['dock-btn', { active: scannerMode === 'off' }]" type="button" @click="setScannerMode('off')">Off</button>
+          </div>
+          <div class="dock-sep"></div>
+          <div class="dock-group">
+            <span class="dock-label">Tactical</span>
+            <button :class="['dock-btn', { active: tacticalMode === 'enemy' }]" type="button" @click="setTacticalMode('enemy')">Enemy</button>
+            <button :class="['dock-btn', { active: tacticalMode === 'target' }]" type="button" @click="setTacticalMode('target')">Target</button>
+            <button :class="['dock-btn', { active: tacticalMode === 'off' }]" type="button" @click="setTacticalMode('off')">Off</button>
+          </div>
         </section>
 
         <section class="overlay-status-bar" aria-label="World status bar">

@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 namespace Flattiverse.Gateway.Services;
 
 /// <summary>
-/// Singleton hosted service that fires every 40 ms.
+/// Singleton hosted service that fires every 20 ms.
 /// On each tick it iterates all active player sessions,
 /// collects pending world deltas and overlay updates,
 /// and delivers them to attached browser connections.
@@ -20,7 +20,7 @@ public sealed class TickService : BackgroundService
     {
         _sessionPool = sessionPool;
         _logger = logger;
-        _tickInterval = tickInterval ?? TimeSpan.FromMilliseconds(40);
+        _tickInterval = tickInterval ?? TimeSpan.FromMilliseconds(20);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)

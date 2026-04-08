@@ -24,6 +24,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     private bool _connected;
     private string _galaxyUrl;
     private readonly MappingService _mappingService = new();
+    private readonly ScanningService _scanningService = new();
 
     public string Id => _id;
     public string DisplayName => _displayName;
@@ -31,6 +32,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     public string? TeamName => _teamName;
     public Galaxy? Galaxy => _connectionManager?.Galaxy;
     public MappingService MappingService => _mappingService;
+    public ScanningService ScanningService => _scanningService;
 
     public PlayerSession(string id, string apiKey, string? teamName, string galaxyUrl, ILogger logger)
     {
@@ -48,7 +50,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             _connectionManager = new GalaxyConnectionManager(_galaxyUrl, _apiKey, _teamName, _logger);
             _connectionManager.ConnectionLost += OnConnectionLost;
 
-            var handlers = new List<IConnectorEventHandler> { _mappingService, this };
+            var handlers = new List<IConnectorEventHandler> { _mappingService, _scanningService, this };
             await _connectionManager.ConnectAsync(handlers);
 
             _connected = true;
@@ -205,10 +207,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 { "currentX", classic.Engine.Current.X },
                 { "currentY", classic.Engine.Current.Y }
             };
-            changes["scanner"] = new Dictionary<string, object>
-            {
-                { "active", classic.MainScanner.Active }
-            };
+            changes["scanner"] = _scanningService.BuildOverlay(classic.Id);
             changes["shield"] = new Dictionary<string, object>
             {
                 { "active", controllable.Shield.Active },
@@ -448,14 +447,23 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         {
             case "MainScanner":
             case "scanner":
-                if (mode == "on") await classic.MainScanner.On();
-                else if (mode == "off") await classic.MainScanner.Off();
+                if (mode == "off")
+                {
+                    await _scanningService.ApplyModeAsync(classic, ScanningService.ScannerMode.Off);
+                }
+                else if (mode == "on")
+                {
+                    await _scanningService.ApplyModeAsync(classic, ScanningService.ScannerMode.Forward);
+                }
                 else if (mode == "set")
                 {
-                    float width = 90f, length = 220f, angle = 0f;
+                    float width = 90f;
                     if (payload?.TryGetProperty("value", out var valEl) == true && valEl.ValueKind != System.Text.Json.JsonValueKind.Null)
-                        angle = valEl.GetSingle();
-                    await classic.MainScanner.Set(width, length, angle);
+                        width = valEl.GetSingle();
+                    var scanMode = width >= 180f
+                        ? ScanningService.ScannerMode.Full
+                        : ScanningService.ScannerMode.Forward;
+                    await _scanningService.ApplyModeAsync(classic, scanMode);
                 }
                 break;
             case "ShotFabricator":
@@ -597,6 +605,37 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 break;
 
             case ContinuedControllableInfoPlayerEvent continued:
+            {
+                var cDelta = new WorldDeltaDto
+                {
+                    EventType = "controllable.created",
+                    EntityId = $"p{continued.Player.Id}-c{continued.ControllableInfo.Id}",
+                    Changes = new Dictionary<string, object?>
+                    {
+                        { "controllableId", $"p{continued.Player.Id}-c{continued.ControllableInfo.Id}" },
+                        { "displayName", continued.ControllableInfo.Name },
+                        { "teamName", continued.Player.Team?.Name ?? "" },
+                        { "alive", continued.ControllableInfo.Alive },
+                        { "score", continued.ControllableInfo.Score.Mission }
+                    }
+                };
+                BroadcastWorldDelta(connections, new List<WorldDeltaDto> { cDelta });
+
+                // Re-apply remembered scanner mode on respawn for own controllables
+                if (continued.Player.Id == Galaxy?.Player?.Id)
+                {
+                    foreach (var c in Galaxy!.Controllables)
+                    {
+                        if (c is ClassicShipControllable respawnedShip && c.Id == continued.ControllableInfo.Id)
+                        {
+                            _ = _scanningService.ReapplyModeAsync(respawnedShip);
+                            break;
+                        }
+                    }
+                }
+                break;
+            }
+
             case DestroyedControllableInfoPlayerEvent:
             case ClosedControllableInfoPlayerEvent:
             case ControllableInfoScoreUpdatedEvent:
@@ -605,11 +644,10 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 {
                     var evtType = @event switch
                     {
-                        ContinuedControllableInfoPlayerEvent => "controllable.created",
                         ClosedControllableInfoPlayerEvent => "unit.removed",
                         _ => "controllable.created"
                     };
-                    var cDelta = new WorldDeltaDto
+                    var cDelta2 = new WorldDeltaDto
                     {
                         EventType = evtType,
                         EntityId = $"p{ciEvent.Player.Id}-c{ciEvent.ControllableInfo.Id}",
@@ -622,7 +660,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                             { "score", ciEvent.ControllableInfo.Score.Mission }
                         }
                     };
-                    BroadcastWorldDelta(connections, new List<WorldDeltaDto> { cDelta });
+                    BroadcastWorldDelta(connections, new List<WorldDeltaDto> { cDelta2 });
                 }
                 break;
         }

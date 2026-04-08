@@ -741,14 +741,76 @@ h2 {
 }
 
 .command-dock {
-  flex: 0 0 auto;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-  gap: 0.6rem;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding: 0.1rem 0.2rem 0.4rem 0;
-  pointer-events: none;
+  position: absolute;
+  bottom: calc(var(--status-bar-desktop-height) + var(--status-bar-floating-gap) + 0.6rem);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 0.3rem 0.5rem;
+  pointer-events: auto;
+  border-radius: 12px;
+  white-space: nowrap;
+}
+
+.dock-group {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0 0.4rem;
+}
+
+.dock-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.55;
+  margin-right: 0.15rem;
+  user-select: none;
+}
+
+.dock-slider {
+  width: 80px;
+  accent-color: var(--accent, #7cb3dd);
+}
+
+.dock-value {
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  min-width: 2.4em;
+  text-align: right;
+  opacity: 0.7;
+}
+
+.dock-btn {
+  font-size: 0.68rem;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid rgba(124, 179, 221, 0.2);
+  border-radius: 6px;
+  background: rgba(124, 179, 221, 0.06);
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.dock-btn:hover {
+  background: rgba(124, 179, 221, 0.15);
+  border-color: rgba(124, 179, 221, 0.35);
+}
+
+.dock-btn.active {
+  background: rgba(124, 179, 221, 0.22);
+  border-color: var(--accent, #7cb3dd);
+  color: var(--accent, #7cb3dd);
+}
+
+.dock-sep {
+  width: 1px;
+  height: 1.2rem;
+  background: rgba(124, 179, 221, 0.18);
+  flex-shrink: 0;
 }
 
 .panel {
@@ -1136,9 +1198,14 @@ h2 {
   }
 
   .command-dock {
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    position: static;
+    left: auto;
+    transform: none;
+    width: auto;
+    max-width: none;
+    flex-wrap: wrap;
     overflow: visible;
-    padding-right: 0;
+    padding: 0.3rem 0.5rem;
   }
 
   .overlay-status-bar {
