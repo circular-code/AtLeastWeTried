@@ -33,6 +33,9 @@ public sealed class WebSocketGatewayConnectionHandler
         using var webSocket = await httpContext.WebSockets.AcceptWebSocketAsync();
         var openedConnection = await sessionOrchestrator.OpenConnectionAsync(cancellationToken);
         await connectionMessageQueue.RegisterConnectionAsync(openedConnection.ConnectionId, cancellationToken);
+        using var handlerCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task<string?>? receiveTask = null;
+        Task<IReadOnlyList<GatewayMessage>>? queuedMessagesTask = null;
 
         try
         {
@@ -41,18 +44,25 @@ public sealed class WebSocketGatewayConnectionHandler
                 return;
             }
 
+            receiveTask = ReceiveTextMessageAsync(webSocket, handlerCancellation.Token);
+            queuedMessagesTask = connectionMessageQueue.DequeueAsync(openedConnection.ConnectionId, handlerCancellation.Token).AsTask();
+
             while (webSocket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
             {
-                using var iterationCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                var receiveTask = ReceiveTextMessageAsync(webSocket, iterationCancellation.Token);
-                var queuedMessagesTask = connectionMessageQueue.DequeueAsync(openedConnection.ConnectionId, iterationCancellation.Token).AsTask();
                 var completedTask = await Task.WhenAny(receiveTask, queuedMessagesTask).ConfigureAwait(false);
 
                 if (completedTask == queuedMessagesTask)
                 {
-                    var queuedMessages = await queuedMessagesTask.ConfigureAwait(false);
-                    iterationCancellation.Cancel();
-                    await IgnoreCanceledAsync(receiveTask).ConfigureAwait(false);
+                    IReadOnlyList<GatewayMessage> queuedMessages;
+
+                    try
+                    {
+                        queuedMessages = await queuedMessagesTask.ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (handlerCancellation.IsCancellationRequested)
+                    {
+                        break;
+                    }
 
                     if (queuedMessages.Count > 0)
                     {
@@ -62,6 +72,8 @@ public sealed class WebSocketGatewayConnectionHandler
                         }
                     }
 
+                    queuedMessagesTask = connectionMessageQueue.DequeueAsync(openedConnection.ConnectionId, handlerCancellation.Token).AsTask();
+
                     continue;
                 }
 
@@ -70,24 +82,24 @@ public sealed class WebSocketGatewayConnectionHandler
                 try
                 {
                     payload = await receiveTask.ConfigureAwait(false);
-                    iterationCancellation.Cancel();
-                    await IgnoreCanceledAsync(queuedMessagesTask).ConfigureAwait(false);
                 }
                 catch (GatewayClientMessageException exception)
                 {
-                    iterationCancellation.Cancel();
-                    await IgnoreCanceledAsync(queuedMessagesTask).ConfigureAwait(false);
                     if (!await SendStatusAsync(webSocket, exception.Code, exception.Message, exception.Recoverable, cancellationToken).ConfigureAwait(false))
                     {
                         break;
                     }
 
+                    receiveTask = ReceiveTextMessageAsync(webSocket, handlerCancellation.Token);
+
                     continue;
+                }
+                catch (OperationCanceledException) when (handlerCancellation.IsCancellationRequested)
+                {
+                    break;
                 }
                 catch (WebSocketException exception)
                 {
-                    iterationCancellation.Cancel();
-                    await IgnoreCanceledAsync(queuedMessagesTask).ConfigureAwait(false);
                     logger.LogDebug(
                         exception,
                         "WebSocket connection {ConnectionId} terminated while receiving.",
@@ -96,8 +108,6 @@ public sealed class WebSocketGatewayConnectionHandler
                 }
                 catch (ObjectDisposedException exception)
                 {
-                    iterationCancellation.Cancel();
-                    await IgnoreCanceledAsync(queuedMessagesTask).ConfigureAwait(false);
                     logger.LogDebug(
                         exception,
                         "WebSocket connection {ConnectionId} was disposed while receiving.",
@@ -126,6 +136,8 @@ public sealed class WebSocketGatewayConnectionHandler
                         break;
                     }
                 }
+
+                receiveTask = ReceiveTextMessageAsync(webSocket, handlerCancellation.Token);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -148,6 +160,9 @@ public sealed class WebSocketGatewayConnectionHandler
         }
         finally
         {
+            handlerCancellation.Cancel();
+            await IgnoreTerminationAsync(receiveTask).ConfigureAwait(false);
+            await IgnoreTerminationAsync(queuedMessagesTask).ConfigureAwait(false);
             await connectionMessageQueue.CompleteConnectionAsync(openedConnection.ConnectionId, CancellationToken.None);
             await sessionOrchestrator.DisconnectAsync(openedConnection.ConnectionId, CancellationToken.None);
 
@@ -196,13 +211,27 @@ public sealed class WebSocketGatewayConnectionHandler
         return SendMessagesAsync(webSocket, [status], cancellationToken);
     }
 
-    private static async Task IgnoreCanceledAsync(Task task)
+    private static async Task IgnoreTerminationAsync(Task? task)
     {
+        if (task is null)
+        {
+            return;
+        }
+
         try
         {
             await task.ConfigureAwait(false);
         }
         catch (OperationCanceledException)
+        {
+        }
+        catch (GatewayClientMessageException)
+        {
+        }
+        catch (WebSocketException)
+        {
+        }
+        catch (ObjectDisposedException)
         {
         }
     }

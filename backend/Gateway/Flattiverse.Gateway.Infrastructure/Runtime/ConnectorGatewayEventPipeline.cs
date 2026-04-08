@@ -26,7 +26,7 @@ internal sealed class ConnectorGatewayEventPipeline : IConnectorEventPipeline
 
     public async ValueTask ProcessAsync(ConnectorPlayerSessionLease lease, FlattiverseEvent @event, CancellationToken cancellationToken)
     {
-        if (@event is not GalaxyTickEvent galaxyTickEvent)
+        if (@event is not GalaxyTickEvent)
         {
             return;
         }
@@ -37,7 +37,7 @@ internal sealed class ConnectorGatewayEventPipeline : IConnectorEventPipeline
             return;
         }
 
-        var message = BuildOwnerDelta(lease, galaxyTickEvent);
+        var message = BuildOwnerDelta(lease);
         if (message.Events.Count == 0)
         {
             return;
@@ -60,29 +60,9 @@ internal sealed class ConnectorGatewayEventPipeline : IConnectorEventPipeline
             && session.HasPlayerSession(playerSessionId);
     }
 
-    private static OwnerDeltaMessage BuildOwnerDelta(ConnectorPlayerSessionLease lease, GalaxyTickEvent tickEvent)
+    private static OwnerDeltaMessage BuildOwnerDelta(ConnectorPlayerSessionLease lease)
     {
-        var events = new List<OverlayEvent>
-        {
-            new(
-                "overlay.tick",
-                null,
-                new JsonObject
-                {
-                    ["tick"] = tickEvent.Tick,
-                    ["scanMs"] = tickEvent.ScanMs,
-                    ["steadyMs"] = tickEvent.SteadyMs,
-                    ["gravityMs"] = tickEvent.GravityMs,
-                    ["enginesMs"] = tickEvent.EnginesMs,
-                    ["limitMs"] = tickEvent.LimitMs,
-                    ["movementMs"] = tickEvent.MovementMs,
-                    ["collisionsMs"] = tickEvent.CollisionsMs,
-                    ["actionsMs"] = tickEvent.ActionsMs,
-                    ["visibilityMs"] = tickEvent.VisibilityMs,
-                    ["totalMs"] = tickEvent.TotalMs,
-                    ["remainingStaticSegments"] = tickEvent.RemainingStaticSegments
-                })
-        };
+        var events = new List<OverlayEvent>();
 
         foreach (var info in lease.Galaxy.Player.ControllableInfos.Where(static entry => entry.Active).OrderBy(static entry => entry.Id))
         {

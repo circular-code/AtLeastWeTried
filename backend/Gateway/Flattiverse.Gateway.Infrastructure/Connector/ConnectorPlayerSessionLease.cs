@@ -101,6 +101,12 @@ internal sealed class ConnectorPlayerSessionLease : IAsyncDisposable
                     "Received connector event {EventKind} for player session {PlayerSessionId}.",
                     @event.Kind,
                     PlayerSessionId);
+                if (@event.Kind == EventKind.ConnectionTerminated)
+                {
+                    logger.LogDebug(
+                        "Tick event details: {EventDetails}",
+                        @event.ToString());
+                }
             }
             catch (ConnectionTerminatedGameException)
             {
