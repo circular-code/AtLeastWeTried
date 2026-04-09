@@ -40,6 +40,22 @@ type WorldSceneOptions = {
 
 type OwnerOverlayState = Record<string, unknown>;
 
+type BodyMeshResources = UnitBodyMesh;
+
+type RawRenderableUnit = {
+  unitId: string;
+  clusterId: number;
+  kind: string;
+  isStatic: boolean;
+  isSeen: boolean;
+  lastSeenTick: number;
+  x: number;
+  y: number;
+  angle: number;
+  radius: number;
+  teamName?: string;
+};
+
 export class WorldScene {
   private readonly container: HTMLElement;
   private readonly onSelection?: (selection: WorldSceneSelection) => void;
@@ -51,10 +67,8 @@ export class WorldScene {
   private readonly camera: THREE.OrthographicCamera;
   private readonly grid: THREE.Group;
   private readonly root: THREE.Group;
-  private bodyMesh: THREE.InstancedMesh<THREE.PlaneGeometry, UnitShaderMaterial>;
-  private bodyColorAttribute: THREE.InstancedBufferAttribute;
-  private bodyKindAttribute: THREE.InstancedBufferAttribute;
-  private bodyOpacityAttribute: THREE.InstancedBufferAttribute;
+  private staticBodies: BodyMeshResources;
+  private dynamicBodies: BodyMeshResources;
   private readonly selectedRing: THREE.LineLoop;
   private readonly navigationMarker: THREE.Group;
   private readonly navigationPointer: THREE.LineSegments;
@@ -64,9 +78,13 @@ export class WorldScene {
   private readonly teamColors: Map<string, string>;
   private readonly debugUnits: NormalizedUnit[];
   private readonly lastSeenTraces: Map<string, NormalizedUnit>;
+  private readonly normalizedUnitsByKey: Map<string, { signature: string; unit: NormalizedUnit }>;
   private readonly tempBodyTransform: THREE.Object3D;
   private readonly tempColor: THREE.Color;
+  private staticRenderableUnits: NormalizedUnit[];
+  private dynamicRenderableUnits: NormalizedUnit[];
   private renderableUnits: NormalizedUnit[];
+  private readonly renderableUnitsById: Map<string, NormalizedUnit>;
   private snapshot: GalaxySnapshotDto | null;
   private ownerOverlay: Record<string, OwnerOverlayState>;
   private selectedControllableId: string;
@@ -108,17 +126,15 @@ export class WorldScene {
     this.grid = createGrid();
     this.root = new THREE.Group();
     this.unitBodyMaterial = createUnitBodyMaterial();
-    const unitBodyMesh = createUnitBodyMesh(Math.max(DEBUG_SUN_COUNT, 1), this.unitBodyMaterial);
-    this.bodyMesh = unitBodyMesh.mesh;
-    this.bodyColorAttribute = unitBodyMesh.colorAttribute;
-    this.bodyKindAttribute = unitBodyMesh.kindAttribute;
-    this.bodyOpacityAttribute = unitBodyMesh.opacityAttribute;
+    this.staticBodies = createUnitBodyMesh(Math.max(DEBUG_SUN_COUNT, 1), this.unitBodyMaterial);
+    this.dynamicBodies = createUnitBodyMesh(1, this.unitBodyMaterial);
     this.selectedRing = createSelectionRing();
     this.navigationMarker = createNavigationMarker();
     this.navigationPointer = createNavigationPointer();
     this.scannerCones = new Map();
     this.scene.add(this.grid);
-    this.scene.add(this.bodyMesh);
+    this.scene.add(this.staticBodies.mesh);
+    this.scene.add(this.dynamicBodies.mesh);
     this.scene.add(this.root);
     this.scene.add(createGlowField());
     this.root.add(this.selectedRing);
@@ -134,9 +150,13 @@ export class WorldScene {
     this.teamColors = new Map<string, string>();
     this.debugUnits = createDebugSuns();
     this.lastSeenTraces = new Map<string, NormalizedUnit>();
+    this.normalizedUnitsByKey = new Map<string, { signature: string; unit: NormalizedUnit }>();
     this.tempBodyTransform = new THREE.Object3D();
     this.tempColor = new THREE.Color();
+    this.staticRenderableUnits = [];
+    this.dynamicRenderableUnits = [];
     this.renderableUnits = [];
+    this.renderableUnitsById = new Map();
     this.animationFrame = null;
     this.dragStartClient = null;
     this.dragStartCamera = null;
@@ -181,7 +201,7 @@ export class WorldScene {
     this.container.removeEventListener('pointerleave', this.handlePointerLeave);
     this.container.removeEventListener('contextmenu', this.handleContextMenu);
     this.container.removeEventListener('wheel', this.handleWheel);
-    this.disposeBodyMesh();
+    this.disposeBodyMeshes();
     this.disposeVisuals();
     this.disposeScannerCones();
     this.unitBodyMaterial.dispose();
@@ -190,23 +210,47 @@ export class WorldScene {
   }
 
   setSnapshot(snapshot: GalaxySnapshotDto | null, ownerOverlay: Record<string, unknown>, selectedControllableId: string, navigationTarget: WorldSceneNavigationTarget) {
+    const snapshotChanged = this.snapshot !== snapshot;
+    const ownerOverlayChanged = this.ownerOverlay !== ownerOverlay;
+    const selectedControllableChanged = this.selectedControllableId !== selectedControllableId;
+    const navigationTargetChanged = !sameNavigationTarget(this.selectedNavigationTarget, navigationTarget);
+
     this.snapshot = snapshot;
     this.ownerOverlay = normalizeOwnerOverlay(ownerOverlay);
     this.selectedControllableId = selectedControllableId;
     this.selectedNavigationTarget = navigationTarget;
-    this.teamColors.clear();
 
-    if (snapshot) {
-      for (const team of snapshot.teams) {
-        this.teamColors.set(team.name, team.colorHex);
+    if (snapshotChanged) {
+      this.teamColors.clear();
+
+      if (snapshot) {
+        for (const team of snapshot.teams) {
+          this.teamColors.set(team.name, team.colorHex);
+        }
       }
     }
 
-    this.syncUnits();
+    if (snapshotChanged || ownerOverlayChanged) {
+      this.syncUnits();
+    } else {
+      if (selectedControllableChanged) {
+        this.updateSelectionRing();
+      }
+
+      if (selectedControllableChanged || navigationTargetChanged) {
+        this.updateNavigationMarker();
+        this.updateNavigationPointer();
+      }
+    }
+
     this.requestRender();
   }
 
   focusOnSelection() {
+    if (!this.getFocusSelectionUnit()) {
+      return;
+    }
+
     this.setFocusSelectionActive(true);
     this.updateFocusSelection();
     this.requestRender();
@@ -377,11 +421,23 @@ export class WorldScene {
   };
 
   private syncUnits() {
-    const units = this.buildRenderableUnits();
-    this.renderableUnits = units;
-    this.ensureBodyMeshCapacity(units.length);
+    const { staticUnits, dynamicUnits } = this.buildRenderableUnits();
+    const staticUnitsChanged = !sameRenderableUnits(this.staticRenderableUnits, staticUnits);
 
-    const liveDirectionalIds = new Set(units.filter((unit) => isDirectionalKind(unit.renderKind)).map((unit) => unit.unitId));
+    this.staticRenderableUnits = staticUnits;
+    this.dynamicRenderableUnits = dynamicUnits;
+    this.renderableUnits = [...dynamicUnits, ...staticUnits];
+    this.renderableUnitsById.clear();
+    for (const unit of this.renderableUnits) {
+      this.renderableUnitsById.set(unit.unitId, unit);
+    }
+
+    const liveDirectionalIds = new Set<string>();
+    for (const unit of dynamicUnits) {
+      if (isDirectionalKind(unit.renderKind)) {
+        liveDirectionalIds.add(unit.unitId);
+      }
+    }
 
     for (const [unitId, visual] of this.unitVisuals.entries()) {
       if (liveDirectionalIds.has(unitId)) {
@@ -395,10 +451,14 @@ export class WorldScene {
       this.unitVisuals.delete(unitId);
     }
 
-    for (let index = 0; index < units.length; index++) {
-      const unit = units[index];
-      this.updateBodyInstance(index, unit);
+    if (staticUnitsChanged) {
+      this.syncBodyInstances(this.staticBodies, staticUnits);
+    }
 
+    this.syncBodyInstances(this.dynamicBodies, dynamicUnits);
+
+    for (let index = 0; index < dynamicUnits.length; index++) {
+      const unit = dynamicUnits[index];
       if (!isDirectionalKind(unit.renderKind)) {
         continue;
       }
@@ -415,16 +475,11 @@ export class WorldScene {
       this.updateVisual(visual, unit, index);
     }
 
-    this.bodyMesh.count = units.length;
-    this.bodyMesh.instanceMatrix.needsUpdate = true;
-    this.bodyColorAttribute.needsUpdate = true;
-    this.bodyKindAttribute.needsUpdate = true;
-    this.bodyOpacityAttribute.needsUpdate = true;
     this.updateSelectionRing();
     this.updateFocusSelection();
     this.updateNavigationMarker();
     this.updateNavigationPointer();
-    this.updateScannerCones(units);
+    this.updateScannerCones();
   }
 
   private updateFocusSelection() {
@@ -451,26 +506,43 @@ export class WorldScene {
   }
 
   private getFocusSelectionUnit() {
-    const targetUnitId = this.selectedUnitId || this.selectedControllableId;
-    if (!targetUnitId) {
-      return null;
-    }
-
-    return this.renderableUnits.find((candidate) => candidate.unitId === targetUnitId) ?? null;
+    return this.renderableUnitsById.get(this.selectedUnitId)
+      ?? this.renderableUnitsById.get(this.selectedControllableId)
+      ?? null;
   }
 
-  private buildRenderableUnits(): NormalizedUnit[] {
+  private buildRenderableUnits() {
     if (!this.snapshot) {
       this.lastSeenTraces.clear();
-      return [...this.debugUnits];
+      return {
+        staticUnits: [...this.debugUnits],
+        dynamicUnits: [] as NormalizedUnit[],
+      };
     }
 
-    const deadControllableIds = new Set(
-      this.snapshot.controllables
-        .filter((controllable) => !getControllableAliveState(controllable, this.ownerOverlay[controllable.controllableId]))
-        .map((controllable) => controllable.controllableId),
-    );
-    const units = this.snapshot.units.filter((unit) => !deadControllableIds.has(unit.unitId));
+    const deadControllableIds = new Set<string>();
+    for (const controllable of this.snapshot.controllables) {
+      if (!getControllableAliveState(controllable, this.ownerOverlay[controllable.controllableId])) {
+        deadControllableIds.add(controllable.controllableId);
+      }
+    }
+
+    const staticUnits: RawRenderableUnit[] = [];
+    const dynamicUnits: RawRenderableUnit[] = [];
+    const liveUnitIds = new Set<string>();
+
+    for (const unit of this.snapshot.units) {
+      if (deadControllableIds.has(unit.unitId)) {
+        continue;
+      }
+
+      if (unit.isStatic) {
+        staticUnits.push(unit);
+      } else {
+        dynamicUnits.push(unit);
+      }
+      liveUnitIds.add(unit.unitId);
+    }
 
     for (const controllable of this.snapshot.controllables) {
       if (deadControllableIds.has(controllable.controllableId)) {
@@ -479,7 +551,7 @@ export class WorldScene {
 
       const overlay = this.ownerOverlay[controllable.controllableId];
       if (overlay) {
-        units.push({
+        dynamicUnits.push({
           unitId: controllable.controllableId,
           clusterId: numberValue(overlay.clusterId, 0),
           kind: stringValue(overlay.kind, 'controllable_marker'),
@@ -492,14 +564,15 @@ export class WorldScene {
           radius: numberValue(overlay.radius, getFallbackRenderRadius(normalizeKind(stringValue(overlay.kind, 'controllable_marker')))),
           teamName: controllable.teamName,
         });
+        liveUnitIds.add(controllable.controllableId);
         continue;
       }
 
-      if (units.some((unit) => unit.unitId === controllable.controllableId)) {
+      if (liveUnitIds.has(controllable.controllableId)) {
         continue;
       }
 
-      units.push({
+      dynamicUnits.push({
         unitId: controllable.controllableId,
         clusterId: 0,
         kind: 'controllable_marker',
@@ -512,10 +585,17 @@ export class WorldScene {
         radius: getFallbackRenderRadius('ship'),
         teamName: controllable.teamName,
       });
+      liveUnitIds.add(controllable.controllableId);
     }
 
-    const visibleUnits = this.buildNormalizedUnits(units);
-    return [...visibleUnits, ...this.captureLostUnitTraces(visibleUnits), ...this.debugUnits];
+    const visibleStaticUnits = this.buildNormalizedUnits(staticUnits);
+    const visibleDynamicUnits = this.buildNormalizedUnits(dynamicUnits);
+    const visibleUnits = [...visibleStaticUnits, ...visibleDynamicUnits];
+
+    return {
+      staticUnits: [...visibleStaticUnits, ...this.debugUnits],
+      dynamicUnits: [...visibleDynamicUnits, ...this.captureLostUnitTraces(visibleUnits)],
+    };
   }
 
   private createVisual(): UnitVisual {
@@ -535,7 +615,6 @@ export class WorldScene {
 
     if (visual.heading) {
       const headingMaterial = visual.heading.material as THREE.LineBasicMaterial;
-      visual.heading.geometry.setFromPoints(getHeadingPoints(unit.renderKind));
       visual.heading.position.set(unit.x, -unit.y, 0);
       visual.heading.rotation.z = toSceneRotation(unit.angle);
       headingMaterial.color.copy(bodyColor);
@@ -545,7 +624,7 @@ export class WorldScene {
     }
   }
 
-  private updateBodyInstance(index: number, unit: NormalizedUnit) {
+  private updateBodyInstance(bodies: BodyMeshResources, index: number, unit: NormalizedUnit) {
     const scale = getRenderScale(unit);
     const bodyColor = this.tempColor.set(getColorForUnit(unit, this.teamColors));
 
@@ -554,14 +633,15 @@ export class WorldScene {
     this.tempBodyTransform.scale.set(scale, scale, 1);
     this.tempBodyTransform.updateMatrix();
 
-    this.bodyMesh.setMatrixAt(index, this.tempBodyTransform.matrix);
-    this.bodyColorAttribute.setXYZ(index, bodyColor.r, bodyColor.g, bodyColor.b);
-    this.bodyKindAttribute.setX(index, getShaderKindCode(unit.renderKind));
-    this.bodyOpacityAttribute.setX(index, getOpacityForUnit(unit));
+    bodies.mesh.setMatrixAt(index, this.tempBodyTransform.matrix);
+    bodies.colorAttribute.setXYZ(index, bodyColor.r, bodyColor.g, bodyColor.b);
+    bodies.kindAttribute.setX(index, getShaderKindCode(unit.renderKind));
+    bodies.opacityAttribute.setX(index, getOpacityForUnit(unit));
   }
 
   private updateSelectionRing() {
-    const selectedUnit = this.renderableUnits.find((unit) => unit.unitId === this.selectedControllableId || unit.unitId === this.selectedUnitId);
+    const selectedUnit = this.renderableUnitsById.get(this.selectedUnitId)
+      ?? this.renderableUnitsById.get(this.selectedControllableId);
     if (!selectedUnit) {
       this.selectedRing.visible = false;
       return;
@@ -598,7 +678,7 @@ export class WorldScene {
       return;
     }
 
-    const selectedUnit = this.renderableUnits.find((unit) => unit.unitId === this.selectedControllableId);
+    const selectedUnit = this.renderableUnitsById.get(this.selectedControllableId);
     const worldUnitsPerPixel = this.getWorldUnitsPerPixel();
     const headSize = Math.max(10, worldUnitsPerPixel * 18);
     const startOffset = Math.max(selectedUnit?.renderRadius ?? 0, worldUnitsPerPixel * 12);
@@ -627,7 +707,7 @@ export class WorldScene {
     this.navigationPointer.visible = true;
   }
 
-  private updateScannerCones(units: NormalizedUnit[]) {
+  private updateScannerCones() {
     const activeScanners = new Map<string, {
       unit: NormalizedUnit;
       scannerState: OwnerOverlayState;
@@ -638,7 +718,7 @@ export class WorldScene {
       const scannerState = overlay.scanner as OwnerOverlayState | undefined;
       if (!scannerState || scannerState.active !== true) continue;
 
-      const unit = units.find((u) => u.unitId === controllableId);
+      const unit = this.renderableUnitsById.get(controllableId);
       if (!unit) continue;
 
       const teamColor = this.teamColors.get(unit.teamName ?? '') ?? '#7cb3dd';
@@ -798,8 +878,9 @@ export class WorldScene {
     (this.navigationPointer.material as THREE.Material).dispose();
   }
 
-  private disposeBodyMesh() {
-    this.bodyMesh.geometry.dispose();
+  private disposeBodyMeshes() {
+    this.staticBodies.mesh.geometry.dispose();
+    this.dynamicBodies.mesh.geometry.dispose();
   }
 
   private disposeScannerCones() {
@@ -811,49 +892,54 @@ export class WorldScene {
     this.scannerCones.clear();
   }
 
-  private ensureBodyMeshCapacity(requiredCount: number) {
-    if (requiredCount <= this.bodyColorAttribute.count) {
-      return;
+  private ensureBodyMeshCapacity(bodies: BodyMeshResources, requiredCount: number) {
+    if (requiredCount <= bodies.colorAttribute.count) {
+      return bodies;
     }
 
-    const nextCapacity = Math.max(requiredCount, Math.ceil(this.bodyColorAttribute.count * 1.5), 1);
-    this.scene.remove(this.bodyMesh);
-    this.disposeBodyMesh();
+    const nextCapacity = Math.max(requiredCount, Math.ceil(bodies.colorAttribute.count * 1.5), 1);
+    this.scene.remove(bodies.mesh);
+    bodies.mesh.geometry.dispose();
 
-    const unitBodyMesh = createUnitBodyMesh(nextCapacity, this.unitBodyMaterial);
-    this.bodyMesh = unitBodyMesh.mesh;
-    this.bodyColorAttribute = unitBodyMesh.colorAttribute;
-    this.bodyKindAttribute = unitBodyMesh.kindAttribute;
-    this.bodyOpacityAttribute = unitBodyMesh.opacityAttribute;
-    this.scene.add(this.bodyMesh);
+    const nextBodies = createUnitBodyMesh(nextCapacity, this.unitBodyMaterial);
+    this.scene.add(nextBodies.mesh);
+    return nextBodies;
   }
 
-  private buildNormalizedUnits(units: Array<{
-    unitId: string;
-    clusterId: number;
-    kind: string;
-    isStatic: boolean;
-    isSeen: boolean;
-    lastSeenTick: number;
-    x: number;
-    y: number;
-    angle: number;
-    radius: number;
-    teamName?: string;
-  }>): NormalizedUnit[] {
-    return units.map((unit) => {
-      const renderKind = normalizeKind(unit.kind);
-      return {
-        ...unit,
-        isTrace: false,
-        renderKind,
-        renderRadius: getRenderRadius(unit.radius, renderKind),
-      };
-    });
+  private syncBodyInstances(bodies: BodyMeshResources, units: NormalizedUnit[]) {
+    const nextBodies = this.ensureBodyMeshCapacity(bodies, units.length);
+    if (bodies === this.staticBodies) {
+      this.staticBodies = nextBodies;
+    } else if (bodies === this.dynamicBodies) {
+      this.dynamicBodies = nextBodies;
+    }
+
+    for (let index = 0; index < units.length; index++) {
+      this.updateBodyInstance(nextBodies, index, units[index]);
+    }
+
+    nextBodies.mesh.count = units.length;
+    nextBodies.mesh.instanceMatrix.needsUpdate = true;
+    nextBodies.colorAttribute.needsUpdate = true;
+    nextBodies.kindAttribute.needsUpdate = true;
+    nextBodies.opacityAttribute.needsUpdate = true;
+  }
+
+  private buildNormalizedUnits(units: RawRenderableUnit[]): NormalizedUnit[] {
+    const normalizedUnits: NormalizedUnit[] = [];
+
+    for (const unit of units) {
+      normalizedUnits.push(this.normalizeUnit(unit, false));
+    }
+
+    return normalizedUnits;
   }
 
   private captureLostUnitTraces(visibleUnits: NormalizedUnit[]): NormalizedUnit[] {
-    const visibleUnitIds = new Set(visibleUnits.map((unit) => unit.unitId));
+    const visibleUnitIds = new Set<string>();
+    for (const unit of visibleUnits) {
+      visibleUnitIds.add(unit.unitId);
+    }
 
     for (const unitId of this.lastSeenTraces.keys()) {
       if (visibleUnitIds.has(unitId)) {
@@ -866,13 +952,39 @@ export class WorldScene {
         continue;
       }
 
-      this.lastSeenTraces.set(unit.unitId, {
-        ...unit,
-        isTrace: true,
-      });
+      this.lastSeenTraces.set(unit.unitId, this.normalizeUnit(unit, true));
     }
 
     return Array.from(this.lastSeenTraces.values());
+  }
+
+  private normalizeUnit(unit: RawRenderableUnit | NormalizedUnit, isTrace: boolean) {
+    const cacheKey = `${unit.unitId}:${isTrace ? 'trace' : 'base'}`;
+    const signature = buildRenderableUnitSignature(unit, isTrace);
+    const cached = this.normalizedUnitsByKey.get(cacheKey);
+    if (cached && cached.signature === signature) {
+      return cached.unit;
+    }
+
+    const renderKind = normalizeKind(unit.kind);
+    const normalizedUnit: NormalizedUnit = {
+      unitId: unit.unitId,
+      clusterId: unit.clusterId,
+      kind: unit.kind,
+      isStatic: unit.isStatic,
+      isSeen: unit.isSeen,
+      lastSeenTick: unit.lastSeenTick,
+      x: unit.x,
+      y: unit.y,
+      angle: unit.angle,
+      radius: unit.radius,
+      teamName: unit.teamName,
+      isTrace,
+      renderKind,
+      renderRadius: getRenderRadius(unit.radius, renderKind),
+    };
+    this.normalizedUnitsByKey.set(cacheKey, { signature, unit: normalizedUnit });
+    return normalizedUnit;
   }
 }
 
@@ -966,15 +1078,77 @@ export function readNavigationPointer(ownerOverlay: Record<string, unknown>, con
 }
 
 function normalizeOwnerOverlay(ownerOverlay: Record<string, unknown>) {
-  const normalized: Record<string, OwnerOverlayState> = {};
+  return ownerOverlay && typeof ownerOverlay === 'object'
+    ? ownerOverlay as Record<string, OwnerOverlayState>
+    : {};
+}
 
-  for (const [controllableId, value] of Object.entries(ownerOverlay)) {
-    if (value && typeof value === 'object') {
-      normalized[controllableId] = value as OwnerOverlayState;
+function sameNavigationTarget(left: WorldSceneNavigationTarget, right: WorldSceneNavigationTarget) {
+  if (left === right) {
+    return true;
+  }
+
+  if (!left || !right) {
+    return left === right;
+  }
+
+  return left.x === right.x && left.y === right.y;
+}
+
+function sameRenderableUnits(left: NormalizedUnit[], right: NormalizedUnit[]) {
+  if (left === right) {
+    return true;
+  }
+
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  for (let index = 0; index < left.length; index++) {
+    const leftUnit = left[index];
+    const rightUnit = right[index];
+    if (leftUnit === rightUnit) {
+      continue;
+    }
+
+    if (
+      leftUnit.unitId !== rightUnit.unitId
+      || leftUnit.clusterId !== rightUnit.clusterId
+      || leftUnit.kind !== rightUnit.kind
+      || leftUnit.isStatic !== rightUnit.isStatic
+      || leftUnit.isSeen !== rightUnit.isSeen
+      || leftUnit.lastSeenTick !== rightUnit.lastSeenTick
+      || leftUnit.x !== rightUnit.x
+      || leftUnit.y !== rightUnit.y
+      || leftUnit.angle !== rightUnit.angle
+      || leftUnit.radius !== rightUnit.radius
+      || leftUnit.teamName !== rightUnit.teamName
+      || leftUnit.isTrace !== rightUnit.isTrace
+      || leftUnit.renderKind !== rightUnit.renderKind
+      || leftUnit.renderRadius !== rightUnit.renderRadius
+    ) {
+      return false;
     }
   }
 
-  return normalized;
+  return true;
+}
+
+function buildRenderableUnitSignature(unit: RawRenderableUnit | NormalizedUnit, isTrace: boolean) {
+  return [
+    unit.unitId,
+    unit.clusterId,
+    unit.kind,
+    unit.isStatic ? 1 : 0,
+    unit.isSeen ? 1 : 0,
+    unit.lastSeenTick,
+    unit.x,
+    unit.y,
+    unit.angle,
+    unit.radius,
+    unit.teamName ?? '',
+    isTrace ? 1 : 0,
+  ].join('|');
 }
 
 function getControllableAliveState(

@@ -70,7 +70,7 @@ function createGatewayApi() {
     switch (message.type) {
       case 'session.ready':
         sessionStore.applySessionReady(message);
-        gameStore.clearOverlay();
+        gameStore.syncAttachedPlayerSessions(message.playerSessions);
         uiStore.setSelectedControllable('');
         break;
       case 'snapshot.full':

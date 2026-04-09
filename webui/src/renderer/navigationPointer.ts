@@ -5,6 +5,10 @@ export function createNavigationPointer(): THREE.LineSegments {
     new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(0, 0, 0),
       new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(0, 0, 0),
     ]),
     new THREE.LineBasicMaterial({
       color: 0xffd36b,

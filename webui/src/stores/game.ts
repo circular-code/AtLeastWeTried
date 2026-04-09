@@ -26,6 +26,7 @@ import type {
   CommandReplyMessage,
   GalaxySnapshotDto,
   OwnerOverlayDeltaMessage,
+  PlayerSessionSummaryDto,
   PublicControllableSnapshotDto,
   ServerStatusMessage,
   SnapshotMessage,
@@ -45,6 +46,7 @@ import type {
   PendingCommandDescriptor,
   ScannerMode,
 } from '../types/client';
+import { useSessionStore } from './session';
 
 type GameState = {
   galaxy: GalaxySnapshotDto | null;
@@ -52,7 +54,7 @@ type GameState = {
   controllablesById: Map<string, PublicControllableSnapshotDto>;
   teamsById: Map<number, TeamSnapshotDto>;
   clustersById: Map<number, ClusterSnapshotDto>;
-  overlayById: Map<string, ControllableOverlayState>;
+  overlayBySessionId: Map<string, Map<string, ControllableOverlayState>>;
   chatEntries: ChatEntryDto[];
   pendingCommands: Map<string, PendingCommandDescriptor>;
   activityEntries: ActivityEntry[];
@@ -67,14 +69,14 @@ export const useGameStore = defineStore('game', {
     controllablesById: new Map(),
     teamsById: new Map(),
     clustersById: new Map(),
-    overlayById: new Map(),
+    overlayBySessionId: new Map(),
     chatEntries: [],
     pendingCommands: new Map(),
     activityEntries: [],
   }),
   getters: {
     snapshot: (state) => state.galaxy,
-    ownerOverlay: (state) => Object.fromEntries(state.overlayById.entries()),
+    ownerOverlay: (state) => aggregateOverlayState(state.overlayBySessionId),
     worldStats: (state) => ({
       teams: state.galaxy?.teams.length ?? 0,
       clusters: state.galaxy?.clusters.length ?? 0,
@@ -83,7 +85,11 @@ export const useGameStore = defineStore('game', {
     }),
     latestChatEntry: (state) => state.chatEntries[0] ?? null,
     ownedControllables: (state): OwnedControllableSummary[] => {
-      return Array.from(state.overlayById.entries()).map(([controllableId, overlay]) => {
+      const sessionStore = useSessionStore();
+      const selectedSessionId = sessionStore.selectedPlayerSession?.playerSessionId ?? '';
+      const overlayById = selectedSessionId ? state.overlayBySessionId.get(selectedSessionId) ?? new Map() : new Map();
+
+      return Array.from(overlayById.entries()).map(([controllableId, overlay]) => {
         const publicControllable = state.galaxy?.controllables.find((item) => item.controllableId === controllableId);
         const overlayState = objectValue(overlay) ?? {};
 
@@ -105,21 +111,22 @@ export const useGameStore = defineStore('game', {
       return state.galaxy?.controllables.find((entry) => entry.controllableId === controllableId) ?? null;
     },
     overlayEntry: (state) => (controllableId: string): OverlayEntry | null => {
-      if (!controllableId || !state.overlayById.has(controllableId)) {
+      const overlayById = aggregateOverlayState(state.overlayBySessionId);
+      if (!controllableId || !hasRecordKey(overlayById, controllableId)) {
         return null;
       }
 
-      return buildOverlayEntry(controllableId, state.galaxy, state.overlayById, controllableId);
+      return buildOverlayEntry(controllableId, state.galaxy, new Map(Object.entries(overlayById) as Array<[string, ControllableOverlayState]>), controllableId);
     },
     selectionEntry: (state) => (selection: WorldSceneSelection | null): ClickedUnitEntry | null => {
-      return buildClickedUnitEntry(selection, state.galaxy, state.overlayById);
+      return buildClickedUnitEntry(selection, state.galaxy, new Map(Object.entries(aggregateOverlayState(state.overlayBySessionId)) as Array<[string, ControllableOverlayState]>));
     },
     scannerModeFor: (state) => (controllableId: string): ScannerMode => {
       if (!controllableId) {
         return 'off';
       }
 
-      const overlayState = objectValue(state.overlayById.get(controllableId)) ?? {};
+      const overlayState = objectValue(resolveOverlayByControllableId(state.overlayBySessionId, controllableId)) ?? {};
       return deriveScannerMode(resolveScannerState(overlayState.scanner));
     },
     scannerTargetFor: (state) => (controllableId: string): string | undefined => {
@@ -136,7 +143,7 @@ export const useGameStore = defineStore('game', {
         return 90;
       }
 
-      const overlayState = objectValue(state.overlayById.get(controllableId)) ?? {};
+      const overlayState = objectValue(resolveOverlayByControllableId(state.overlayBySessionId, controllableId)) ?? {};
       return deriveScannerWidth(resolveScannerState(overlayState.scanner));
     },
     scannerWidthMinimumFor: (state) => (controllableId: string): number => {
@@ -144,7 +151,7 @@ export const useGameStore = defineStore('game', {
         return 5;
       }
 
-      const overlayState = objectValue(state.overlayById.get(controllableId)) ?? {};
+      const overlayState = objectValue(resolveOverlayByControllableId(state.overlayBySessionId, controllableId)) ?? {};
       return deriveScannerMinimumWidth(resolveScannerState(overlayState.scanner));
     },
     scannerWidthMaximumFor: (state) => (controllableId: string): number => {
@@ -152,7 +159,7 @@ export const useGameStore = defineStore('game', {
         return 90;
       }
 
-      const overlayState = objectValue(state.overlayById.get(controllableId)) ?? {};
+      const overlayState = objectValue(resolveOverlayByControllableId(state.overlayBySessionId, controllableId)) ?? {};
       return deriveScannerMaximumWidth(resolveScannerState(overlayState.scanner));
     },
     recentActivity: (state) => (lifetimeMs: number) => {
@@ -174,8 +181,14 @@ export const useGameStore = defineStore('game', {
       rebuildIndexes(this);
     },
     applyOwnerDelta(message: OwnerOverlayDeltaMessage) {
-      const next = applyOwnerOverlay(Object.fromEntries(this.overlayById.entries()), message);
-      this.overlayById = new Map(Object.entries(next) as Array<[string, ControllableOverlayState]>);
+      const currentOverlay = this.overlayBySessionId.get(message.playerSessionId) ?? new Map();
+      const next = applyOwnerOverlay(Object.fromEntries(currentOverlay.entries()), message);
+      const nextOverlayBySessionId = new Map(this.overlayBySessionId);
+      nextOverlayBySessionId.set(message.playerSessionId, new Map(Object.entries(next) as Array<[string, ControllableOverlayState]>));
+      this.overlayBySessionId = nextOverlayBySessionId;
+    },
+    syncAttachedPlayerSessions(playerSessions: PlayerSessionSummaryDto[]) {
+      this.overlayBySessionId = pruneOverlaySessions(this.overlayBySessionId, playerSessions);
     },
     addChatEntry(entry: ChatEntryDto) {
       this.chatEntries = [entry, ...this.chatEntries].slice(0, 12);
@@ -252,20 +265,30 @@ export const useGameStore = defineStore('game', {
       ].slice(0, activityHistoryLimit);
     },
     clearNavigationOverlay(controllableId: string) {
-      const currentOverlay = objectValue(this.overlayById.get(controllableId));
-      if (!currentOverlay || !hasRecordKey(currentOverlay, 'navigation')) {
-        return;
+      const nextOverlayBySessionId = new Map(this.overlayBySessionId);
+      let updated = false;
+
+      for (const [playerSessionId, overlayById] of nextOverlayBySessionId.entries()) {
+        const currentOverlay = objectValue(overlayById.get(controllableId));
+        if (!currentOverlay || !hasRecordKey(currentOverlay, 'navigation')) {
+          continue;
+        }
+
+        const nextOverlay = { ...currentOverlay };
+        delete nextOverlay.navigation;
+
+        const nextOverlayById = new Map(overlayById);
+        nextOverlayById.set(controllableId, nextOverlay);
+        nextOverlayBySessionId.set(playerSessionId, nextOverlayById);
+        updated = true;
       }
 
-      const nextOverlay = { ...currentOverlay };
-      delete nextOverlay.navigation;
-
-      const next = new Map(this.overlayById);
-      next.set(controllableId, nextOverlay);
-      this.overlayById = next;
+      if (updated) {
+        this.overlayBySessionId = nextOverlayBySessionId;
+      }
     },
     clearOverlay() {
-      this.overlayById = new Map();
+      this.overlayBySessionId = new Map();
     },
     clearAll() {
       this.galaxy = null;
@@ -273,7 +296,7 @@ export const useGameStore = defineStore('game', {
       this.controllablesById = new Map();
       this.teamsById = new Map();
       this.clustersById = new Map();
-      this.overlayById = new Map();
+      this.overlayBySessionId = new Map();
       this.chatEntries = [];
       this.pendingCommands = new Map();
       this.activityEntries = [];
@@ -415,6 +438,42 @@ function applyOwnerOverlay(current: Record<string, unknown>, message: OwnerOverl
   }
 
   return next;
+}
+
+function aggregateOverlayState(overlayBySessionId: Map<string, Map<string, ControllableOverlayState>>) {
+  const aggregate: Record<string, unknown> = {};
+
+  for (const overlayById of overlayBySessionId.values()) {
+    for (const [controllableId, overlay] of overlayById.entries()) {
+      aggregate[controllableId] = overlay;
+    }
+  }
+
+  return aggregate;
+}
+
+function resolveOverlayByControllableId(
+  overlayBySessionId: Map<string, Map<string, ControllableOverlayState>>,
+  controllableId: string,
+) {
+  for (const overlayById of overlayBySessionId.values()) {
+    const overlay = overlayById.get(controllableId);
+    if (overlay) {
+      return overlay;
+    }
+  }
+
+  return undefined;
+}
+
+function pruneOverlaySessions(
+  overlayBySessionId: Map<string, Map<string, ControllableOverlayState>>,
+  playerSessions: PlayerSessionSummaryDto[],
+) {
+  const attachedSessionIds = new Set(playerSessions.map((player) => player.playerSessionId));
+  return new Map(
+    Array.from(overlayBySessionId.entries()).filter(([playerSessionId]) => attachedSessionIds.has(playerSessionId)),
+  );
 }
 
 function consumePendingCommand(store: GameState, commandId: string) {

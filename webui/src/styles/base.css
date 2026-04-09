@@ -746,6 +746,52 @@ h2 {
   text-overflow: ellipsis;
 }
 
+.status-bar-session-trigger {
+  position: relative;
+  padding-right: 1.9rem;
+  transition: background-color 0.18s ease, border-color 0.18s ease, opacity 0.18s ease;
+}
+
+.status-bar-session-trigger.is-clickable {
+  cursor: pointer;
+}
+
+.status-bar-session-trigger.is-clickable:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.status-bar-session-trigger:focus-within {
+  outline: 2px solid rgba(124, 179, 221, 0.8);
+  outline-offset: -2px;
+}
+
+.status-bar-session-caret {
+  position: absolute;
+  right: 0.62rem;
+  width: 0.72rem;
+  height: 0.72rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.82;
+  pointer-events: none;
+}
+
+.status-bar-session-caret svg {
+  width: 100%;
+  height: 100%;
+}
+
+.status-bar-session-native-select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
 .status-bar-code {
   font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
   font-size: 0.68rem;

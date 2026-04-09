@@ -12,6 +12,7 @@ namespace Flattiverse.Gateway.Services;
 /// </summary>
 public sealed class ManeuveringService : IConnectorEventHandler
 {
+    private const bool EnableManeuverLogging = false;
     private static readonly object LogFileLock = new();
     private static readonly string LogFilePath = Path.Combine(AppContext.BaseDirectory, "maneuvering.log");
     private const float DefaultTickSeconds = 0.1f;
@@ -336,6 +337,9 @@ public sealed class ManeuveringService : IConnectorEventHandler
         Vector undesiredMovement,
         Vector appliedThrust)
     {
+        if (!EnableManeuverLogging)
+            return;
+
         var line = string.Create(
             CultureInfo.InvariantCulture,
             $"{DateTime.UtcNow:O} ship={ship.Id} name=\"{ship.Name}\" pos={FormatVector(ship.Position)} movement={FormatVector(ship.Movement)} desired={FormatVector(desiredVector)} undesired={FormatVector(undesiredMovement)} applied={FormatVector(appliedThrust)} target=({state.TargetX:0.###},{state.TargetY:0.###}) thrustPct={state.ThrustPercentage:0.###}{Environment.NewLine}");

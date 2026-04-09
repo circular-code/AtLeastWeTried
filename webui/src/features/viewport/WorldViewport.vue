@@ -86,7 +86,6 @@ watch(
   ([nextSnapshot, nextOwnerOverlay, nextSelectedControllableId, nextNavigationTarget]) => {
     worldScene?.setSnapshot(nextSnapshot, nextOwnerOverlay, nextSelectedControllableId, nextNavigationTarget);
   },
-  { deep: true },
 );
 
 onBeforeUnmount(() => {

@@ -5,6 +5,7 @@ import { formatMetric } from '../../lib/formatting';
 import { useGameStore } from '../../stores/game';
 import { useSessionStore } from '../../stores/session';
 import { useUiStore } from '../../stores/ui';
+import type { PlayerSessionSummaryDto } from '../../types/generated';
 
 const gateway = useGateway();
 const gameStore = useGameStore();
@@ -78,6 +79,9 @@ const unitsInCurrentSystem = computed(() => {
 });
 
 const currentSystemLabel = computed(() => unitsInCurrentSystem.value[0]?.clusterName ?? 'Unknown system');
+const canQuickSwitchSessions = computed(() => sessionStore.attachedPlayerSessions.length > 0);
+const selectedPlayerSessionId = computed(() => sessionStore.selectedPlayerSession?.playerSessionId ?? '');
+const selectedPlayerLabel = computed(() => `${sessionStore.selectedPlayerSession?.displayName ?? 'Observer'} (${sessionStore.attachedPlayerSessions.length})`);
 
 function onConnectionIndicatorClick(): void {
   if (sessionStore.showDisconnectAction) {
@@ -144,6 +148,20 @@ function humanizeUnitKind(kind: string) {
 
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
+
+function onPlayerSessionChange(event: Event): void {
+  const target = event.target as HTMLSelectElement | null;
+  const playerSessionId = target?.value ?? '';
+  if (!playerSessionId || playerSessionId === selectedPlayerSessionId.value) {
+    return;
+  }
+
+  gateway.selectPlayerSession(playerSessionId);
+}
+
+function formatPlayerSessionOptionLabel(player: PlayerSessionSummaryDto): string {
+  return player.teamName ? `${player.displayName} · ${player.teamName}` : player.displayName;
+}
 </script>
 
 <template>
@@ -170,14 +188,36 @@ function humanizeUnitKind(kind: string) {
         <span class="status-bar-text">{{ sessionStore.connectionStateLabel }}</span>
       </button>
 
-      <div class="status-bar-item">
+      <div :class="['status-bar-item', 'status-bar-session-trigger', { 'is-clickable': canQuickSwitchSessions }]">
         <span class="status-bar-icon" aria-hidden="true">
           <svg viewBox="0 0 16 16" focusable="false">
             <circle cx="8" cy="5.1" r="2.25" fill="none" stroke="currentColor" stroke-width="1.4"></circle>
             <path d="M3.1 13.15c.75-2.2 2.55-3.3 4.9-3.3s4.15 1.1 4.9 3.3" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.4"></path>
           </svg>
         </span>
-        <span class="status-bar-text">{{ sessionStore.selectedPlayerSession?.displayName ?? 'Observer' }} ({{ sessionStore.attachedPlayerSessions.length }})</span>
+        <span class="status-bar-text">{{ selectedPlayerLabel }}</span>
+        <span v-if="canQuickSwitchSessions" class="status-bar-session-caret" aria-hidden="true">
+          <svg viewBox="0 0 16 16" focusable="false">
+            <path d="M4.25 6.1 8 9.9l3.75-3.8" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.4"></path>
+          </svg>
+        </span>
+        <select
+          v-if="canQuickSwitchSessions"
+          class="status-bar-session-native-select"
+          :value="selectedPlayerSessionId"
+          title="Switch active player"
+          aria-label="Switch active player"
+          @change="onPlayerSessionChange"
+        >
+          <option value="" :disabled="!!sessionStore.selectedPlayerSession">Observer</option>
+          <option
+            v-for="player in sessionStore.attachedPlayerSessions"
+            :key="player.playerSessionId"
+            :value="player.playerSessionId"
+          >
+            {{ formatPlayerSessionOptionLabel(player) }}
+          </option>
+        </select>
       </div>
 
       <div class="status-bar-item status-bar-actions">

@@ -837,10 +837,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         };
 
         foreach (var conn in connections)
-        {
-            if (conn.SelectedSessionId == _id)
-                conn.EnqueueMessage(msg);
-        }
+            conn.EnqueueMessage(msg);
     }
 
     private static CommandReplyMessage Completed(string commandId)

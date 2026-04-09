@@ -49,15 +49,10 @@ app.Map("/ws", async (HttpContext context, PlayerSessionPool sessionPool, ILogge
 
     logger.LogInformation("WebSocket connected: {ConnectionId}", connection.ConnectionId);
 
-    // Send initial session.ready
+    // Send initial session.ready without an attach warning. The browser may
+    // already be preparing queued connection.attach messages as soon as the
+    // socket opens, so an eager attach_required status creates noisy false alarms.
     connection.EnqueueMessage(connection.BuildSessionReady());
-    connection.EnqueueMessage(new ServerStatusMessage
-    {
-        Kind = "info",
-        Code = "attach_required",
-        Message = "Please attach a player session using connection.attach.",
-        Recoverable = true
-    });
 
     // Start ping task
     using var cts = new CancellationTokenSource();
