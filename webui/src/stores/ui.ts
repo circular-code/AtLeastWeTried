@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import type { WorldSceneSelection } from '../renderer/WorldScene';
 import type { ClientMessage, GatewayMessageDirection, ServerMessage } from '../types/generated';
+import type { ClearTacticalTargetCommandMessage, SetTacticalModeCommandMessage, SetTacticalTargetCommandMessage } from '../transport/commands';
 import type { DebugLogEntry, ScannerMode, TacticalMode } from '../types/client';
 import { formatDebugPayload } from '../lib/formatting';
 
@@ -26,6 +27,8 @@ type StoredDebugLogSettings = {
   showClient?: boolean;
   showServer?: boolean;
 };
+
+type DebugGatewayMessage = ClientMessage | ServerMessage | SetTacticalModeCommandMessage | SetTacticalTargetCommandMessage | ClearTacticalTargetCommandMessage;
 
 export const useUiStore = defineStore('ui', {
   state: () => {
@@ -170,7 +173,7 @@ export const useUiStore = defineStore('ui', {
       this.refreshDebugCaptureBuffer();
       this.persistPreferences();
     },
-    recordDebugMessage(direction: GatewayMessageDirection, message: ClientMessage | ServerMessage) {
+    recordDebugMessage(direction: GatewayMessageDirection, message: DebugGatewayMessage) {
       const payload = formatDebugPayload(message);
       const captureQuery = this.debugLogCaptureSearch.trim().toLowerCase();
       if (captureQuery && !matchesDebugLogFilters(this, direction, message.type, payload, captureQuery)) {

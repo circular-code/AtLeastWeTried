@@ -1,4 +1,7 @@
 import type { CommandReplyMessage, ClientMessage, ServerMessage, ServerStatusMessage } from '../types/generated';
+import type { ClearTacticalTargetCommandMessage, SetTacticalModeCommandMessage, SetTacticalTargetCommandMessage } from '../transport/commands';
+
+type DebugGatewayMessage = ClientMessage | ServerMessage | SetTacticalModeCommandMessage | SetTacticalTargetCommandMessage | ClearTacticalTargetCommandMessage;
 
 export function clamp01(value: number) {
   return Math.max(0, Math.min(1, value));
@@ -100,7 +103,7 @@ export function statusKindToTone(kind: ServerStatusMessage['kind']) {
   }
 }
 
-export function formatDebugPayload(message: ClientMessage | ServerMessage) {
+export function formatDebugPayload(message: DebugGatewayMessage) {
   try {
     return JSON.stringify(message, null, 2);
   } catch {

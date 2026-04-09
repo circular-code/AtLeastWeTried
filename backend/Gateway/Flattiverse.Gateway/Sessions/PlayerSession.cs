@@ -295,6 +295,9 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 "command.scanner" => await HandleScanner(commandId, payload),
                 "command.set_navigation_target" => HandleSetNavigationTarget(commandId, payload),
                 "command.clear_navigation_target" => HandleClearNavigationTarget(commandId, payload),
+                "command.set_tactical_mode" => await HandleSetTacticalMode(commandId, payload),
+                "command.set_tactical_target" => await HandleSetTacticalTarget(commandId, payload),
+                "command.clear_tactical_target" => await HandleClearTacticalTarget(commandId, payload),
                 "command.fire_weapon" => await HandleFireWeapon(commandId, payload),
                 "command.set_subsystem_mode" => await HandleSetSubsystemMode(commandId, payload),
                 "command.destroy_ship" => await HandleDestroyShip(commandId, payload),
@@ -571,6 +574,24 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             case "interceptorFabricator":
                 if (mode == "on") await classic.InterceptorFabricator.On();
                 else if (mode == "off") await classic.InterceptorFabricator.Off();
+                break;
+            case "Tactical":
+            case "tactical":
+            case "TacticalModule":
+            case "tacticalModule":
+                var tacticalMode = mode == "enemy"
+                    ? TacticalService.TacticalMode.Enemy
+                    : mode == "target"
+                        ? TacticalService.TacticalMode.Target
+                        : TacticalService.TacticalMode.Off;
+                _tacticalService.AttachControllable(controllableId, classic);
+                _tacticalService.SetMode(controllableId, tacticalMode);
+                if (payload?.TryGetProperty("targetId", out var targetEl) == true)
+                {
+                    var targetId = targetEl.GetString();
+                    if (!string.IsNullOrWhiteSpace(targetId))
+                        _tacticalService.SetTarget(controllableId, targetId);
+                }
                 break;
         }
 

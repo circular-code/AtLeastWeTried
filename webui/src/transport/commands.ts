@@ -22,6 +22,32 @@ export type CommandEnvelope<TMessage> = {
   message: TMessage;
 };
 
+export type SetTacticalModeCommandMessage = {
+  type: 'command.set_tactical_mode';
+  commandId: string;
+  payload: {
+    controllableId: string;
+    mode: 'enemy' | 'target' | 'off';
+  };
+};
+
+export type SetTacticalTargetCommandMessage = {
+  type: 'command.set_tactical_target';
+  commandId: string;
+  payload: {
+    controllableId: string;
+    targetId: string;
+  };
+};
+
+export type ClearTacticalTargetCommandMessage = {
+  type: 'command.clear_tactical_target';
+  commandId: string;
+  payload: {
+    controllableId: string;
+  };
+};
+
 export function buildAttachConnectionMessage(apiKey: string, teamName?: string): AttachConnectionMessage {
   return {
     type: 'connection.attach',
@@ -212,6 +238,53 @@ export function buildSetSubsystemModeCommand(controllableId: string, subsystemId
         mode,
         value,
         targetId,
+      },
+    },
+  };
+}
+
+export function buildSetTacticalModeCommand(
+  controllableId: string,
+  mode: 'enemy' | 'target' | 'off',
+): CommandEnvelope<SetTacticalModeCommandMessage> {
+  const commandId = createCommandId();
+  return {
+    commandId,
+    message: {
+      type: 'command.set_tactical_mode',
+      commandId,
+      payload: {
+        controllableId,
+        mode,
+      },
+    },
+  };
+}
+
+export function buildSetTacticalTargetCommand(controllableId: string, targetId: string): CommandEnvelope<SetTacticalTargetCommandMessage> {
+  const commandId = createCommandId();
+  return {
+    commandId,
+    message: {
+      type: 'command.set_tactical_target',
+      commandId,
+      payload: {
+        controllableId,
+        targetId,
+      },
+    },
+  };
+}
+
+export function buildClearTacticalTargetCommand(controllableId: string): CommandEnvelope<ClearTacticalTargetCommandMessage> {
+  const commandId = createCommandId();
+  return {
+    commandId,
+    message: {
+      type: 'command.clear_tactical_target',
+      commandId,
+      payload: {
+        controllableId,
       },
     },
   };

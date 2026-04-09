@@ -1,5 +1,21 @@
-﻿import { computed, ref } from 'vue';
-import { buildAttachConnectionMessage, buildChatCommand, buildClearNavigationTargetCommand, buildContinueShipCommand, buildCreateShipCommand, buildDestroyShipCommand, buildDetachPlayerSessionMessage, buildFireWeaponCommand, buildRemoveShipCommand, buildScannerCommand, buildSelectPlayerSessionMessage, buildSetEngineCommand, buildSetNavigationTargetCommand, buildSetSubsystemModeCommand } from '../transport/commands';
+import { computed, ref } from 'vue';
+import {
+  buildAttachConnectionMessage,
+  buildChatCommand,
+  buildClearNavigationTargetCommand,
+  buildContinueShipCommand,
+  buildCreateShipCommand,
+  buildDestroyShipCommand,
+  buildDetachPlayerSessionMessage,
+  buildFireWeaponCommand,
+  buildRemoveShipCommand,
+  buildScannerCommand,
+  buildSelectPlayerSessionMessage,
+  buildSetEngineCommand,
+  buildSetNavigationTargetCommand,
+  buildSetSubsystemModeCommand,
+  buildSetTacticalModeCommand,
+} from '../transport/commands';
 import { createGatewayClient } from '../transport/gateway';
 import { loadSavedConnections, removeSavedConnection, upsertSavedConnection } from '../lib/savedConnections';
 import { truncateText } from '../lib/formatting';
@@ -353,11 +369,11 @@ function createGatewayApi() {
   }
 
   function setTacticalMode(controllableId: string, mode: TacticalMode) {
-    if (!controllableId || mode === 'off') {
+    if (!controllableId) {
       return;
     }
 
-    const envelope = buildFireWeaponCommand(controllableId, 'shot', 0);
+    const envelope = buildSetTacticalModeCommand(controllableId, mode);
     gameStore.trackCommand(envelope.commandId, {
       label: `Tactical ${mode}`,
       subject: gameStore.getControllableLabel(controllableId),
@@ -428,4 +444,3 @@ function createGatewayApi() {
     clearNavigationTarget,
   };
 }
-

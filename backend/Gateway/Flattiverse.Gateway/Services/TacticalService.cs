@@ -24,7 +24,10 @@ public sealed class TacticalService : IConnectorEventHandler
     private const int PredictionIterations = 6;
     private const int PredictionTickSearchRadius = 10;
     private const float PredictionHitTolerance = 2.5f;
+    private const float PredictionQualityGate = 6.5f;
     private const float PredictionMaximumMissDistance = 18f;
+    private const float PredictionMissScoreWeight = 3.25f;
+    private const float PredictionTickPenalty = 0.12f;
     private const float GravityMinimumDistance = 6f;
     private const float GravityInfluenceRange = 3200f;
     private const float GravityInfluenceRangeSquared = GravityInfluenceRange * GravityInfluenceRange;
@@ -76,8 +79,8 @@ public sealed class TacticalService : IConnectorEventHandler
     {
         lock (_sync)
         {
-            if (@event is ControllableInfoPlayerEvent infoEvent &&
-                (@event is DestroyedControllableInfoPlayerEvent || @event is ClosedControllableInfoPlayerEvent))
+            if (@event is ControllableInfoEvent infoEvent &&
+                (@event is DestroyedControllableInfoEvent || @event is ClosedControllableInfoEvent))
             {
                 RemoveCore(BuildControllableId(infoEvent.Player.Id, infoEvent.ControllableInfo.Id));
                 return;
@@ -339,7 +342,6 @@ public sealed class TacticalService : IConnectorEventHandler
     {
         Unit? bestTarget = null;
         float bestDistanceSquared = float.MaxValue;
-        Team ownTeam = ship.Cluster.Galaxy.Player.Team;
         byte ownPlayerId = ship.Cluster.Galaxy.Player.Id;
         Vector ownPosition = ship.Position;
 
@@ -349,9 +351,6 @@ public sealed class TacticalService : IConnectorEventHandler
                 continue;
 
             if (candidate.Player.Id == ownPlayerId)
-                continue;
-
-            if (candidate.Team == ownTeam)
                 continue;
 
             if (!candidate.ControllableInfo.Alive)
@@ -378,9 +377,6 @@ public sealed class TacticalService : IConnectorEventHandler
         if (target is PlayerUnit targetPlayerUnit)
         {
             if (!targetPlayerUnit.ControllableInfo.Alive)
-                return false;
-
-            if (targetPlayerUnit.Team == ship.Cluster.Galaxy.Player.Team)
                 return false;
         }
 
@@ -415,6 +411,7 @@ public sealed class TacticalService : IConnectorEventHandler
         int endTicks = Math.Min(maximumTicks, baselineTicks + PredictionTickSearchRadius);
 
         float bestMissDistance = float.MaxValue;
+        float bestScore = float.MaxValue;
         Vector bestRelativeMovement = new();
         ushort bestTicks = 0;
         float bestEnergyCost = 0f;
@@ -440,10 +437,12 @@ public sealed class TacticalService : IConnectorEventHandler
             if (neutrinoCost > ship.NeutrinoBattery.Current + NumericEpsilon)
                 continue;
 
-            if (missDistance >= bestMissDistance)
+            float score = missDistance * PredictionMissScoreWeight + ticks * PredictionTickPenalty;
+            if (score >= bestScore)
                 continue;
 
             bestMissDistance = missDistance;
+            bestScore = score;
             bestRelativeMovement = relativeMovement;
             bestTicks = (ushort)ticks;
             bestEnergyCost = energyCost;
@@ -456,6 +455,9 @@ public sealed class TacticalService : IConnectorEventHandler
         }
 
         if (!bestFound || bestMissDistance > PredictionMaximumMissDistance)
+            return false;
+
+        if (bestMissDistance > PredictionQualityGate)
             return false;
 
         if (bestEnergyCost > ship.EnergyBattery.Current + NumericEpsilon)
