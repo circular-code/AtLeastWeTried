@@ -1230,10 +1230,20 @@ h2 {
   font-size: 0.68rem;
 }
 
+.debug-log-panel.is-ingame .debug-log-count {
+  min-width: 2.1rem;
+  padding: 0.24rem 0.42rem;
+  font-size: 0.68rem;
+}
+
 .debug-log-panel.is-ingame .field input {
   padding: 0.26rem 0.52rem;
   border-radius: 8px;
   font-size: 0.72rem;
+}
+
+.debug-log-panel.is-ingame .debug-log-limit input {
+  width: 4.3rem;
 }
 
 .debug-log-panel.is-ingame .actions .secondary {
@@ -1283,6 +1293,37 @@ h2 {
 
 .debug-log-limit {
   margin-bottom: 0;
+}
+
+.debug-log-limit-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.debug-log-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.4rem;
+  padding: 0.32rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #f4ecda;
+  font-size: 0.76rem;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.debug-log-limit-separator {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1;
+}
+
+.debug-log-limit input {
+  width: 5.25rem;
 }
 
 .debug-log-search {
