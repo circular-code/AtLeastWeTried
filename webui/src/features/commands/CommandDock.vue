@@ -29,7 +29,7 @@ function setTactical(mode: TacticalMode) {
   <section v-if="activeControllableId" class="command-dock panel-glass">
     <div class="dock-group">
       <span class="dock-label">Thrust</span>
-      <input v-model.number="thrust" class="dock-slider" type="range" min="-1" max="1" step="0.05" />
+      <input v-model.number="thrust" class="dock-slider" type="range" min="0" max="1" step="0.05" />
       <span class="dock-value">{{ thrust.toFixed(2) }}</span>
       <button class="dock-btn" type="button" @click="gateway.setEngine(activeControllableId, thrust)">Apply</button>
       <button class="dock-btn" type="button" @click="gateway.fireWeapon(activeControllableId)">Fire</button>
