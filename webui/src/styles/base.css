@@ -897,6 +897,17 @@ h2 {
   padding-right: 0.2rem;
 }
 
+.status-bar-popover-search {
+  padding-top: 0.1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.status-bar-popover-search input {
+  padding: 0.42rem 0.62rem;
+  border-radius: 10px;
+  font-size: 0.72rem;
+}
+
 .status-bar-system-list {
   list-style: none;
   display: grid;

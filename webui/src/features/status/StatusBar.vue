@@ -83,6 +83,8 @@ const isUnitsPopoverOpen = ref(false);
 const isShipsPopoverOpen = ref(false);
 const isTeamsPopoverOpen = ref(false);
 const isClustersPopoverOpen = ref(false);
+const unitsSearchQuery = ref('');
+const shipsSearchQuery = ref('');
 const currentSystem = computed(() => {
   const snapshot = gameStore.snapshot;
   if (!snapshot) {
@@ -201,6 +203,8 @@ const shipsInCurrentSystem = computed(() => {
       return left.displayName.localeCompare(right.displayName);
     });
 });
+const filteredUnitsInCurrentSystem = computed(() => filterSystemEntries(unitsInCurrentSystem.value, unitsSearchQuery.value));
+const filteredShipsInCurrentSystem = computed(() => filterSystemEntries(shipsInCurrentSystem.value, shipsSearchQuery.value));
 const representedShipCount = computed(() => representedShips.value.length);
 const teamSummaries = computed(() => {
   if (!isTeamsPopoverOpen.value) {
@@ -284,6 +288,7 @@ function openUnitsPopover(): void {
 
 function closeUnitsPopover(): void {
   isUnitsPopoverOpen.value = false;
+  unitsSearchQuery.value = '';
 }
 
 function openShipsPopover(): void {
@@ -295,6 +300,7 @@ function openShipsPopover(): void {
 
 function closeShipsPopover(): void {
   isShipsPopoverOpen.value = false;
+  shipsSearchQuery.value = '';
 }
 
 function openTeamsPopover(): void {
@@ -377,6 +383,24 @@ function humanizeUnitKind(kind: string) {
   }
 
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function filterSystemEntries<
+  T extends {
+    unitId: string;
+    displayName: string;
+    kind: string;
+  },
+>(entries: T[], query: string) {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return entries;
+  }
+
+  return entries.filter((entry) => {
+    const searchable = `${entry.displayName}\n${entry.unitId}\n${humanizeUnitKind(entry.kind)}`.toLowerCase();
+    return searchable.includes(normalizedQuery);
+  });
 }
 
 function isUnitTracked(unitId: string) {
@@ -610,14 +634,14 @@ function formatPlayerSessionOptionLabel(player: PlayerSessionSummaryDto): string
           <header class="status-bar-popover-head">
             <div>
               <h3>{{ currentSystemLabel }}</h3>
-              <p>{{ unitsInCurrentSystem.length }} non-ship units in the current system</p>
+              <p>{{ filteredUnitsInCurrentSystem.length }} / {{ unitsInCurrentSystem.length }} non-ship units in the current system</p>
             </div>
           </header>
 
-          <div v-if="unitsInCurrentSystem.length > 0" class="status-bar-popover-body">
+          <div v-if="filteredUnitsInCurrentSystem.length > 0" class="status-bar-popover-body">
             <ul class="status-bar-system-list">
               <li
-                v-for="unit in unitsInCurrentSystem"
+                v-for="unit in filteredUnitsInCurrentSystem"
                 :key="unit.unitId"
                 class="status-bar-system-row"
               >
@@ -655,8 +679,21 @@ function formatPlayerSessionOptionLabel(player: PlayerSessionSummaryDto): string
           </div>
 
           <p v-else class="status-bar-popover-empty">
-            {{ currentSystem ? 'No non-ship units are currently listed in this system.' : 'No current system is available for the active ship.' }}
+            {{
+              currentSystem
+                ? (unitsSearchQuery.trim() ? 'No non-ship units match the current search.' : 'No non-ship units are currently listed in this system.')
+                : 'No current system is available for the active ship.'
+            }}
           </p>
+
+          <div class="status-bar-popover-search">
+            <input
+              v-model.trim="unitsSearchQuery"
+              type="search"
+              placeholder="Search units"
+              aria-label="Search units"
+            />
+          </div>
         </section>
       </div>
 
@@ -682,14 +719,14 @@ function formatPlayerSessionOptionLabel(player: PlayerSessionSummaryDto): string
           <header class="status-bar-popover-head">
             <div>
               <h3>{{ currentSystemLabel }}</h3>
-              <p>{{ shipsInCurrentSystem.length }} ships in the current system</p>
+              <p>{{ filteredShipsInCurrentSystem.length }} / {{ shipsInCurrentSystem.length }} ships in the current system</p>
             </div>
           </header>
 
-          <div v-if="shipsInCurrentSystem.length > 0" class="status-bar-popover-body">
+          <div v-if="filteredShipsInCurrentSystem.length > 0" class="status-bar-popover-body">
             <ul class="status-bar-system-list">
               <li
-                v-for="unit in shipsInCurrentSystem"
+                v-for="unit in filteredShipsInCurrentSystem"
                 :key="unit.unitId"
                 class="status-bar-system-row"
               >
@@ -727,8 +764,21 @@ function formatPlayerSessionOptionLabel(player: PlayerSessionSummaryDto): string
           </div>
 
           <p v-else class="status-bar-popover-empty">
-            {{ currentSystem ? 'No ships are currently listed in this system.' : 'No current system is available for the active ship.' }}
+            {{
+              currentSystem
+                ? (shipsSearchQuery.trim() ? 'No ships match the current search.' : 'No ships are currently listed in this system.')
+                : 'No current system is available for the active ship.'
+            }}
           </p>
+
+          <div class="status-bar-popover-search">
+            <input
+              v-model.trim="shipsSearchQuery"
+              type="search"
+              placeholder="Search ships"
+              aria-label="Search ships"
+            />
+          </div>
         </section>
       </div>
 
