@@ -230,6 +230,26 @@ h2 {
   justify-items: end;
 }
 
+.overlay-shell.is-debug-log-ingame-active .overlay-top {
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    'left .'
+    '. .'
+    'right .';
+}
+
+.overlay-shell.is-debug-log-ingame-active .overlay-column-right {
+  justify-items: start;
+  align-self: end;
+}
+
+.overlay-shell.is-debug-log-ingame-active .overlay-column-right > .panel,
+.overlay-shell.is-debug-log-ingame-active .overlay-column-right > .overlay-card,
+.overlay-shell.is-debug-log-ingame-active .overlay-column-right > .text-muted {
+  width: min(100%, 320px);
+}
+
 .overlay-column-right > .panel {
   width: min(100%, 300px);
 }
@@ -237,7 +257,7 @@ h2 {
 .owner-overlay-panel {
   display: grid;
   gap: 0.45rem;
-  width: min(100%, 380px);
+  width: min(100%, 260px);
   max-height: 84vh;
   overflow: auto;
   pointer-events: auto;
@@ -425,34 +445,55 @@ h2 {
   color: #b8f9ef;
 }
 
-.owner-overlay-stats {
+.overlay-stat-grid.owner-overlay-stats {
   grid-area: stats;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.2rem 0.45rem;
 }
 
-.owner-overlay-stats div {
-  display: grid;
-  gap: 0.08rem;
-  justify-content: start;
+.overlay-stat-grid.owner-overlay-stats div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  padding: 0.34rem 0.42rem;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
   min-width: 0;
 }
 
-.owner-overlay-stats dt {
+.overlay-stat-grid.owner-overlay-stats dt {
+  margin: 0;
   color: var(--text-muted);
   font-size: 0.55rem;
   line-height: 1.1;
   text-transform: uppercase;
   letter-spacing: 0.07em;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
 }
 
-.owner-overlay-stats dd {
+.overlay-stat-grid.owner-overlay-stats dd {
+  margin: 0;
   font-size: 0.72rem;
   line-height: 1.1;
   color: #f4ecda;
   font-weight: 600;
+  text-align: right;
   white-space: nowrap;
+}
+
+.overlay-stat-grid.owner-overlay-stats .stat-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+}
+
+.overlay-stat-grid.owner-overlay-stats .stat-icon svg {
+  width: 16px;
+  height: 16px;
 }
 
 .owner-overlay-actions {
@@ -554,6 +595,7 @@ h2 {
   min-width: 0;
   padding: 0 0.68rem;
   min-height: 32px;
+  font-size: 0.72rem;
   color: inherit;
   background: rgba(255, 255, 255, 0.04);
   white-space: nowrap;
@@ -583,6 +625,34 @@ h2 {
 .status-bar-item-primary.is-error,
 .status-bar-item-primary.is-closed {
   background: linear-gradient(90deg, rgba(209, 104, 91, 0.34), rgba(124, 179, 221, 0.16));
+}
+
+.status-bar-connection-indicator {
+  border: none;
+  border-radius: 0;
+  font: inherit;
+  text-align: left;
+  appearance: none;
+  cursor: default;
+  transform: none;
+  transition: background-color 0.18s ease, border-color 0.18s ease, opacity 0.18s ease;
+}
+
+.status-bar-connection-indicator.is-clickable {
+  cursor: pointer;
+}
+
+.status-bar-connection-indicator:hover {
+  transform: none;
+}
+
+.status-bar-connection-indicator:disabled {
+  opacity: 1;
+}
+
+.status-bar-connection-indicator.is-clickable:focus-visible {
+  outline: 2px solid rgba(124, 179, 221, 0.8);
+  outline-offset: -2px;
 }
 
 .status-bar-icon {
@@ -634,10 +704,8 @@ h2 {
   max-width: min(24vw, 320px);
 }
 
-.status-bar-item-chat-launch {
-  max-width: min(14vw, 160px);
-}
-
+.status-bar-item-chat-launch,
+.status-bar-item-debug,
 .status-bar-item-history {
   max-width: 54px;
 }
@@ -664,9 +732,13 @@ h2 {
 
 .status-bar-button {
   border-radius: 7px;
-  padding-inline: 0.55rem;
+  padding: 0.18rem 0.55rem;
+  font-size: 0.72rem;
+  line-height: 1.2;
 }
 
+.status-bar-item-chat-launch,
+.status-bar-item-debug,
 .status-bar-item-history {
   padding-inline: 0.35rem;
 }
@@ -683,12 +755,14 @@ h2 {
   width: 34px;
   min-width: 34px;
   height: 26px;
-  padding: 0;
+  /* !important needed: .button-compact in utilities.css (loaded after this file)
+     has the same specificity and would otherwise override with 0.42rem 0.86rem */
+  padding: 0 !important;
 }
 
 .status-bar-icon-button svg {
-  width: 0.95rem;
-  height: 0.95rem;
+  width: 1.15rem;
+  height: 1.15rem;
 }
 
 .status-bar-icon-badge {
@@ -734,15 +808,6 @@ h2 {
   color: rgba(220, 232, 244, 0.78);
   font-size: 0.66rem;
   line-height: 1.1;
-}
-
-.status-bar-item-chat-launch {
-  padding-inline: 0.4rem;
-}
-
-.status-bar-item-debug {
-  max-width: min(16vw, 170px);
-  padding-inline: 0.4rem;
 }
 
 .status-bar-item-debug .status-bar-button.is-active {
@@ -1413,6 +1478,7 @@ h2 {
   max-height: min(86vh, 860px);
   display: grid;
   gap: 0.9rem;
+  padding: 0.9rem;
   overflow: auto;
   background:
     linear-gradient(165deg, rgba(13, 18, 22, 0.96), rgba(7, 11, 14, 0.96)),
@@ -1450,6 +1516,7 @@ h2 {
 @media (max-width: 1200px) {
   body {
     overflow: auto;
+    padding-bottom: 90px;
   }
 
   .scene-stage {
@@ -1477,6 +1544,7 @@ h2 {
     grid-template-areas:
       'left'
       'right';
+  }
 
   .overlay-column-right {
     justify-items: stretch;
@@ -1489,35 +1557,36 @@ h2 {
   .owner-overlay-panel {
     max-height: none;
   }
-    flex: 0 0 auto;
-  }
 
   .overlay-column {
     overflow: visible;
     max-height: none;
+    padding-right: 0;
+  }
 
   .modal-backdrop {
     position: fixed;
   }
-    padding-right: 0;
-  }
 
   .command-dock {
-    position: static;
-    left: auto;
+    position: fixed;
+    bottom: calc(var(--status-bar-desktop-height) + 0.65rem);
+    left: 0;
+    right: 0;
     transform: none;
-    width: auto;
-    max-width: none;
     flex-wrap: wrap;
+    justify-content: center;
     overflow: visible;
+    z-index: 2;
     padding: 0.3rem 0.5rem;
   }
 
   .overlay-status-bar {
-    position: static;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
     display: flex;
-    border-radius: 12px;
-    border-bottom: 1px solid rgba(124, 179, 221, 0.26);
     flex-wrap: wrap;
     padding: 0.2rem;
   }
@@ -1526,8 +1595,20 @@ h2 {
     flex-wrap: wrap;
   }
 
+  .status-bar-item-chat-preview {
+    display: none;
+  }
+
   .status-bar-group-right {
-    margin-left: 0;
+    margin-left: auto;
+  }
+
+  .status-bar-group-center .status-bar-label {
+    display: none;
+  }
+
+  .status-bar-group-center .status-bar-item {
+    justify-content: center;
   }
 
   .status-bar-group-left .status-bar-item {
@@ -1560,8 +1641,9 @@ h2 {
     max-width: none;
   }
 
-  .owner-overlay-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .overlay-stat-grid.owner-overlay-stats {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.2rem;
   }
 
   .panel {
@@ -1569,33 +1651,47 @@ h2 {
     border-radius: 20px;
   }
 
+  body {
+    padding-bottom: 90px;
+  }
+
+  .command-dock {
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    overflow-x: auto;
+  }
+
   .overlay-status-bar {
-    gap: 0.35rem;
-    padding: 0.22rem;
+    justify-content: space-between;
+    padding: 0.2rem;
   }
 
   .status-bar-group {
-    width: 100%;
+    flex-wrap: nowrap;
+  }
+
+  .status-bar-group-center {
+    display: none;
+  }
+
+  .status-bar-item-chat-preview {
+    display: none;
   }
 
   .status-bar-item {
-    flex: 1 1 auto;
+    flex: 0 0 auto;
     justify-content: center;
   }
 
   .status-bar-actions {
-    flex: 1 1 auto;
+    flex: 0 0 auto;
   }
 
-  .status-bar-item-chat-preview,
   .status-bar-item-chat-launch,
+  .status-bar-item-debug,
   .status-bar-item-history {
-    flex: 1 1 100%;
+    flex: 0 0 auto;
     max-width: none;
-  }
-
-  .status-bar-item-metric {
-    flex: 1 1 calc(50% - 1px);
   }
 
   h1 {
@@ -1655,6 +1751,14 @@ h2 {
 
 .selection-unit-grid {
   margin-top: 0.05rem;
+}
+
+.selection-unit-gauges {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(74px, 1fr));
+  gap: 0.5rem;
+  align-items: start;
+  justify-items: center;
 }
 
 .selection-detail-groups {
@@ -1790,68 +1894,6 @@ h2 {
   white-space: nowrap;
   font-family: monospace;
   color: var(--secondary);
-}
-
-.overlay-meter-list {
-  display: grid;
-  gap: 0.35rem;
-}
-
-.overlay-meter {
-  padding: 0.35rem 0.42rem 0.4rem;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.04);
-}
-
-.overlay-meter.is-inactive {
-  opacity: 0.72;
-}
-
-.overlay-meter-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.55rem;
-  align-items: baseline;
-}
-
-.overlay-meter-head span {
-  color: var(--text-muted);
-  font-size: 0.64rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.overlay-meter-head strong {
-  font-size: 0.72rem;
-  color: #f4ecda;
-  font-weight: 600;
-}
-
-.overlay-meter-track {
-  height: 6px;
-  margin-top: 0.28rem;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.07);
-}
-
-.overlay-meter-fill {
-  height: 100%;
-  min-width: 0;
-  border-radius: inherit;
-}
-
-.overlay-meter.tone-hull .overlay-meter-fill {
-  background: linear-gradient(90deg, #ea8a62, #efbf84);
-}
-
-.overlay-meter.tone-shield .overlay-meter-fill {
-  background: linear-gradient(90deg, #4d81d9, #84cbff);
-}
-
-.overlay-meter.tone-energy .overlay-meter-fill {
-  background: linear-gradient(90deg, #47b8b0, #96efe0);
 }
 
 .overlay-stat-grid {

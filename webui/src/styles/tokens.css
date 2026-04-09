@@ -1,0 +1,20 @@
+:root {
+  --font-body: 'Space Grotesk', 'Segoe UI', sans-serif;
+  --font-heading: 'Sora', 'Segoe UI', sans-serif;
+  --bg-canvas: #040607;
+  --bg-panel: rgba(8, 12, 15, 0.78);
+  --bg-panel-strong: rgba(8, 12, 15, 0.9);
+  --border-subtle: rgba(239, 191, 132, 0.18);
+  --border-strong: rgba(239, 191, 132, 0.32);
+  --text-main: #f2f2ea;
+  --text-muted: #b8b9ad;
+  --accent: #efbf84;
+  --accent-soft: rgba(239, 191, 132, 0.18);
+  --secondary: #7cb3dd;
+  --success: #86e6d8;
+  --warning: #ef9b72;
+  --danger: #ff8a5b;
+  --shadow-panel: 0 22px 60px rgba(0, 0, 0, 0.32);
+  --radius-panel: 18px;
+  --radius-pill: 999px;
+}

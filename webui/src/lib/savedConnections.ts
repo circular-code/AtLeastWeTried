@@ -1,9 +1,4 @@
-export type SavedGatewayConnection = {
-  id: string;
-  label: string;
-  apiKey: string;
-  teamName: string;
-};
+import type { SavedGatewayConnection } from '../types/client';
 
 const STORAGE_KEY = 'flattiverse.gateway.savedConnections';
 
