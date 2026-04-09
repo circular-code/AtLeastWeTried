@@ -112,7 +112,7 @@ public sealed class ScanningService : IConnectorEventHandler
             && TryResolveTargetedAngle(state, targetedShip, out var targetAngle))
         {
             var scanner = targetedShip.MainScanner;
-            _ = scanner.Set(ResolveWidth(scanner, state), scanner.MaximumLength, targetAngle);
+            _ = scanner.Set(scanner.MinimumWidth, scanner.MaximumLength, targetAngle);
         }
     }
 
