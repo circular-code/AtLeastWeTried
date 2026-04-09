@@ -58,6 +58,26 @@ internal static class NavigationMath
             : normalized;
     }
 
+    /// <summary>
+    /// Signed CCW sweep along the <b>shorter</b> arc from <paramref name="fromAngle"/> to <paramref name="toAngle"/>.
+    /// Range is (-π, π]: positive = CCW, negative = CW. Use for arc sampling between two obstacle contacts.
+    /// </summary>
+    /// <remarks>
+    /// Without this, sorting atan2 angles in (-π, π] can place two contacts near ±π consecutively; the naive
+    /// CCW difference in [0, 2π) then picks the <b>long</b> way around the circle (~2π − gap), producing wrong
+    /// arcs and spurious tangent-like overlay segments.
+    /// </remarks>
+    public static double ShortArcSignedSweep(double fromAngle, double toAngle)
+    {
+        var ccw = NormalizeAngle(toAngle - fromAngle);
+        if (ccw > Math.PI)
+        {
+            return ccw - Math.PI * 2d;
+        }
+
+        return ccw;
+    }
+
     public static double DistanceToSegment(NavigationPoint point, NavigationPoint start, NavigationPoint end, out double t)
     {
         var delta = end - start;
@@ -76,6 +96,30 @@ internal static class NavigationMath
     public static NavigationPoint PointOnSegment(NavigationPoint start, NavigationPoint end, double t)
     {
         return start + (end - start) * t;
+    }
+
+    /// <summary>
+    /// External tangent touch points from <paramref name="point"/> to <paramref name="circle"/>.
+    /// Returns empty if the point lies inside or on the inflated circle.
+    /// </summary>
+    public static IEnumerable<NavigationPoint> PointToCircleTangentTouchPoints(
+        NavigationPoint point,
+        NavigationObstacle circle)
+    {
+        var offset = point - circle.Center;
+        var distance = offset.Length;
+        if (distance <= circle.Radius + Epsilon)
+        {
+            yield break;
+        }
+
+        var baseAngle = Math.Atan2(offset.Y, offset.X);
+        var halfSpan = Math.Acos(circle.Radius / distance);
+        foreach (var sign in new[] { -1d, 1d })
+        {
+            var touchAngle = baseAngle + sign * halfSpan;
+            yield return circle.Center + NavigationPoint.FromAngle(touchAngle, circle.Radius);
+        }
     }
 
     public static string BuildPointKey(int obstacleIndex, NavigationPoint point)

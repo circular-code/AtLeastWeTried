@@ -6,9 +6,11 @@ using Flattiverse.Connector.Units;
 using Flattiverse.Gateway.Connector;
 using Flattiverse.Gateway.Protocol.Dtos;
 using Flattiverse.Gateway.Protocol.ServerMessages;
+using Flattiverse.Gateway.Options;
 using Flattiverse.Gateway.Services;
 using Flattiverse.Gateway.Services.Navigation;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Flattiverse.Gateway.Sessions;
 
@@ -42,7 +44,14 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     public ScanningService ScanningService => _scanningService;
     public ManeuveringService ManeuveringService => _maneuveringService;
 
-    public PlayerSession(string id, string apiKey, string? teamName, string galaxyUrl, ILogger logger)
+    public PlayerSession(
+        string id,
+        string apiKey,
+        string? teamName,
+        string galaxyUrl,
+        ILogger logger,
+        ILogger<PathfindingService> pathfindingLogger,
+        IOptions<PathfindingOptions> pathfindingOptions)
     {
         _id = id;
         _apiKey = apiKey;
@@ -51,7 +60,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         _logger = logger;
         _mappingService = new MappingService(BuildMappingScopeContext);
         _scanningService = new ScanningService(ResolveScanTarget);
-        _pathfindingService = new PathfindingService(_mappingService, _maneuveringService);
+        _pathfindingService = new PathfindingService(_mappingService, _maneuveringService, pathfindingLogger, pathfindingOptions);
     }
 
     public async Task ConnectAsync()

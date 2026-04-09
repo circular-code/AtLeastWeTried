@@ -2,7 +2,12 @@ namespace Flattiverse.Gateway.Services.Navigation;
 
 internal sealed class CircularPathPlanner
 {
-    private sealed record GraphNode(int Index, NavigationPoint Position, int ObstacleIndex, double AngleOnObstacle);
+    private const bool EnableEdgeFileLogging = true;
+    private const string EdgeLogFileName = "circular-path-planner-edges.json";
+    private const int CounterClockwiseTangentDirection = 1;
+    private const int ClockwiseTangentDirection = -1;
+
+    private sealed record GraphNode(int Index, NavigationPoint Position, int ObstacleIndex, double AngleOnObstacle, int TangentDirection);
 
     private readonly record struct GraphEdge(
         int To,
@@ -50,8 +55,8 @@ internal sealed class CircularPathPlanner
 
         var nodes = new List<GraphNode>
         {
-            new(0, start, -1, 0d),
-            new(1, goal, -1, 0d),
+            new(0, start, -1, 0d, 0),
+            new(1, goal, -1, 0d, 0),
         };
         var adjacency = new List<List<GraphEdge>>
         {
@@ -63,7 +68,7 @@ internal sealed class CircularPathPlanner
 
         if (IsSegmentClear(start, goal, obstacles, -1, -1))
         {
-            AddBidirectionalLineEdge(adjacency, 0, 1, start.DistanceTo(goal));
+            AddDirectedLineEdge(adjacency, 0, 1, start.DistanceTo(goal));
         }
 
         for (var obstacleIndex = 0; obstacleIndex < obstacles.Count; obstacleIndex++)
@@ -72,19 +77,35 @@ internal sealed class CircularPathPlanner
 
             foreach (var tangent in BuildTangents(start, obstacle, obstacleIndex))
             {
-                var toNode = GetOrAddContactNode(nodes, adjacency, nodesByKey, contactNodesByObstacle, tangent.ToObstacleIndex, tangent.ToPoint, obstacles);
-                if (IsSegmentClear(start, tangent.ToPoint, obstacles, -1, tangent.ToObstacleIndex))
+                var toNode = GetOrAddContactNodeForLine(
+                    nodes,
+                    adjacency,
+                    nodesByKey,
+                    contactNodesByObstacle,
+                    tangent.ToObstacleIndex,
+                    tangent.ToPoint,
+                    tangent.ToPoint - start,
+                    obstacles);
+                if (toNode is not null && IsSegmentClear(start, tangent.ToPoint, obstacles, -1, tangent.ToObstacleIndex))
                 {
-                    AddBidirectionalLineEdge(adjacency, 0, toNode, start.DistanceTo(tangent.ToPoint));
+                    AddDirectedLineEdge(adjacency, 0, toNode.Value, start.DistanceTo(tangent.ToPoint));
                 }
             }
 
             foreach (var tangent in BuildTangents(goal, obstacle, obstacleIndex))
             {
-                var fromNode = GetOrAddContactNode(nodes, adjacency, nodesByKey, contactNodesByObstacle, tangent.ToObstacleIndex, tangent.ToPoint, obstacles);
-                if (IsSegmentClear(goal, tangent.ToPoint, obstacles, -1, tangent.ToObstacleIndex))
+                var fromNode = GetOrAddContactNodeForLine(
+                    nodes,
+                    adjacency,
+                    nodesByKey,
+                    contactNodesByObstacle,
+                    tangent.ToObstacleIndex,
+                    tangent.ToPoint,
+                    goal - tangent.ToPoint,
+                    obstacles);
+                if (fromNode is not null && IsSegmentClear(goal, tangent.ToPoint, obstacles, -1, tangent.ToObstacleIndex))
                 {
-                    AddBidirectionalLineEdge(adjacency, 1, fromNode, goal.DistanceTo(tangent.ToPoint));
+                    AddDirectedLineEdge(adjacency, fromNode.Value, 1, goal.DistanceTo(tangent.ToPoint));
                 }
             }
         }
@@ -100,17 +121,138 @@ internal sealed class CircularPathPlanner
                         continue;
                     }
 
-                    var fromNode = GetOrAddContactNode(nodes, adjacency, nodesByKey, contactNodesByObstacle, tangent.FromObstacleIndex, tangent.FromPoint, obstacles);
-                    var toNode = GetOrAddContactNode(nodes, adjacency, nodesByKey, contactNodesByObstacle, tangent.ToObstacleIndex, tangent.ToPoint, obstacles);
-                    AddBidirectionalLineEdge(adjacency, fromNode, toNode, tangent.FromPoint.DistanceTo(tangent.ToPoint));
+                    var fromNode = GetOrAddContactNodeForLine(
+                        nodes,
+                        adjacency,
+                        nodesByKey,
+                        contactNodesByObstacle,
+                        tangent.FromObstacleIndex,
+                        tangent.FromPoint,
+                        tangent.ToPoint - tangent.FromPoint,
+                        obstacles);
+                    var toNode = GetOrAddContactNodeForLine(
+                        nodes,
+                        adjacency,
+                        nodesByKey,
+                        contactNodesByObstacle,
+                        tangent.ToObstacleIndex,
+                        tangent.ToPoint,
+                        tangent.ToPoint - tangent.FromPoint,
+                        obstacles);
+                    if (fromNode is null || toNode is null)
+                    {
+                        continue;
+                    }
+
+                    var cost = tangent.FromPoint.DistanceTo(tangent.ToPoint);
+                    AddDirectedLineEdge(adjacency, fromNode.Value, toNode.Value, cost);
+
+                    var reverseFromNode = GetOrAddContactNodeForLine(
+                        nodes,
+                        adjacency,
+                        nodesByKey,
+                        contactNodesByObstacle,
+                        tangent.ToObstacleIndex,
+                        tangent.ToPoint,
+                        tangent.FromPoint - tangent.ToPoint,
+                        obstacles);
+                    var reverseToNode = GetOrAddContactNodeForLine(
+                        nodes,
+                        adjacency,
+                        nodesByKey,
+                        contactNodesByObstacle,
+                        tangent.FromObstacleIndex,
+                        tangent.FromPoint,
+                        tangent.FromPoint - tangent.ToPoint,
+                        obstacles);
+                    if (reverseFromNode is not null && reverseToNode is not null)
+                    {
+                        AddDirectedLineEdge(adjacency, reverseFromNode.Value, reverseToNode.Value, cost);
+                    }
                 }
             }
         }
 
         AddArcEdges(nodes, adjacency, contactNodesByObstacle, obstacles);
+        WriteEdgeLogIfEnabled(start, goal, nodes, adjacency, obstacles);
 
         return Search(goal, nodes, adjacency, obstacles);
     }
+
+    private static void WriteEdgeLogIfEnabled(
+        NavigationPoint start,
+        NavigationPoint goal,
+        IReadOnlyList<GraphNode> nodes,
+        IReadOnlyList<List<GraphEdge>> adjacency,
+        IReadOnlyList<NavigationObstacle> obstacles)
+    {
+        if (!IsEdgeFileLoggingEnabled())
+        {
+            return;
+        }
+
+        try
+        {
+            var edgeLog = new
+            {
+                generatedAtUtc = DateTime.UtcNow,
+                start = new { x = start.X, y = start.Y },
+                goal = new { x = goal.X, y = goal.Y },
+                nodes = nodes.Select(node => new
+                {
+                    index = node.Index,
+                    x = node.Position.X,
+                    y = node.Position.Y,
+                    obstacleIndex = node.ObstacleIndex,
+                    angleOnObstacle = node.AngleOnObstacle,
+                    tangentDirection = node.TangentDirection,
+                }),
+                obstacles = obstacles.Select((obstacle, index) => new
+                {
+                    index,
+                    obstacle.Id,
+                    obstacle.Kind,
+                    centerX = obstacle.Center.X,
+                    centerY = obstacle.Center.Y,
+                    obstacle.Radius,
+                }),
+                edges = adjacency.SelectMany(
+                    (edges, fromIndex) => edges.Select(edge => new
+                    {
+                        from = fromIndex,
+                        to = edge.To,
+                        cost = edge.Cost,
+                        isArc = edge.IsArc,
+                        obstacleIndex = edge.ObstacleIndex,
+                        startAngle = edge.StartAngle,
+                        sweepAngle = edge.SweepAngle,
+                        fromPoint = new
+                        {
+                            x = nodes[fromIndex].Position.X,
+                            y = nodes[fromIndex].Position.Y,
+                        },
+                        toPoint = new
+                        {
+                            x = nodes[edge.To].Position.X,
+                            y = nodes[edge.To].Position.Y,
+                        },
+                    })),
+            };
+
+            var filePath = Path.Combine(AppContext.BaseDirectory, EdgeLogFileName);
+            var json = System.Text.Json.JsonSerializer.Serialize(edgeLog, new System.Text.Json.JsonSerializerOptions
+            {
+                WriteIndented = true,
+            });
+            File.WriteAllText(filePath, json);
+        }
+        catch
+        {
+            // Edge logging is diagnostic only and must never affect planning.
+        }
+    }
+
+    private static bool IsEdgeFileLoggingEnabled() => EnableEdgeFileLogging;
 
     private static PlanResult Search(
         NavigationPoint goal,
@@ -158,14 +300,18 @@ internal sealed class CircularPathPlanner
                 cameBy[next] = edge;
                 frontier.Enqueue(next, nextCost + nodes[next].Position.DistanceTo(goal));
 
-                var key = current < next ? $"{current}:{next}" : $"{next}:{current}";
-                if (searchEdgeKeys.Add(key))
+                if (edge.IsArc)
                 {
-                    searchEdges.Add(new NavigationPreviewSegment(
-                        nodes[current].Position.X,
-                        nodes[current].Position.Y,
-                        nodes[next].Position.X,
-                        nodes[next].Position.Y));
+                    var previous = nodes[current].Position;
+                    foreach (var point in SampleArc(obstacles[edge.ObstacleIndex], edge.StartAngle, edge.SweepAngle))
+                    {
+                        AddSearchPreviewSegment(searchEdges, searchEdgeKeys, previous, point);
+                        previous = point;
+                    }
+                }
+                else
+                {
+                    AddSearchPreviewSegment(searchEdges, searchEdgeKeys, nodes[current].Position, nodes[next].Position);
                 }
             }
         }
@@ -259,6 +405,35 @@ internal sealed class CircularPathPlanner
         points.Add(point);
     }
 
+    private static void AddSearchPreviewSegment(
+        ICollection<NavigationPreviewSegment> searchEdges,
+        ISet<string> searchEdgeKeys,
+        NavigationPoint start,
+        NavigationPoint end)
+    {
+        if (start.DistanceTo(end) <= NavigationMath.Epsilon)
+        {
+            return;
+        }
+
+        var key = BuildPreviewSegmentKey(start, end);
+        if (!searchEdgeKeys.Add(key))
+        {
+            return;
+        }
+
+        searchEdges.Add(new NavigationPreviewSegment(start.X, start.Y, end.X, end.Y));
+    }
+
+    private static string BuildPreviewSegmentKey(NavigationPoint start, NavigationPoint end)
+    {
+        var startKey = $"{Math.Round(start.X * NavigationMath.CoordinateRounding) / NavigationMath.CoordinateRounding:0.#####}:{Math.Round(start.Y * NavigationMath.CoordinateRounding) / NavigationMath.CoordinateRounding:0.#####}";
+        var endKey = $"{Math.Round(end.X * NavigationMath.CoordinateRounding) / NavigationMath.CoordinateRounding:0.#####}:{Math.Round(end.Y * NavigationMath.CoordinateRounding) / NavigationMath.CoordinateRounding:0.#####}";
+        return string.CompareOrdinal(startKey, endKey) <= 0
+            ? $"{startKey}|{endKey}"
+            : $"{endKey}|{startKey}";
+    }
+
     private static void AddArcEdges(
         IReadOnlyList<GraphNode> nodes,
         IReadOnlyList<List<GraphEdge>> adjacency,
@@ -275,6 +450,23 @@ internal sealed class CircularPathPlanner
             var ordered = nodeIndices
                 .Distinct()
                 .Select(index => nodes[index])
+                .GroupBy(node => NavigationMath.BuildPointKey(node.ObstacleIndex, node.Position), StringComparer.Ordinal)
+                .Select(group =>
+                {
+                    var contacts = group.ToArray();
+                    var sample = contacts[0];
+                    return new
+                    {
+                        sample.Position,
+                        sample.AngleOnObstacle,
+                        CounterClockwiseNode = contacts
+                            .FirstOrDefault(node => node.TangentDirection == CounterClockwiseTangentDirection)
+                            ?.Index,
+                        ClockwiseNode = contacts
+                            .FirstOrDefault(node => node.TangentDirection == ClockwiseTangentDirection)
+                            ?.Index,
+                    };
+                })
                 .OrderBy(node => node.AngleOnObstacle)
                 .ToArray();
 
@@ -282,36 +474,89 @@ internal sealed class CircularPathPlanner
             {
                 var current = ordered[index];
                 var next = ordered[(index + 1) % ordered.Length];
-                var deltaAngle = NavigationMath.NormalizeAngle(next.AngleOnObstacle - current.AngleOnObstacle);
-                if (deltaAngle <= NavigationMath.Epsilon)
+                var sweep = NavigationMath.ShortArcSignedSweep(current.AngleOnObstacle, next.AngleOnObstacle);
+                if (Math.Abs(sweep) <= NavigationMath.Epsilon)
                 {
                     continue;
                 }
 
-                var midpointAngle = NavigationMath.NormalizeAngle(current.AngleOnObstacle + deltaAngle * 0.5d);
-                var midpoint = obstacles[obstacleIndex].Center + NavigationPoint.FromAngle(midpointAngle, obstacles[obstacleIndex].Radius);
-                if (!IsPointClear(midpoint, obstacles, obstacleIndex))
+                if (!IsArcClear(obstacles[obstacleIndex], current.AngleOnObstacle, sweep, obstacles, obstacleIndex))
                 {
                     continue;
                 }
 
-                var cost = deltaAngle * obstacles[obstacleIndex].Radius;
-                AddDirectedEdge(adjacency, current.Index, new GraphEdge(next.Index, cost, true, obstacleIndex, current.AngleOnObstacle, deltaAngle));
-                AddDirectedEdge(adjacency, next.Index, new GraphEdge(current.Index, cost, true, obstacleIndex, next.AngleOnObstacle, -deltaAngle));
+                var cost = Math.Abs(sweep) * obstacles[obstacleIndex].Radius;
+                if (sweep > 0d)
+                {
+                    if (current.CounterClockwiseNode is int counterClockwiseFrom && next.CounterClockwiseNode is int counterClockwiseTo)
+                    {
+                        AddDirectedEdge(adjacency, counterClockwiseFrom, new GraphEdge(counterClockwiseTo, cost, true, obstacleIndex, current.AngleOnObstacle, sweep));
+                    }
+
+                    if (next.ClockwiseNode is int clockwiseFrom && current.ClockwiseNode is int clockwiseTo)
+                    {
+                        AddDirectedEdge(adjacency, clockwiseFrom, new GraphEdge(clockwiseTo, cost, true, obstacleIndex, next.AngleOnObstacle, -sweep));
+                    }
+                }
+                else
+                {
+                    if (current.ClockwiseNode is int clockwiseFrom && next.ClockwiseNode is int clockwiseTo)
+                    {
+                        AddDirectedEdge(adjacency, clockwiseFrom, new GraphEdge(clockwiseTo, cost, true, obstacleIndex, current.AngleOnObstacle, sweep));
+                    }
+
+                    if (next.CounterClockwiseNode is int counterClockwiseFrom && current.CounterClockwiseNode is int counterClockwiseTo)
+                    {
+                        AddDirectedEdge(adjacency, counterClockwiseFrom, new GraphEdge(counterClockwiseTo, cost, true, obstacleIndex, next.AngleOnObstacle, -sweep));
+                    }
+                }
             }
         }
     }
 
-    private static int GetOrAddContactNode(
+    private static int? GetOrAddContactNodeForLine(
         IList<GraphNode> nodes,
         IList<List<GraphEdge>> adjacency,
         IDictionary<string, int> nodesByKey,
         IDictionary<int, List<int>> contactNodesByObstacle,
         int obstacleIndex,
         NavigationPoint point,
+        NavigationPoint lineDirection,
         IReadOnlyList<NavigationObstacle> obstacles)
     {
-        var key = NavigationMath.BuildPointKey(obstacleIndex, point);
+        var tangentDirection = DetermineTangentDirection(obstacles[obstacleIndex], point, lineDirection);
+        if (tangentDirection == 0)
+        {
+            return null;
+        }
+
+        return GetOrAddContactNode(
+            nodes,
+            adjacency,
+            nodesByKey,
+            contactNodesByObstacle,
+            obstacleIndex,
+            point,
+            tangentDirection,
+            obstacles);
+    }
+
+    private static int? GetOrAddContactNode(
+        IList<GraphNode> nodes,
+        IList<List<GraphEdge>> adjacency,
+        IDictionary<string, int> nodesByKey,
+        IDictionary<int, List<int>> contactNodesByObstacle,
+        int obstacleIndex,
+        NavigationPoint point,
+        int tangentDirection,
+        IReadOnlyList<NavigationObstacle> obstacles)
+    {
+        if (!IsPointClear(point, obstacles, obstacleIndex))
+        {
+            return null;
+        }
+
+        var key = BuildContactNodeKey(obstacleIndex, point, tangentDirection);
         if (nodesByKey.TryGetValue(key, out var existing))
         {
             return existing;
@@ -319,7 +564,7 @@ internal sealed class CircularPathPlanner
 
         var angle = NavigationMath.NormalizeAngle((point - obstacles[obstacleIndex].Center).Angle);
         var index = nodes.Count;
-        nodes.Add(new GraphNode(index, point, obstacleIndex, angle));
+        nodes.Add(new GraphNode(index, point, obstacleIndex, angle, tangentDirection));
         adjacency.Add(new List<GraphEdge>());
         nodesByKey[key] = index;
 
@@ -333,7 +578,83 @@ internal sealed class CircularPathPlanner
         return index;
     }
 
-    private static void AddBidirectionalLineEdge(IReadOnlyList<List<GraphEdge>> adjacency, int from, int to, double cost)
+    private static string BuildContactNodeKey(int obstacleIndex, NavigationPoint point, int tangentDirection)
+    {
+        return $"{NavigationMath.BuildPointKey(obstacleIndex, point)}:{tangentDirection}";
+    }
+
+    private static int DetermineTangentDirection(
+        NavigationObstacle obstacle,
+        NavigationPoint point,
+        NavigationPoint lineDirection)
+    {
+        var tangent = NavigationPoint.PerpendicularLeft((point - obstacle.Center).Normalized());
+        var alignment = NavigationPoint.Dot(lineDirection.Normalized(), tangent);
+        if (Math.Abs(alignment) <= 1e-3d)
+        {
+            return 0;
+        }
+
+        return alignment > 0d
+            ? CounterClockwiseTangentDirection
+            : ClockwiseTangentDirection;
+    }
+
+    private static bool IsArcClear(
+        NavigationObstacle obstacle,
+        double startAngle,
+        double sweepAngle,
+        IReadOnlyList<NavigationObstacle> obstacles,
+        int ignoreObstacleIndex)
+    {
+        if (Math.Abs(sweepAngle) <= NavigationMath.Epsilon)
+        {
+            return true;
+        }
+
+        var startPoint = obstacle.Center + NavigationPoint.FromAngle(startAngle, obstacle.Radius);
+        var endPoint = obstacle.Center + NavigationPoint.FromAngle(startAngle + sweepAngle, obstacle.Radius);
+
+        for (var obstacleIndex = 0; obstacleIndex < obstacles.Count; obstacleIndex++)
+        {
+            if (obstacleIndex == ignoreObstacleIndex)
+            {
+                continue;
+            }
+
+            var other = obstacles[obstacleIndex];
+            var nearestAngle = NavigationMath.NormalizeAngle((other.Center - obstacle.Center).Angle);
+            var minimumDistance = Math.Min(
+                startPoint.DistanceTo(other.Center),
+                endPoint.DistanceTo(other.Center));
+
+            if (AngleLiesOnSweep(startAngle, sweepAngle, nearestAngle))
+            {
+                minimumDistance = Math.Min(
+                    minimumDistance,
+                    Math.Abs(obstacle.Center.DistanceTo(other.Center) - obstacle.Radius));
+            }
+
+            if (minimumDistance < other.Radius - 0.05d)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool AngleLiesOnSweep(double startAngle, double sweepAngle, double candidateAngle)
+    {
+        if (sweepAngle >= 0d)
+        {
+            return NavigationMath.NormalizeAngle(candidateAngle - startAngle) <= sweepAngle + NavigationMath.Epsilon;
+        }
+
+        return NavigationMath.NormalizeAngle(startAngle - candidateAngle) <= -sweepAngle + NavigationMath.Epsilon;
+    }
+
+    private static void AddDirectedLineEdge(IReadOnlyList<List<GraphEdge>> adjacency, int from, int to, double cost)
     {
         if (from == to || cost <= NavigationMath.Epsilon)
         {
@@ -341,7 +662,6 @@ internal sealed class CircularPathPlanner
         }
 
         AddDirectedEdge(adjacency, from, new GraphEdge(to, cost, false, -1, 0d, 0d));
-        AddDirectedEdge(adjacency, to, new GraphEdge(from, cost, false, -1, 0d, 0d));
     }
 
     private static void AddDirectedEdge(IReadOnlyList<List<GraphEdge>> adjacency, int from, GraphEdge edge)
@@ -403,10 +723,25 @@ internal sealed class CircularPathPlanner
 
     private static IEnumerable<TangentSegment> BuildTangents(NavigationPoint point, NavigationObstacle obstacle, int obstacleIndex)
     {
-        var pointCircle = new NavigationObstacle("start", "point", point, 0d);
-        foreach (var tangent in BuildTangents(pointCircle, -1, obstacle, obstacleIndex))
+        foreach (var tangent in BuildPointToCircleTangents(point, obstacle, -1, obstacleIndex))
         {
             yield return tangent;
+        }
+    }
+
+    /// <summary>
+    /// Tangents from an external point to a circle. Avoids degenerate two-circle math when the other radius is 0
+    /// (which produced non-unit "normals" and inconsistent tangent directions).
+    /// </summary>
+    private static IEnumerable<TangentSegment> BuildPointToCircleTangents(
+        NavigationPoint point,
+        NavigationObstacle circle,
+        int pointObstacleIndex,
+        int circleObstacleIndex)
+    {
+        foreach (var onCircle in NavigationMath.PointToCircleTangentTouchPoints(point, circle))
+        {
+            yield return new TangentSegment(pointObstacleIndex, circleObstacleIndex, point, onCircle);
         }
     }
 
@@ -416,6 +751,26 @@ internal sealed class CircularPathPlanner
         NavigationObstacle right,
         int rightIndex)
     {
+        if (left.Radius <= NavigationMath.Epsilon)
+        {
+            foreach (var tangent in BuildPointToCircleTangents(left.Center, right, leftIndex, rightIndex))
+            {
+                yield return tangent;
+            }
+
+            yield break;
+        }
+
+        if (right.Radius <= NavigationMath.Epsilon)
+        {
+            foreach (var tangent in BuildPointToCircleTangents(right.Center, left, rightIndex, leftIndex))
+            {
+                yield return new TangentSegment(leftIndex, rightIndex, tangent.ToPoint, tangent.FromPoint);
+            }
+
+            yield break;
+        }
+
         var delta = right.Center - left.Center;
         var distanceSquared = delta.LengthSquared;
         if (distanceSquared <= NavigationMath.Epsilon)
@@ -435,9 +790,16 @@ internal sealed class CircularPathPlanner
             var safeDeterminant = Math.Sqrt(Math.Max(0d, determinant));
             for (var orientation = -1; orientation <= 1; orientation += 2)
             {
-                var normal = new NavigationPoint(
+                var raw = new NavigationPoint(
                     (delta.X * radiusDifference + -delta.Y * safeDeterminant * orientation) / distanceSquared,
                     (delta.Y * radiusDifference + delta.X * safeDeterminant * orientation) / distanceSquared);
+                var len = raw.Length;
+                if (len <= NavigationMath.Epsilon)
+                {
+                    continue;
+                }
+
+                var normal = raw / len;
                 var fromPoint = left.Center + normal * left.Radius;
                 var toPoint = right.Center + normal * (side * right.Radius);
                 yield return new TangentSegment(leftIndex, rightIndex, fromPoint, toPoint);

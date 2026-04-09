@@ -27,6 +27,10 @@
       <Link>Fixtures\old-world-state.wss-www-flattiverse-com-galaxies-0-api-b.fe66663304e80502.json</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Include="..\..\Flattiverse.Gateway.Host\data\world-state.wss-www-flattiverse-com-galaxies-0-api-b.fe66663304e80502.json">
+      <Link>Fixtures\world-state.wss-www-flattiverse-com-galaxies-0-api-b.fe66663304e80502.json</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

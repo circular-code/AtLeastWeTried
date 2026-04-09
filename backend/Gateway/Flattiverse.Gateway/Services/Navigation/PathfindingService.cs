@@ -1,6 +1,9 @@
 using Flattiverse.Connector.Events;
 using Flattiverse.Connector.GalaxyHierarchy;
 using Flattiverse.Gateway.Connector;
+using Flattiverse.Gateway.Options;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Flattiverse.Gateway.Services.Navigation;
 
@@ -46,11 +49,19 @@ public sealed class PathfindingService : IConnectorEventHandler
     private readonly CircularPathPlanner _planner = new();
     private readonly PathFollower _pathFollower = new();
     private readonly Dictionary<int, PathState> _states = new();
+    private readonly ILogger<PathfindingService> _logger;
+    private readonly bool _enableLogging;
 
-    public PathfindingService(MappingService mappingService, ManeuveringService maneuveringService)
+    public PathfindingService(
+        MappingService mappingService,
+        ManeuveringService maneuveringService,
+        ILogger<PathfindingService> logger,
+        IOptions<PathfindingOptions> options)
     {
         _mappingService = mappingService;
         _maneuveringService = maneuveringService;
+        _logger = logger;
+        _enableLogging = options.Value.EnableLogging;
     }
 
     public void Handle(FlattiverseEvent @event)
@@ -98,6 +109,16 @@ public sealed class PathfindingService : IConnectorEventHandler
         state.Status = "planning";
         state.ObstacleIdsFromSuccessfulPlan.Clear();
         state.ObstacleIdsAtLastPlanAttempt.Clear();
+
+        if (_enableLogging)
+        {
+            _logger.LogInformation(
+                "[Pathfinding] SetNavigationGoal controllable={ControllableId} goal=({GoalX:F1},{GoalY:F1}) thrust={Thrust:F2}",
+                ship.Id,
+                targetX,
+                targetY,
+                thrustPercentage);
+        }
     }
 
     public void ClearNavigationGoal(int controllableId)
@@ -105,6 +126,11 @@ public sealed class PathfindingService : IConnectorEventHandler
         if (!_states.TryGetValue(controllableId, out var state))
         {
             return;
+        }
+
+        if (_enableLogging)
+        {
+            _logger.LogInformation("[Pathfinding] ClearNavigationGoal controllable={ControllableId}", controllableId);
         }
 
         state.HasGoal = false;
@@ -126,6 +152,8 @@ public sealed class PathfindingService : IConnectorEventHandler
             };
         }
 
+        var lookahead = state.CurrentLookahead;
+        var plan = state.Plan;
         var overlay = new Dictionary<string, object?>
         {
             { "active", true },
@@ -134,29 +162,29 @@ public sealed class PathfindingService : IConnectorEventHandler
             { "pathStatus", state.Status ?? "planned" },
         };
 
-        if (state.CurrentLookahead is NavigationPoint lookahead)
+        if (lookahead is NavigationPoint currentLookahead)
         {
-            overlay["currentTargetX"] = lookahead.X;
-            overlay["currentTargetY"] = lookahead.Y;
+            overlay["currentTargetX"] = currentLookahead.X;
+            overlay["currentTargetY"] = currentLookahead.Y;
         }
 
-        if (state.Plan is not null)
+        if (plan is not null)
         {
-            overlay["path"] = state.Plan.PathPoints
+            overlay["path"] = (plan.PathPoints ?? Array.Empty<NavigationPoint>())
                 .Select(point => new Dictionary<string, object?>
                 {
                     { "x", point.X },
                     { "y", point.Y },
                 })
                 .ToArray();
-            overlay["searchNodes"] = state.Plan.SearchNodes
+            overlay["searchNodes"] = (plan.SearchNodes ?? Array.Empty<NavigationPreviewPoint>())
                 .Select(point => new Dictionary<string, object?>
                 {
                     { "x", point.X },
                     { "y", point.Y },
                 })
                 .ToArray();
-            overlay["searchEdges"] = state.Plan.SearchEdges
+            overlay["searchEdges"] = (plan.SearchEdges ?? Array.Empty<NavigationPreviewSegment>())
                 .Select(segment => new Dictionary<string, object?>
                 {
                     { "startX", segment.StartX },
@@ -165,7 +193,7 @@ public sealed class PathfindingService : IConnectorEventHandler
                     { "endY", segment.EndY },
                 })
                 .ToArray();
-            overlay["inflatedObstacles"] = state.Plan.Obstacles
+            overlay["inflatedObstacles"] = (plan.Obstacles ?? Array.Empty<NavigationObstacle>())
                 .Select(obstacle => new Dictionary<string, object?>
                 {
                     { "kind", obstacle.Kind },
@@ -204,8 +232,18 @@ public sealed class PathfindingService : IConnectorEventHandler
             destinationUnitId: null,
             shipPosition: currentPosition);
 
-        if (ShouldReplan(state, obstacles, clusterId))
+        var replanDecision = GetReplanDecision(state, obstacles, clusterId);
+        if (replanDecision.Replan)
         {
+            if (_enableLogging)
+            {
+                _logger.LogInformation(
+                    "[Pathfinding] Replan triggered controllable={ControllableId} reason={Reason} obstacleCount={ObstacleCount}",
+                    ship.Id,
+                    replanDecision.Reason,
+                    obstacles.Count);
+            }
+
             Replan(state, ship, currentPosition, clusterId, obstacles);
         }
 
@@ -270,18 +308,54 @@ public sealed class PathfindingService : IConnectorEventHandler
         {
             state.ObstacleIdsFromSuccessfulPlan.Clear();
         }
+
+        if (_enableLogging)
+        {
+            if (state.Plan.Succeeded)
+            {
+                _logger.LogInformation(
+                    "[Pathfinding] Plan result controllable={ControllableId} success=true pathPoints={PathPoints} searchNodes={SearchNodes} polylineLength={PolylineLength:F1}",
+                    ship.Id,
+                    state.Plan.PathPoints.Count,
+                    state.Plan.SearchNodes.Count,
+                    state.Plan.PathPoints.Count >= 2
+                        ? NavigationPointDistance(state.Plan.PathPoints)
+                        : 0d);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "[Pathfinding] Plan result controllable={ControllableId} success=false failureReason={Reason} searchNodes={SearchNodes}",
+                    ship.Id,
+                    state.Plan.FailureReason ?? "(null)",
+                    state.Plan.SearchNodes.Count);
+            }
+        }
     }
 
-    private static bool ShouldReplan(PathState state, List<NavigationObstacle> obstacles, int clusterId)
+    private static double NavigationPointDistance(IReadOnlyList<NavigationPoint> path)
+    {
+        var sum = 0d;
+        for (var i = 0; i < path.Count - 1; i++)
+        {
+            sum += path[i].DistanceTo(path[i + 1]);
+        }
+
+        return sum;
+    }
+
+    private readonly record struct ReplanDecision(bool Replan, string Reason);
+
+    private static ReplanDecision GetReplanDecision(PathState state, List<NavigationObstacle> obstacles, int clusterId)
     {
         if (state.Plan is null)
         {
-            return true;
+            return new ReplanDecision(true, "no_active_plan");
         }
 
         if (state.PlannedClusterId != clusterId)
         {
-            return true;
+            return new ReplanDecision(true, $"cluster_changed (planned={state.PlannedClusterId}, current={clusterId})");
         }
 
         if (state.Plan.Succeeded && state.Plan.PathPoints.Count >= 2)
@@ -295,11 +369,13 @@ public sealed class PathfindingService : IConnectorEventHandler
 
                 if (NavigationMath.PolylineIntersectsObstacleDisk(state.Plan.PathPoints, obstacle))
                 {
-                    return true;
+                    return new ReplanDecision(
+                        true,
+                        $"new_obstacle_obscures_path id={obstacle.Id} kind={obstacle.Kind}");
                 }
             }
 
-            return false;
+            return new ReplanDecision(false, "");
         }
 
         if (!state.Plan.Succeeded)
@@ -308,14 +384,14 @@ public sealed class PathfindingService : IConnectorEventHandler
             {
                 if (!state.ObstacleIdsAtLastPlanAttempt.Contains(obstacle.Id))
                 {
-                    return true;
+                    return new ReplanDecision(true, $"new_obstacle_after_failed_plan id={obstacle.Id} kind={obstacle.Kind}");
                 }
             }
 
-            return false;
+            return new ReplanDecision(false, "failed_plan_unchanged_obstacles");
         }
 
-        return false;
+        return new ReplanDecision(false, "");
     }
 
     private static double ComputeLookaheadDistance(ClassicShipControllable ship)
