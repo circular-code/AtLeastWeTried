@@ -18,21 +18,20 @@ public sealed class PlayerSessionPool : IDisposable
 
     public async Task<PlayerSession> GetOrCreateAsync(string apiKey, string? teamName)
     {
-        if (_sessions.TryGetValue(apiKey, out var existing) && existing.Connected)
+        if (_sessions.TryGetValue(apiKey, out var existing))
+        {
+            await existing.EnsureConnectedAsync();
             return existing;
+        }
 
         await _createLock.WaitAsync();
         try
         {
             // Double-check after acquiring lock
-            if (_sessions.TryGetValue(apiKey, out existing) && existing.Connected)
-                return existing;
-
-            // Dispose old disconnected session if present
-            if (existing is not null)
+            if (_sessions.TryGetValue(apiKey, out existing))
             {
-                _sessions.TryRemove(apiKey, out _);
-                existing.Dispose();
+                await existing.EnsureConnectedAsync();
+                return existing;
             }
 
             var id = $"ps-{Guid.NewGuid():N}";

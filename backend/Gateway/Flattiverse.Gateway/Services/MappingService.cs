@@ -11,7 +11,11 @@ namespace Flattiverse.Gateway.Services;
 /// </summary>
 public sealed class MappingService : IConnectorEventHandler
 {
-    private readonly Dictionary<string, UnitSnapshotDto> _knownUnits = new();
+    // Static map discoveries are shared across all player sessions in this gateway process.
+    private static readonly Dictionary<string, UnitSnapshotDto> _knownStaticUnits = new();
+    private static readonly object _staticLock = new();
+
+    private readonly Dictionary<string, UnitSnapshotDto> _knownDynamicUnits = new();
     private readonly List<WorldDeltaDto> _pendingDeltas = new();
     private readonly object _lock = new();
 
@@ -43,8 +47,12 @@ public sealed class MappingService : IConnectorEventHandler
     /// </summary>
     public List<UnitSnapshotDto> BuildUnitSnapshots()
     {
+        List<UnitSnapshotDto> staticUnits;
+        lock (_staticLock)
+            staticUnits = _knownStaticUnits.Values.ToList();
+
         lock (_lock)
-            return _knownUnits.Values.ToList();
+            return staticUnits.Concat(_knownDynamicUnits.Values).ToList();
     }
 
     /// <summary>
@@ -68,10 +76,21 @@ public sealed class MappingService : IConnectorEventHandler
     {
         var dto = MapUnit(unit, clusterId);
         if (dto is null) return;
+        var isStatic = IsStaticUnit(unit);
+
+        if (isStatic)
+        {
+            lock (_staticLock)
+                _knownStaticUnits[dto.UnitId] = dto;
+        }
+        else
+        {
+            lock (_lock)
+                _knownDynamicUnits[dto.UnitId] = dto;
+        }
 
         lock (_lock)
         {
-            _knownUnits[dto.UnitId] = dto;
             _pendingDeltas.Add(new WorldDeltaDto
             {
                 EventType = "unit.created",
@@ -85,10 +104,21 @@ public sealed class MappingService : IConnectorEventHandler
     {
         var dto = MapUnit(unit, clusterId);
         if (dto is null) return;
+        var isStatic = IsStaticUnit(unit);
+
+        if (isStatic)
+        {
+            lock (_staticLock)
+                _knownStaticUnits[dto.UnitId] = dto;
+        }
+        else
+        {
+            lock (_lock)
+                _knownDynamicUnits[dto.UnitId] = dto;
+        }
 
         lock (_lock)
         {
-            _knownUnits[dto.UnitId] = dto;
             _pendingDeltas.Add(new WorldDeltaDto
             {
                 EventType = "unit.updated",
@@ -101,10 +131,12 @@ public sealed class MappingService : IConnectorEventHandler
     private void HandleUnitRemoved(Unit unit)
     {
         var unitId = unit.Name;
+        if (IsStaticUnit(unit))
+            return;
 
         lock (_lock)
         {
-            _knownUnits.Remove(unitId);
+            _knownDynamicUnits.Remove(unitId);
             _pendingDeltas.Add(new WorldDeltaDto
             {
                 EventType = "unit.removed",
@@ -191,5 +223,10 @@ public sealed class MappingService : IConnectorEventHandler
         if (unit.SunHeat.HasValue) changes["sunHeat"] = unit.SunHeat;
         if (unit.SunDrain.HasValue) changes["sunDrain"] = unit.SunDrain;
         return changes;
+    }
+
+    private static bool IsStaticUnit(Unit unit)
+    {
+        return unit is SteadyUnit;
     }
 }

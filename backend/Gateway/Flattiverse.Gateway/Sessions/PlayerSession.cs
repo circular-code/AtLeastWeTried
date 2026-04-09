@@ -19,6 +19,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     private readonly string _id;
     private GalaxyConnectionManager? _connectionManager;
     private readonly object _lock = new();
+    private readonly SemaphoreSlim _connectLock = new(1, 1);
     private readonly HashSet<BrowserConnection> _attachedConnections = new();
     private string _displayName = "";
     private bool _connected;
@@ -45,8 +46,23 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
     public async Task ConnectAsync()
     {
+        await EnsureConnectedAsync();
+    }
+
+    public async Task EnsureConnectedAsync()
+    {
+        await _connectLock.WaitAsync();
         try
         {
+            if (_connected && _connectionManager?.Connected == true && _connectionManager.Galaxy is not null)
+                return;
+
+            if (_connectionManager is not null)
+            {
+                _connectionManager.ConnectionLost -= OnConnectionLost;
+                _connectionManager.Dispose();
+            }
+
             _connectionManager = new GalaxyConnectionManager(_galaxyUrl, _apiKey, _teamName, _logger);
             _connectionManager.ConnectionLost += OnConnectionLost;
 
@@ -60,6 +76,10 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         {
             _logger.LogError(ex, "Failed to connect player session {Id}", _id);
             throw;
+        }
+        finally
+        {
+            _connectLock.Release();
         }
     }
 
@@ -724,5 +744,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             _connectionManager.ConnectionLost -= OnConnectionLost;
             _connectionManager.Dispose();
         }
+
+        _connectLock.Dispose();
     }
 }
