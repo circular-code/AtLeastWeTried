@@ -7,6 +7,12 @@ using Flattiverse.Gateway.Services;
 using Flattiverse.Gateway.Sessions;
 
 var builder = WebApplication.CreateBuilder(args);
+var configuredWorldStatePath = builder.Configuration["Gateway:WorldStateFilePath"];
+if (!string.IsNullOrWhiteSpace(configuredWorldStatePath) && !Path.IsPathRooted(configuredWorldStatePath))
+{
+    configuredWorldStatePath = Path.Combine(builder.Environment.ContentRootPath, configuredWorldStatePath);
+}
+MappingService.ConfigurePersistence(configuredWorldStatePath);
 
 builder.Services.AddSingleton(sp =>
 {
