@@ -161,18 +161,21 @@ const unitsInCurrentSystem = computed(() => {
       return left.displayName.localeCompare(right.displayName);
     });
 });
-const shipsInCurrentSystem = computed(() => {
+const shipEntries = computed(() => {
   if (!isShipsPopoverOpen.value || !currentSystem.value) {
     return [];
   }
 
-  const { clusterId, clusterName, activePosition } = currentSystem.value;
+  const snapshot = currentSystem.value.snapshot;
+  const clusterId = currentSystem.value.clusterId;
+  const clusterName = currentSystem.value.clusterName;
+  const activePosition = currentSystem.value?.activePosition ?? null;
   const activeId = activeControllableId.value;
 
   return representedShips.value
     .filter((ship) => readUnitClusterId(ship.unit, ship.overlay) === clusterId)
     .map((ship) => {
-      const position = readUnitPosition(ship.unit, ship.overlay);
+      const position = readKnownUnitPosition(ship.unit, ship.overlay);
       const isCurrent = ship.unitId === activeId;
       const isSeen = isCurrent || ship.unit?.isSeen || !!ship.overlay;
 
@@ -180,9 +183,9 @@ const shipsInCurrentSystem = computed(() => {
         unitId: ship.unitId,
         displayName: ship.controllable?.displayName ?? ship.unitId,
         kind: ship.kind,
-        x: position.x,
-        y: position.y,
-        distance: activePosition ? Math.hypot(position.x - activePosition.x, position.y - activePosition.y) : null,
+        x: position?.x ?? null,
+        y: position?.y ?? null,
+        distance: activePosition && position ? Math.hypot(position.x - activePosition.x, position.y - activePosition.y) : null,
         isCurrent,
         isSeen,
         isVisible: visibleUnitIds.value.has(ship.unitId),
@@ -190,22 +193,36 @@ const shipsInCurrentSystem = computed(() => {
       };
     })
     .sort((left, right) => {
-      const leftDistance = left.distance ?? -1;
-      const rightDistance = right.distance ?? -1;
-      if (leftDistance !== rightDistance) {
-        return leftDistance - rightDistance;
+      if (left.isCurrent !== right.isCurrent) {
+        return left.isCurrent ? -1 : 1;
       }
 
       if (left.isSeen !== right.isSeen) {
         return left.isSeen ? -1 : 1;
       }
 
+      if (left.isVisible !== right.isVisible) {
+        return left.isVisible ? -1 : 1;
+      }
+
+      const leftDistance = left.distance ?? Number.POSITIVE_INFINITY;
+      const rightDistance = right.distance ?? Number.POSITIVE_INFINITY;
+      if (leftDistance !== rightDistance) {
+        return leftDistance - rightDistance;
+      }
+
       return left.displayName.localeCompare(right.displayName);
     });
 });
 const filteredUnitsInCurrentSystem = computed(() => filterSystemEntries(unitsInCurrentSystem.value, unitsSearchQuery.value));
-const filteredShipsInCurrentSystem = computed(() => filterSystemEntries(shipsInCurrentSystem.value, shipsSearchQuery.value));
-const representedShipCount = computed(() => representedShips.value.length);
+const filteredShipEntries = computed(() => filterSystemEntries(shipEntries.value, shipsSearchQuery.value));
+const representedShipCount = computed(() => {
+  if (!currentSystem.value) {
+    return 0;
+  }
+
+  return representedShips.value.filter((ship) => readUnitClusterId(ship.unit, ship.overlay) === currentSystem.value?.clusterId).length;
+});
 const teamSummaries = computed(() => {
   if (!isTeamsPopoverOpen.value) {
     return [];
@@ -329,8 +346,18 @@ function onTrackUnit(unitId: string): void {
   uiStore.toggleTrackedUnit(unitId);
 }
 
-function onNavigateUnit(): void {
-  // Reserved for future behavior.
+function onNavigateUnit(worldX: number | null, worldY: number | null): void {
+  const controllableId = activeControllableId.value;
+  if (!controllableId || worldX === null || worldY === null) {
+    return;
+  }
+
+  gateway.setNavigationTarget(
+    controllableId,
+    worldX,
+    worldY,
+    uiStore.navigationThrustPercentage,
+  );
 }
 
 function readNumeric(value: unknown): number | null {
@@ -359,6 +386,24 @@ function readUnitPosition(
     x: typeof positionRecord?.x === 'number' && Number.isFinite(positionRecord.x) ? positionRecord.x : unit?.x ?? 0,
     y: typeof positionRecord?.y === 'number' && Number.isFinite(positionRecord.y) ? positionRecord.y : unit?.y ?? 0,
   };
+}
+
+function readKnownUnitPosition(
+  unit: { x: number; y: number } | undefined,
+  overlay: Record<string, unknown> | undefined,
+) {
+  const overlayPosition = overlay?.position;
+  const positionRecord = typeof overlayPosition === 'object' && overlayPosition !== null
+    ? overlayPosition as Record<string, unknown>
+    : undefined;
+  const x = typeof positionRecord?.x === 'number' && Number.isFinite(positionRecord.x) ? positionRecord.x : unit?.x;
+  const y = typeof positionRecord?.y === 'number' && Number.isFinite(positionRecord.y) ? positionRecord.y : unit?.y;
+
+  if (typeof x !== 'number' || !Number.isFinite(x) || typeof y !== 'number' || !Number.isFinite(y)) {
+    return null;
+  }
+
+  return { x, y };
 }
 
 function isShipUnit(kind: string, hasControllable: boolean) {
@@ -410,6 +455,22 @@ function isUnitTracked(unitId: string) {
 function trackedUnitButtonStyle(unitId: string) {
   const color = trackedUnitColors.value[unitId];
   return color ? { '--track-color': color } : undefined;
+}
+
+function canNavigateToUnit(worldX: number | null, worldY: number | null) {
+  return worldX !== null && worldY !== null;
+}
+
+function formatOptionalMetric(value: number | null) {
+  return value === null ? 'Unknown' : formatMetric(value);
+}
+
+function formatOptionalDistance(value: number | null, isCurrent: boolean) {
+  if (isCurrent) {
+    return 'Current';
+  }
+
+  return value === null ? 'Unknown' : `${formatMetric(value)} away`;
 }
 
 function onPlayerSessionChange(event: Event): void {
@@ -672,7 +733,14 @@ function formatPlayerSessionOptionLabel(player: PlayerSessionSummaryDto): string
                   >
                     {{ isUnitTracked(unit.unitId) ? 'Tracked' : 'Track' }}
                   </button>
-                  <button type="button" class="status-bar-unit-action" @click.stop="onNavigateUnit">Navigate</button>
+                  <button
+                    type="button"
+                    class="status-bar-unit-action"
+                    :disabled="!canNavigateToUnit(unit.x, unit.y)"
+                    @click.stop="onNavigateUnit(unit.x, unit.y)"
+                  >
+                    Navigate
+                  </button>
                 </div>
               </li>
             </ul>
@@ -699,7 +767,7 @@ function formatPlayerSessionOptionLabel(player: PlayerSessionSummaryDto): string
 
       <div
         class="status-bar-item status-bar-item-metric status-bar-item-metric-popover"
-        title="Ships in snapshot"
+        :title="currentSystem ? 'Ships in the current system' : 'Ships for the active ship system'"
         tabindex="0"
         @mouseenter="openShipsPopover"
         @mouseleave="closeShipsPopover"
@@ -719,14 +787,14 @@ function formatPlayerSessionOptionLabel(player: PlayerSessionSummaryDto): string
           <header class="status-bar-popover-head">
             <div>
               <h3>{{ currentSystemLabel }}</h3>
-              <p>{{ filteredShipsInCurrentSystem.length }} / {{ shipsInCurrentSystem.length }} ships in the current system</p>
+              <p>{{ filteredShipEntries.length }} / {{ shipEntries.length }} ships in the current system</p>
             </div>
           </header>
 
-          <div v-if="filteredShipsInCurrentSystem.length > 0" class="status-bar-popover-body">
+          <div v-if="filteredShipEntries.length > 0" class="status-bar-popover-body">
             <ul class="status-bar-system-list">
               <li
-                v-for="unit in filteredShipsInCurrentSystem"
+                v-for="unit in filteredShipEntries"
                 :key="unit.unitId"
                 class="status-bar-system-row"
               >
@@ -742,9 +810,10 @@ function formatPlayerSessionOptionLabel(player: PlayerSessionSummaryDto): string
                   </div>
                   <div class="status-bar-system-metrics">
                     <span>{{ humanizeUnitKind(unit.kind) }}</span>
-                    <span>{{ unit.distance === null ? 'Current' : `${formatMetric(unit.distance)} away` }}</span>
-                    <span>x {{ formatMetric(unit.x) }}</span>
-                    <span>y {{ formatMetric(unit.y) }}</span>
+                    <span>{{ unit.clusterName }}</span>
+                    <span>{{ formatOptionalDistance(unit.distance, unit.isCurrent) }}</span>
+                    <span>x {{ formatOptionalMetric(unit.x) }}</span>
+                    <span>y {{ formatOptionalMetric(unit.y) }}</span>
                   </div>
                 </div>
                 <div class="status-bar-system-actions">
@@ -757,7 +826,7 @@ function formatPlayerSessionOptionLabel(player: PlayerSessionSummaryDto): string
                   >
                     {{ isUnitTracked(unit.unitId) ? 'Tracked' : 'Track' }}
                   </button>
-                  <button type="button" class="status-bar-unit-action" @click.stop="onNavigateUnit">Navigate</button>
+                  <button type="button" class="status-bar-unit-action" @click.stop="onNavigateUnit(unit.x, unit.y)">Navigate</button>
                 </div>
               </li>
             </ul>
