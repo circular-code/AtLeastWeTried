@@ -10,6 +10,7 @@ const uiStore = useUiStore();
 const gateway = useGateway();
 
 const host = ref<HTMLDivElement | null>(null);
+const isFocusSelectionActive = ref(false);
 let worldScene: WorldScene | null = null;
 
 const snapshot = computed(() => gameStore.snapshot);
@@ -40,7 +41,7 @@ const highlightedControllable = computed(() => {
 const accent = computed(() => formatTeamAccent(highlightedControllable.value?.teamName, snapshot.value?.teams ?? []));
 
 function focusSelection() {
-  worldScene?.focusOnSelection();
+  worldScene?.toggleFocusSelection();
 }
 
 function handleWorldSelect(selection: WorldSceneSelection) {
@@ -61,6 +62,10 @@ function handleVisibleUnitsChanged(unitIds: string[]) {
   uiStore.setVisibleUnitIds(unitIds);
 }
 
+function handleFocusSelectionChanged(isActive: boolean) {
+  isFocusSelectionActive.value = isActive;
+}
+
 onMounted(() => {
   if (!host.value) {
     return;
@@ -70,6 +75,7 @@ onMounted(() => {
     onSelection: handleWorldSelect,
     onNavigationTargetRequested: handleWorldNavigate,
     onVisibleUnitsChanged: handleVisibleUnitsChanged,
+    onFocusSelectionChanged: handleFocusSelectionChanged,
   });
 
   worldScene.setSnapshot(snapshot.value, ownerOverlay.value, selectedControllableId.value, navigationTarget.value);
@@ -85,6 +91,7 @@ watch(
 
 onBeforeUnmount(() => {
   uiStore.setVisibleUnitIds([]);
+  isFocusSelectionActive.value = false;
   worldScene?.dispose();
   worldScene = null;
 });
@@ -95,7 +102,16 @@ onBeforeUnmount(() => {
     <div ref="host" class="viewport-host"></div>
     <div class="viewport-hud">
       <div class="viewport-chip">{{ clusterLabel }}</div>
-      <button class="viewport-chip viewport-button" type="button" @click="focusSelection">Focus Selection</button>
+      <button
+        class="viewport-chip viewport-button"
+        :class="{ 'viewport-highlight': isFocusSelectionActive }"
+        :style="isFocusSelectionActive ? { '--accent': accent } : undefined"
+        :aria-pressed="isFocusSelectionActive"
+        type="button"
+        @click="focusSelection"
+      >
+        Focus Selection
+      </button>
       <div class="viewport-chip viewport-highlight" :style="{ '--accent': accent }">
         {{ highlightedControllable?.displayName ?? 'No active controllable' }}
       </div>

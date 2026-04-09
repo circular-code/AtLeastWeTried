@@ -35,6 +35,7 @@ type WorldSceneOptions = {
   onSelection?: (selection: WorldSceneSelection) => void;
   onNavigationTargetRequested?: (selection: WorldSceneSelection) => void;
   onVisibleUnitsChanged?: (unitIds: string[]) => void;
+  onFocusSelectionChanged?: (isActive: boolean) => void;
 };
 
 type OwnerOverlayState = Record<string, unknown>;
@@ -44,6 +45,7 @@ export class WorldScene {
   private readonly onSelection?: (selection: WorldSceneSelection) => void;
   private readonly onNavigationTargetRequested?: (selection: WorldSceneSelection) => void;
   private readonly onVisibleUnitsChanged?: (unitIds: string[]) => void;
+  private readonly onFocusSelectionChanged?: (isActive: boolean) => void;
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene: THREE.Scene;
   private readonly camera: THREE.OrthographicCamera;
@@ -77,6 +79,7 @@ export class WorldScene {
   private dragPointerButton: number | null;
   private totalDragDistance: number;
   private isPointerCaptured: boolean;
+  private isFollowingSelection: boolean;
   private isDisposed: boolean;
   private lastReportedVisibleUnitIds: string[];
 
@@ -85,6 +88,7 @@ export class WorldScene {
     this.onSelection = options.onSelection;
     this.onNavigationTargetRequested = options.onNavigationTargetRequested;
     this.onVisibleUnitsChanged = options.onVisibleUnitsChanged;
+    this.onFocusSelectionChanged = options.onFocusSelectionChanged;
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setClearColor(0x050811, 1);
@@ -139,6 +143,7 @@ export class WorldScene {
     this.dragPointerButton = null;
     this.totalDragDistance = 0;
     this.isPointerCaptured = false;
+    this.isFollowingSelection = false;
     this.isDisposed = false;
     this.lastReportedVisibleUnitIds = [];
 
@@ -202,14 +207,14 @@ export class WorldScene {
   }
 
   focusOnSelection() {
-    const targetUnitId = this.selectedControllableId || this.selectedUnitId;
-    const unit = this.renderableUnits.find((candidate) => candidate.unitId === targetUnitId);
-    if (!unit) {
-      return;
-    }
+    this.setFocusSelectionActive(true);
+    this.updateFocusSelection();
+    this.requestRender();
+  }
 
-    this.camera.position.x = unit.x;
-    this.camera.position.y = -unit.y;
+  toggleFocusSelection() {
+    this.setFocusSelectionActive(!this.isFollowingSelection);
+    this.updateFocusSelection();
     this.requestRender();
   }
 
@@ -237,6 +242,10 @@ export class WorldScene {
 
     if (this.dragPointerButton !== 0) {
       return;
+    }
+
+    if (this.isFollowingSelection && this.totalDragDistance >= 6) {
+      this.setFocusSelectionActive(false);
     }
 
     this.camera.position.x = this.dragStartCamera.x - deltaX / this.camera.zoom;
@@ -282,6 +291,7 @@ export class WorldScene {
     const unit = this.findNearestUnit(worldPosition.x, worldPosition.y);
     this.selectedUnitId = unit?.unitId ?? '';
     this.updateSelectionRing();
+    this.updateFocusSelection();
     this.requestRender();
     this.onSelection?.({
       worldX: worldPosition.x,
@@ -360,6 +370,7 @@ export class WorldScene {
       cone.mesh.material.uniforms.time.value = time;
     }
 
+    this.updateFocusSelection();
     this.reportVisibleUnits();
     this.renderer.render(this.scene, this.camera);
     this.animationFrame = window.requestAnimationFrame(this.renderFrame);
@@ -410,9 +421,42 @@ export class WorldScene {
     this.bodyKindAttribute.needsUpdate = true;
     this.bodyOpacityAttribute.needsUpdate = true;
     this.updateSelectionRing();
+    this.updateFocusSelection();
     this.updateNavigationMarker();
     this.updateNavigationPointer();
     this.updateScannerCones(units);
+  }
+
+  private updateFocusSelection() {
+    if (!this.isFollowingSelection) {
+      return;
+    }
+
+    const targetUnit = this.getFocusSelectionUnit();
+    if (!targetUnit) {
+      return;
+    }
+
+    this.camera.position.x = targetUnit.x;
+    this.camera.position.y = -targetUnit.y;
+  }
+
+  private setFocusSelectionActive(value: boolean) {
+    if (this.isFollowingSelection === value) {
+      return;
+    }
+
+    this.isFollowingSelection = value;
+    this.onFocusSelectionChanged?.(value);
+  }
+
+  private getFocusSelectionUnit() {
+    const targetUnitId = this.selectedUnitId || this.selectedControllableId;
+    if (!targetUnitId) {
+      return null;
+    }
+
+    return this.renderableUnits.find((candidate) => candidate.unitId === targetUnitId) ?? null;
   }
 
   private buildRenderableUnits(): NormalizedUnit[] {
