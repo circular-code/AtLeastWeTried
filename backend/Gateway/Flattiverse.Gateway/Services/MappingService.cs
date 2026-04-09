@@ -2,6 +2,8 @@ using Flattiverse.Connector.Events;
 using Flattiverse.Connector.Units;
 using Flattiverse.Gateway.Connector;
 using Flattiverse.Gateway.Protocol.Dtos;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace Flattiverse.Gateway.Services;
@@ -13,7 +15,6 @@ namespace Flattiverse.Gateway.Services;
 public sealed class MappingService : IConnectorEventHandler
 {
     private const int MaxStoredDeltasPerScope = 4096;
-    private const string LegacyGalaxyId = "legacy-default";
 
     // Mapped units are shared across sessions by scope (Galaxy + Cluster).
     private static readonly Dictionary<MappingScopeKey, ScopeState> _scopeStates = new();
@@ -24,8 +25,12 @@ public sealed class MappingService : IConnectorEventHandler
         WriteIndented = true
     };
 
-    private static string? _worldStateFilePath;
+    private static string? _worldStateBaseFilePath;
+    private static string? _worldStateDirectory;
+    private static string? _worldStateFileStem;
+    private static string? _worldStateFileExtension;
     private static bool _persistenceConfigured;
+    private static readonly HashSet<string> _loadedGalaxyIds = new();
 
     private readonly Func<MappingScopeContext?> _scopeResolver;
     private readonly Dictionary<MappingScopeKey, long> _lastDeliveredSequenceByScope = new();
@@ -42,8 +47,8 @@ public sealed class MappingService : IConnectorEventHandler
             if (_persistenceConfigured)
                 return;
 
-            _worldStateFilePath = ResolveWorldStateFilePath(worldStateFilePath);
-            LoadPersistedStateUnsafe();
+            ConfigurePersistencePathsUnsafe(worldStateFilePath);
+            _loadedGalaxyIds.Clear();
             _persistenceConfigured = true;
         }
     }
@@ -84,6 +89,8 @@ public sealed class MappingService : IConnectorEventHandler
 
         lock (_stateLock)
         {
+            EnsureGalaxyLoadedUnsafe(scopeKey.Value.GalaxyId);
+
             if (!_scopeStates.TryGetValue(scopeKey.Value, out var scopeState))
                 return new List<UnitSnapshotDto>();
 
@@ -105,13 +112,16 @@ public sealed class MappingService : IConnectorEventHandler
 
         lock (_stateLock)
         {
+            EnsureGalaxyLoadedUnsafe(scopeKey.Value.GalaxyId);
+
             if (!_scopeStates.TryGetValue(scopeKey.Value, out var scopeState) || scopeState.Deltas.Count == 0)
                 return new List<WorldDeltaDto>();
 
             if (!_lastDeliveredSequenceByScope.TryGetValue(scopeKey.Value, out var lastDelivered))
             {
-                // First observation for this scope: rely on snapshot.full for the baseline.
-                lastDelivered = scopeState.NextSequence - 1;
+                // Start from the beginning of retained deltas so the newest discovery
+                // is not dropped when this scope is observed for the first time.
+                lastDelivered = scopeState.FirstSequence - 1;
             }
 
             if (lastDelivered < scopeState.FirstSequence - 1)
@@ -150,6 +160,8 @@ public sealed class MappingService : IConnectorEventHandler
 
         lock (_stateLock)
         {
+            EnsureGalaxyLoadedUnsafe(scopeKey.Value.GalaxyId);
+
             var scopeState = GetOrCreateScopeStateUnsafe(scopeKey.Value);
             var alreadyKnown = scopeState.Units.ContainsKey(dto.UnitId);
 
@@ -168,7 +180,7 @@ public sealed class MappingService : IConnectorEventHandler
             });
 
             if (isStatic)
-                SavePersistedStateUnsafe();
+                SavePersistedGalaxyUnsafe(scopeKey.Value.GalaxyId);
         }
     }
 
@@ -188,6 +200,8 @@ public sealed class MappingService : IConnectorEventHandler
 
         lock (_stateLock)
         {
+            EnsureGalaxyLoadedUnsafe(scopeKey.Value.GalaxyId);
+
             var scopeState = GetOrCreateScopeStateUnsafe(scopeKey.Value);
             scopeState.Units[dto.UnitId] = CloneUnitSnapshot(dto);
 
@@ -204,7 +218,7 @@ public sealed class MappingService : IConnectorEventHandler
             });
 
             if (isStatic)
-                SavePersistedStateUnsafe();
+                SavePersistedGalaxyUnsafe(scopeKey.Value.GalaxyId);
         }
     }
 
@@ -223,6 +237,8 @@ public sealed class MappingService : IConnectorEventHandler
 
         lock (_stateLock)
         {
+            EnsureGalaxyLoadedUnsafe(scopeKey.Value.GalaxyId);
+
             var scopeState = GetOrCreateScopeStateUnsafe(scopeKey.Value);
             scopeState.Units.Remove(unitId);
             scopeState.StaticUnitIds.Remove(unitId);
@@ -378,10 +394,26 @@ public sealed class MappingService : IConnectorEventHandler
             if (_persistenceConfigured)
                 return;
 
-            _worldStateFilePath = ResolveWorldStateFilePath(null);
-            LoadPersistedStateUnsafe();
+            ConfigurePersistencePathsUnsafe(null);
+            _loadedGalaxyIds.Clear();
             _persistenceConfigured = true;
         }
+    }
+
+    private static void ConfigurePersistencePathsUnsafe(string? configuredPath)
+    {
+        var baseFile = ResolveWorldStateFilePath(configuredPath);
+        var directory = Path.GetDirectoryName(baseFile);
+
+        _worldStateBaseFilePath = baseFile;
+        _worldStateDirectory = string.IsNullOrWhiteSpace(directory) ? AppContext.BaseDirectory : directory;
+        _worldStateFileStem = Path.GetFileNameWithoutExtension(baseFile);
+        if (string.IsNullOrWhiteSpace(_worldStateFileStem))
+            _worldStateFileStem = "world-state";
+
+        _worldStateFileExtension = Path.GetExtension(baseFile);
+        if (string.IsNullOrWhiteSpace(_worldStateFileExtension))
+            _worldStateFileExtension = ".json";
     }
 
     private static string ResolveWorldStateFilePath(string? configuredPath)
@@ -393,14 +425,35 @@ public sealed class MappingService : IConnectorEventHandler
         return Path.GetFullPath(candidate);
     }
 
-    private static void LoadPersistedStateUnsafe()
+    private static void EnsureGalaxyLoadedUnsafe(string galaxyId)
     {
-        if (string.IsNullOrWhiteSpace(_worldStateFilePath) || !File.Exists(_worldStateFilePath))
+        if (_loadedGalaxyIds.Contains(galaxyId))
             return;
 
+        LoadPersistedGalaxyUnsafe(galaxyId);
+        _loadedGalaxyIds.Add(galaxyId);
+    }
+
+    private static void LoadPersistedGalaxyUnsafe(string galaxyId)
+    {
+        var specificPath = GetGalaxyStateFilePathUnsafe(galaxyId);
+
+        if (File.Exists(specificPath))
+        {
+            TryLoadFileIntoScopesUnsafe(specificPath, galaxyId, allowFallbackStaticUnits: false);
+            return;
+        }
+
+        // Backward compatibility: if an old/shared file exists, import matching data for this galaxy.
+        if (!string.IsNullOrWhiteSpace(_worldStateBaseFilePath) && File.Exists(_worldStateBaseFilePath))
+            TryLoadFileIntoScopesUnsafe(_worldStateBaseFilePath, galaxyId, allowFallbackStaticUnits: true);
+    }
+
+    private static void TryLoadFileIntoScopesUnsafe(string path, string galaxyId, bool allowFallbackStaticUnits)
+    {
         try
         {
-            var json = File.ReadAllText(_worldStateFilePath);
+            var json = File.ReadAllText(path);
             if (string.IsNullOrWhiteSpace(json))
                 return;
 
@@ -408,23 +461,19 @@ public sealed class MappingService : IConnectorEventHandler
             if (stateFile is null)
                 return;
 
-            _scopeStates.Clear();
-
             if (stateFile.Scopes is { Count: > 0 })
             {
                 foreach (var scope in stateFile.Scopes)
-                    LoadScopeFromPersistenceUnsafe(scope);
+                    LoadScopeFromPersistenceUnsafe(galaxyId, scope);
             }
-            else if (stateFile.StaticUnits is { Count: > 0 })
+            else if (allowFallbackStaticUnits && stateFile.StaticUnits is { Count: > 0 })
             {
-                // Backward compatibility for old persisted format.
-                var legacyScope = new PersistedScopeDto
+                var fallbackScope = new PersistedScopeDto
                 {
-                    GalaxyId = LegacyGalaxyId,
                     ClusterId = 0,
                     StaticUnits = stateFile.StaticUnits
                 };
-                LoadScopeFromPersistenceUnsafe(legacyScope);
+                LoadScopeFromPersistenceUnsafe(galaxyId, fallbackScope);
             }
         }
         catch
@@ -433,12 +482,15 @@ public sealed class MappingService : IConnectorEventHandler
         }
     }
 
-    private static void LoadScopeFromPersistenceUnsafe(PersistedScopeDto scope)
+    private static void LoadScopeFromPersistenceUnsafe(string targetGalaxyId, PersistedScopeDto scope)
     {
-        if (string.IsNullOrWhiteSpace(scope.GalaxyId) || scope.StaticUnits is null || scope.StaticUnits.Count == 0)
+        if (!string.IsNullOrWhiteSpace(scope.GalaxyId) && !string.Equals(scope.GalaxyId, targetGalaxyId, StringComparison.Ordinal))
             return;
 
-        var key = new MappingScopeKey(scope.GalaxyId, scope.ClusterId);
+        if (scope.StaticUnits is null || scope.StaticUnits.Count == 0)
+            return;
+
+        var key = new MappingScopeKey(targetGalaxyId, scope.ClusterId);
         var scopeState = GetOrCreateScopeStateUnsafe(key);
 
         foreach (var unit in scope.StaticUnits)
@@ -451,20 +503,21 @@ public sealed class MappingService : IConnectorEventHandler
         }
     }
 
-    private static void SavePersistedStateUnsafe()
+    private static void SavePersistedGalaxyUnsafe(string galaxyId)
     {
-        if (string.IsNullOrWhiteSpace(_worldStateFilePath))
+        if (string.IsNullOrWhiteSpace(_worldStateDirectory) || string.IsNullOrWhiteSpace(_worldStateFileStem) || string.IsNullOrWhiteSpace(_worldStateFileExtension))
             return;
 
         try
         {
-            var directory = Path.GetDirectoryName(_worldStateFilePath);
-            if (!string.IsNullOrWhiteSpace(directory))
-                Directory.CreateDirectory(directory);
+            Directory.CreateDirectory(_worldStateDirectory);
 
             var persistedScopes = new List<PersistedScopeDto>();
             foreach (var (scopeKey, scopeState) in _scopeStates)
             {
+                if (!string.Equals(scopeKey.GalaxyId, galaxyId, StringComparison.Ordinal))
+                    continue;
+
                 if (scopeState.StaticUnitIds.Count == 0)
                     continue;
 
@@ -480,7 +533,7 @@ public sealed class MappingService : IConnectorEventHandler
 
                 persistedScopes.Add(new PersistedScopeDto
                 {
-                    GalaxyId = scopeKey.GalaxyId,
+                    GalaxyId = galaxyId,
                     ClusterId = scopeKey.ClusterId,
                     StaticUnits = staticUnits
                 });
@@ -488,15 +541,63 @@ public sealed class MappingService : IConnectorEventHandler
 
             var stateFile = new WorldStateFile { Scopes = persistedScopes };
             var json = JsonSerializer.Serialize(stateFile, _jsonOptions);
-            var temporaryPath = $"{_worldStateFilePath}.tmp";
+            var path = GetGalaxyStateFilePathUnsafe(galaxyId);
+            var temporaryPath = $"{path}.tmp";
 
             File.WriteAllText(temporaryPath, json);
-            File.Move(temporaryPath, _worldStateFilePath, overwrite: true);
+            File.Move(temporaryPath, path, overwrite: true);
         }
         catch
         {
             // Non-fatal by design; state stays available in memory.
         }
+    }
+
+    private static string GetGalaxyStateFilePathUnsafe(string galaxyId)
+    {
+        var slug = BuildSafeGalaxySlug(galaxyId);
+        var hash = BuildGalaxyHash(galaxyId);
+        var fileName = $"{_worldStateFileStem}.{slug}.{hash}{_worldStateFileExtension}";
+        return Path.Combine(_worldStateDirectory!, fileName);
+    }
+
+    private static string BuildSafeGalaxySlug(string galaxyId)
+    {
+        var chars = new List<char>(galaxyId.Length);
+        var lastWasDash = false;
+
+        foreach (var c in galaxyId)
+        {
+            var normalized = char.IsLetterOrDigit(c) ? char.ToLowerInvariant(c) : '-';
+            if (normalized == '-')
+            {
+                if (lastWasDash)
+                    continue;
+
+                lastWasDash = true;
+                chars.Add('-');
+                continue;
+            }
+
+            lastWasDash = false;
+            chars.Add(normalized);
+        }
+
+        var slug = new string(chars.ToArray()).Trim('-');
+        if (string.IsNullOrWhiteSpace(slug))
+            slug = "galaxy";
+
+        const int maxLength = 40;
+        if (slug.Length > maxLength)
+            slug = slug[..maxLength].Trim('-');
+
+        return string.IsNullOrWhiteSpace(slug) ? "galaxy" : slug;
+    }
+
+    private static string BuildGalaxyHash(string galaxyId)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(galaxyId));
+        return Convert.ToHexString(bytes).ToLowerInvariant()[..16];
     }
 
     private static UnitSnapshotDto CloneUnitSnapshot(UnitSnapshotDto source)
@@ -562,13 +663,13 @@ public sealed class MappingService : IConnectorEventHandler
     {
         public List<PersistedScopeDto> Scopes { get; set; } = new();
 
-        // Backward compatibility with the previous single-scope persistence format.
+        // Backward compatibility with very old single-scope persistence format.
         public List<UnitSnapshotDto>? StaticUnits { get; set; }
     }
 
     private sealed class PersistedScopeDto
     {
-        public string GalaxyId { get; set; } = "";
+        public string? GalaxyId { get; set; }
         public int ClusterId { get; set; }
         public List<UnitSnapshotDto> StaticUnits { get; set; } = new();
     }
