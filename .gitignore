@@ -47,3 +47,6 @@ lerna-debug.log*
 
 # Vite temp files
 *.timestamp-*-*.mjs
+
+# World State files
+world-stat.*.json
