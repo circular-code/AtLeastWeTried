@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { GalaxySnapshotDto, PublicControllableSnapshotDto, TeamSnapshotDto } from '../types/generated';
 import { DEFAULT_VIEW_HALF_HEIGHT, DEBUG_SUN_COUNT, MIN_PICK_RADIUS_PX, PICK_RADIUS_PADDING_PX } from './constants';
 import { type NormalizedUnit, type UnitShaderMaterial, type UnitBodyMesh, createUnitBodyMaterial, createUnitBodyMesh, createDebugSuns } from './unitBody';
-import { type UnitVisual, normalizeKind, getRenderRadius, getFallbackRenderRadius, getRenderScale, getColorForUnit, getShaderKindCode, getOpacityForUnit, isUnseenDynamicUnit, toSceneRotation, isDirectionalKind, isShipKind, getHeadingPoints } from './unitVisuals';
+import { type UnitVisual, normalizeKind, getRenderRadius, getFallbackRenderRadius, getRenderScale, getColorForUnit, getShaderKindCode, getOpacityForUnit, toSceneRotation, isDirectionalKind, isShipKind, getHeadingPoints, shouldPersistTraceForUnit } from './unitVisuals';
 import { type ScannerConeVisual, createScannerConeMesh } from './scannerCone';
 import { createSelectionRing } from './selectionRing';
 import { createNavigationMarker } from './navigationMarker';
@@ -48,6 +48,7 @@ export class WorldScene {
   private readonly unitVisuals: Map<string, UnitVisual>;
   private readonly teamColors: Map<string, string>;
   private readonly debugUnits: NormalizedUnit[];
+  private readonly lastSeenTraces: Map<string, NormalizedUnit>;
   private readonly tempBodyTransform: THREE.Object3D;
   private readonly tempColor: THREE.Color;
   private renderableUnits: NormalizedUnit[];
@@ -111,6 +112,7 @@ export class WorldScene {
     this.unitVisuals = new Map<string, UnitVisual>();
     this.teamColors = new Map<string, string>();
     this.debugUnits = createDebugSuns();
+    this.lastSeenTraces = new Map<string, NormalizedUnit>();
     this.tempBodyTransform = new THREE.Object3D();
     this.tempColor = new THREE.Color();
     this.renderableUnits = [];
@@ -395,6 +397,7 @@ export class WorldScene {
 
   private buildRenderableUnits(): NormalizedUnit[] {
     if (!this.snapshot) {
+      this.lastSeenTraces.clear();
       return [...this.debugUnits];
     }
 
@@ -447,14 +450,8 @@ export class WorldScene {
       });
     }
 
-    return [
-      ...units.map((unit) => ({
-        ...unit,
-        renderKind: normalizeKind(unit.kind),
-        renderRadius: getRenderRadius(unit.radius, normalizeKind(unit.kind)),
-      })),
-      ...this.debugUnits,
-    ];
+    const visibleUnits = this.buildNormalizedUnits(units);
+    return [...visibleUnits, ...this.captureLostUnitTraces(visibleUnits), ...this.debugUnits];
   }
 
   private createVisual(): UnitVisual {
@@ -687,6 +684,50 @@ export class WorldScene {
     this.bodyKindAttribute = unitBodyMesh.kindAttribute;
     this.bodyOpacityAttribute = unitBodyMesh.opacityAttribute;
     this.scene.add(this.bodyMesh);
+  }
+
+  private buildNormalizedUnits(units: Array<{
+    unitId: string;
+    clusterId: number;
+    kind: string;
+    x: number;
+    y: number;
+    angle: number;
+    radius: number;
+    teamName?: string;
+  }>): NormalizedUnit[] {
+    return units.map((unit) => {
+      const renderKind = normalizeKind(unit.kind);
+      return {
+        ...unit,
+        isTrace: false,
+        renderKind,
+        renderRadius: getRenderRadius(unit.radius, renderKind),
+      };
+    });
+  }
+
+  private captureLostUnitTraces(visibleUnits: NormalizedUnit[]): NormalizedUnit[] {
+    const visibleUnitIds = new Set(visibleUnits.map((unit) => unit.unitId));
+
+    for (const unitId of this.lastSeenTraces.keys()) {
+      if (visibleUnitIds.has(unitId)) {
+        this.lastSeenTraces.delete(unitId);
+      }
+    }
+
+    for (const unit of this.renderableUnits) {
+      if (visibleUnitIds.has(unit.unitId) || !shouldPersistTraceForUnit(unit)) {
+        continue;
+      }
+
+      this.lastSeenTraces.set(unit.unitId, {
+        ...unit,
+        isTrace: true,
+      });
+    }
+
+    return Array.from(this.lastSeenTraces.values());
   }
 }
 

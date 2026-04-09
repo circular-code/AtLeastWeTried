@@ -10,6 +10,7 @@ export type UnitShaderMaterial = THREE.ShaderMaterial & {
 };
 
 export type NormalizedUnit = UnitSnapshotDto & {
+  isTrace: boolean;
   renderKind: string;
   renderRadius: number;
 };
@@ -77,6 +78,7 @@ export function createDebugSuns(): NormalizedUnit[] {
       angle: randomInRange(0, 360),
       radius,
       teamName: undefined,
+      isTrace: false,
       renderKind: 'sun',
       renderRadius: radius,
     });

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { NormalizedUnit } from './unitBody';
-import { UNIT_KIND_CODE } from './constants';
+import { TRACE_OPACITY_SCALE, UNIT_KIND_CODE } from './constants';
 
 export type UnitVisual = {
   heading?: THREE.Line;
@@ -77,11 +77,7 @@ function getBaseOpacityForKind(kind: string): number {
 
 export function getOpacityForUnit(unit: NormalizedUnit): number {
   const baseOpacity = getBaseOpacityForKind(unit.renderKind);
-  if (!isUnseenDynamicUnit(unit)) {
-    return baseOpacity;
-  }
-
-  return Math.max(0.22, baseOpacity * 0.38);
+  return unit.isTrace ? baseOpacity * TRACE_OPACITY_SCALE : baseOpacity;
 }
 
 export function getShaderKindCode(kind: string): number {
@@ -143,4 +139,8 @@ export function getHeadingPoints(kind: string): THREE.Vector3[] {
   }
 
   return [new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 0, 0)];
+}
+
+export function shouldPersistTraceForUnit(unit: NormalizedUnit): boolean {
+  return isShipKind(unit.renderKind) && !unit.isTrace;
 }
