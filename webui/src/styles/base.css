@@ -755,6 +755,209 @@ h2 {
   gap: 0.36rem;
 }
 
+.status-bar-item-metric-popover {
+  position: relative;
+  cursor: default;
+}
+
+.status-bar-item-metric-popover:focus-visible {
+  outline: 2px solid rgba(124, 179, 221, 0.8);
+  outline-offset: -2px;
+}
+
+.status-bar-popover {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.15rem);
+  width: min(34rem, 72vw);
+  max-height: 400px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0.7rem;
+  padding: 0.8rem;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(8, 12, 15, 0.96), rgba(8, 12, 15, 0.92)),
+    linear-gradient(180deg, rgba(124, 179, 221, 0.08), rgba(239, 191, 132, 0.05));
+  box-shadow: 0 -12px 36px rgba(0, 0, 0, 0.28);
+  transform: translateX(-50%) translateY(0.35rem);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 0.16s ease,
+    transform 0.16s ease,
+    visibility 0.16s ease;
+  z-index: 6;
+}
+
+.status-bar-item-metric-popover:hover .status-bar-popover,
+.status-bar-item-metric-popover:focus-within .status-bar-popover {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateX(-50%) translateY(0);
+}
+
+.status-bar-popover::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -0.3rem;
+  width: 0.78rem;
+  height: 0.78rem;
+  border-right: 1px solid rgba(239, 191, 132, 0.18);
+  border-bottom: 1px solid rgba(239, 191, 132, 0.18);
+  background: rgba(8, 12, 15, 0.95);
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.status-bar-popover::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -0.7rem;
+  height: 0.7rem;
+}
+
+.status-bar-popover-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.status-bar-popover-head h3 {
+  margin: 0;
+  font-size: 0.86rem;
+  line-height: 1.1;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.status-bar-popover-head p,
+.status-bar-popover-empty {
+  margin: 0.18rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.status-bar-popover-body {
+  display: grid;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 0.2rem;
+}
+
+.status-bar-system-list {
+  list-style: none;
+  display: grid;
+  gap: 0.36rem;
+  margin: 0;
+  padding: 0;
+}
+
+.status-bar-system-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.status-bar-system-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.52rem 0.58rem;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.status-bar-system-info.is-visible {
+  border-color: rgba(255, 255, 255, 0.72);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.status-bar-system-info.is-seen {
+  background:
+    linear-gradient(180deg, rgba(124, 179, 221, 0.22), rgba(255, 255, 255, 0.1)),
+    rgba(255, 255, 255, 0.12);
+  border-color: rgba(124, 179, 221, 0.24);
+  box-shadow: inset 0 0 0 1px rgba(124, 179, 221, 0.08);
+}
+
+.status-bar-system-info.is-seen.is-visible {
+  border-color: rgba(255, 255, 255, 0.78);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.22),
+    inset 0 0 0 2px rgba(124, 179, 221, 0.08);
+}
+
+.status-bar-system-copy,
+.status-bar-system-metrics,
+.status-bar-system-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.status-bar-system-copy {
+  flex: 1 1 auto;
+}
+
+.status-bar-system-copy strong {
+  font-size: 0.7rem;
+  line-height: 1.2;
+  color: #f4ecda;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-bar-system-metrics {
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.status-bar-system-metrics span {
+  color: #dce8f4;
+  font-size: 0.64rem;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.status-bar-system-actions {
+  flex: 0 0 auto;
+  gap: 0.28rem;
+}
+
+.status-bar-unit-action {
+  padding: 0.18rem 0.42rem;
+  min-height: 1.45rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  color: #e6eef6;
+  font-size: 0.6rem;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.status-bar-unit-action:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
 .status-bar-actions {
   gap: 0.35rem;
   padding-right: 0.45rem;
@@ -1692,6 +1895,24 @@ h2 {
     display: none;
   }
 
+  .status-bar-popover {
+    width: min(30rem, calc(100vw - 1rem));
+    left: auto;
+    right: 0;
+    transform: translateY(0.35rem);
+  }
+
+  .status-bar-item-metric-popover:hover .status-bar-popover,
+  .status-bar-item-metric-popover:focus-within .status-bar-popover {
+    transform: translateY(0);
+  }
+
+  .status-bar-popover::after {
+    left: auto;
+    right: 1.4rem;
+    transform: rotate(45deg);
+  }
+
   .status-bar-group-right {
     margin-left: auto;
   }
@@ -1768,6 +1989,10 @@ h2 {
   }
 
   .status-bar-item-chat-preview {
+    display: none;
+  }
+
+  .status-bar-popover {
     display: none;
   }
 

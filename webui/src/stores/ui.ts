@@ -25,6 +25,7 @@ export const useUiStore = defineStore('ui', {
     selectedControllableId: '',
     navigationThrustPercentage: 0.25,
     lastSelection: null as WorldSceneSelection | null,
+    visibleUnitIds: [] as string[],
     isManagerPopupOpen: false,
     isChatPopupOpen: false,
     isActivityHistoryOpen: false,
@@ -79,6 +80,9 @@ export const useUiStore = defineStore('ui', {
     },
     setLastSelection(selection: WorldSceneSelection | null) {
       this.lastSelection = selection;
+    },
+    setVisibleUnitIds(unitIds: string[]) {
+      this.visibleUnitIds = unitIds;
     },
     closeAllPopups() {
       this.isManagerPopupOpen = false;
