@@ -67,17 +67,38 @@ public sealed class MappingService : IConnectorEventHandler
                 break;
 
             case AppearedUnitEvent newUnit:
+                if (ShouldIgnoreLifecycleEvent(newUnit.Unit))
+                    break;
+
                 HandleUnitCreated(newUnit.Unit, newUnit.Unit.Cluster?.Id ?? 0);
                 break;
 
             case UpdatedUnitEvent updatedUnit:
+                if (ShouldIgnoreLifecycleEvent(updatedUnit.Unit))
+                    break;
+
                 HandleUnitUpdated(updatedUnit.Unit, updatedUnit.Unit.Cluster?.Id ?? 0);
                 break;
 
             case RemovedUnitEvent removedUnit:
+                if (ShouldIgnoreLifecycleEvent(removedUnit.Unit))
+                    break;
+
                 HandleUnitRemoved(removedUnit.Unit, removedUnit.Unit.Cluster?.Id ?? 0);
                 break;
         }
+    }
+
+    private bool ShouldIgnoreLifecycleEvent(Unit unit)
+    {
+        if (unit.Kind is not (UnitKind.ClassicShipPlayerUnit or UnitKind.ModernShipPlayerUnit))
+            return false;
+
+        var scope = _scopeResolver();
+        if (scope is null || string.IsNullOrWhiteSpace(scope.Value.FriendlyTeamName))
+            return false;
+
+        return string.Equals(unit.Team?.Name, scope.Value.FriendlyTeamName, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -765,7 +786,7 @@ public sealed class MappingService : IConnectorEventHandler
         };
     }
 
-    public readonly record struct MappingScopeContext(string GalaxyId, int ClusterId);
+    public readonly record struct MappingScopeContext(string GalaxyId, int ClusterId, string? FriendlyTeamName);
 
     private readonly record struct MappingScopeKey(string GalaxyId, int ClusterId);
 

@@ -751,7 +751,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
         var clusterId = ResolveCurrentClusterId(galaxy);
         var galaxyId = $"{_galaxyUrl}|{galaxy.Name}";
-        return new MappingService.MappingScopeContext(galaxyId, clusterId);
+        return new MappingService.MappingScopeContext(galaxyId, clusterId, galaxy.Player.Team?.Name);
     }
 
     private static int ResolveCurrentClusterId(Galaxy galaxy)
@@ -961,7 +961,12 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         if (deltas.Count == 0) return;
         var msg = new WorldDeltaMessage { Events = deltas };
         foreach (var conn in connections)
+        {
+            if (conn.SelectedSessionId != _id)
+                continue;
+
             conn.EnqueueMessage(msg);
+        }
     }
 
     private void BroadcastOwnerOverlay(List<BrowserConnection> connections)
