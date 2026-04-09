@@ -2,6 +2,7 @@ using Flattiverse.Connector.Events;
 using Flattiverse.Connector.Units;
 using Flattiverse.Gateway.Connector;
 using Flattiverse.Gateway.Protocol.Dtos;
+using System.Text.Json;
 
 namespace Flattiverse.Gateway.Services;
 
@@ -11,17 +12,45 @@ namespace Flattiverse.Gateway.Services;
 /// </summary>
 public sealed class MappingService : IConnectorEventHandler
 {
-    // Static map discoveries are shared across all player sessions in this gateway process.
-    private static readonly Dictionary<string, UnitSnapshotDto> _knownStaticUnits = new();
-    private static readonly object _staticLock = new();
+    private const int MaxStoredDeltasPerScope = 4096;
+    private const string LegacyGalaxyId = "legacy-default";
 
-    private readonly Dictionary<string, UnitSnapshotDto> _knownDynamicUnits = new();
-    private readonly List<WorldDeltaDto> _pendingDeltas = new();
-    private readonly object _lock = new();
+    // Mapped units are shared across sessions by scope (Galaxy + Cluster).
+    private static readonly Dictionary<MappingScopeKey, ScopeState> _scopeStates = new();
+    private static readonly object _stateLock = new();
+
+    private static readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        WriteIndented = true
+    };
+
+    private static string? _worldStateFilePath;
+    private static bool _persistenceConfigured;
+
+    private readonly Func<MappingScopeContext?> _scopeResolver;
+    private readonly Dictionary<MappingScopeKey, long> _lastDeliveredSequenceByScope = new();
+
+    public MappingService(Func<MappingScopeContext?> scopeResolver)
+    {
+        _scopeResolver = scopeResolver;
+    }
+
+    public static void ConfigurePersistence(string? worldStateFilePath)
+    {
+        lock (_stateLock)
+        {
+            if (_persistenceConfigured)
+                return;
+
+            _worldStateFilePath = ResolveWorldStateFilePath(worldStateFilePath);
+            LoadPersistedStateUnsafe();
+            _persistenceConfigured = true;
+        }
+    }
 
     /// <summary>
     /// Process a Connector event and update internal state.
-    /// Called synchronously on the event-loop task — no locking needed.
+    /// Called synchronously on the event-loop task - no locking needed.
     /// </summary>
     public void Handle(FlattiverseEvent @event)
     {
@@ -36,7 +65,7 @@ public sealed class MappingService : IConnectorEventHandler
                 break;
 
             case RemovedUnitEvent removedUnit:
-                HandleUnitRemoved(removedUnit.Unit);
+                HandleUnitRemoved(removedUnit.Unit, removedUnit.Unit.Cluster?.Id ?? 0);
                 break;
         }
     }
@@ -47,108 +76,197 @@ public sealed class MappingService : IConnectorEventHandler
     /// </summary>
     public List<UnitSnapshotDto> BuildUnitSnapshots()
     {
-        List<UnitSnapshotDto> staticUnits;
-        lock (_staticLock)
-            staticUnits = _knownStaticUnits.Values.ToList();
+        EnsurePersistenceConfigured();
 
-        lock (_lock)
-            return staticUnits.Concat(_knownDynamicUnits.Values).ToList();
+        var scopeKey = ResolveScopeKey();
+        if (scopeKey is null)
+            return new List<UnitSnapshotDto>();
+
+        lock (_stateLock)
+        {
+            if (!_scopeStates.TryGetValue(scopeKey.Value, out var scopeState))
+                return new List<UnitSnapshotDto>();
+
+            return scopeState.Units.Values.Select(CloneUnitSnapshot).ToList();
+        }
     }
 
     /// <summary>
-    /// Collect and clear all pending world deltas accumulated since the last call.
+    /// Collect all pending world deltas for this session's current scope.
     /// Called by TickService on each tick.
     /// </summary>
     public List<WorldDeltaDto> CollectPendingDeltas()
     {
-        lock (_lock)
+        EnsurePersistenceConfigured();
+
+        var scopeKey = ResolveScopeKey();
+        if (scopeKey is null)
+            return new List<WorldDeltaDto>();
+
+        lock (_stateLock)
         {
-            if (_pendingDeltas.Count == 0)
+            if (!_scopeStates.TryGetValue(scopeKey.Value, out var scopeState) || scopeState.Deltas.Count == 0)
                 return new List<WorldDeltaDto>();
 
-            var deltas = new List<WorldDeltaDto>(_pendingDeltas);
-            _pendingDeltas.Clear();
-            return deltas;
+            if (!_lastDeliveredSequenceByScope.TryGetValue(scopeKey.Value, out var lastDelivered))
+            {
+                // First observation for this scope: rely on snapshot.full for the baseline.
+                lastDelivered = scopeState.NextSequence - 1;
+            }
+
+            if (lastDelivered < scopeState.FirstSequence - 1)
+                lastDelivered = scopeState.FirstSequence - 1;
+
+            var result = new List<WorldDeltaDto>();
+            var newestDelivered = lastDelivered;
+
+            foreach (var sequenced in scopeState.Deltas)
+            {
+                if (sequenced.Sequence <= lastDelivered)
+                    continue;
+
+                result.Add(CloneWorldDelta(sequenced.Delta));
+                newestDelivered = sequenced.Sequence;
+            }
+
+            _lastDeliveredSequenceByScope[scopeKey.Value] = newestDelivered;
+            return result;
         }
     }
 
     private void HandleUnitCreated(Unit unit, int clusterId)
     {
+        EnsurePersistenceConfigured();
+
+        var scopeKey = ResolveScopeKey(clusterId);
+        if (scopeKey is null)
+            return;
+
         var dto = MapUnit(unit, clusterId);
-        if (dto is null) return;
+        if (dto is null)
+            return;
+
         var isStatic = IsStaticUnit(unit);
-        var alreadyKnown = false;
 
-        if (isStatic)
+        lock (_stateLock)
         {
-            lock (_staticLock)
-            {
-                alreadyKnown = _knownStaticUnits.ContainsKey(dto.UnitId);
-                _knownStaticUnits[dto.UnitId] = dto;
-            }
-        }
-        else
-        {
-            lock (_lock)
-            {
-                alreadyKnown = _knownDynamicUnits.ContainsKey(dto.UnitId);
-                _knownDynamicUnits[dto.UnitId] = dto;
-            }
-        }
+            var scopeState = GetOrCreateScopeStateUnsafe(scopeKey.Value);
+            var alreadyKnown = scopeState.Units.ContainsKey(dto.UnitId);
 
-        lock (_lock)
-        {
-            _pendingDeltas.Add(new WorldDeltaDto
+            scopeState.Units[dto.UnitId] = CloneUnitSnapshot(dto);
+
+            if (isStatic)
+                scopeState.StaticUnitIds.Add(dto.UnitId);
+            else
+                scopeState.StaticUnitIds.Remove(dto.UnitId);
+
+            AppendDeltaUnsafe(scopeState, new WorldDeltaDto
             {
                 EventType = alreadyKnown ? "unit.updated" : "unit.created",
                 EntityId = dto.UnitId,
                 Changes = UnitToChanges(dto)
             });
+
+            if (isStatic)
+                SavePersistedStateUnsafe();
         }
     }
 
     private void HandleUnitUpdated(Unit unit, int clusterId)
     {
+        EnsurePersistenceConfigured();
+
+        var scopeKey = ResolveScopeKey(clusterId);
+        if (scopeKey is null)
+            return;
+
         var dto = MapUnit(unit, clusterId);
-        if (dto is null) return;
+        if (dto is null)
+            return;
+
         var isStatic = IsStaticUnit(unit);
 
-        if (isStatic)
+        lock (_stateLock)
         {
-            lock (_staticLock)
-                _knownStaticUnits[dto.UnitId] = dto;
-        }
-        else
-        {
-            lock (_lock)
-                _knownDynamicUnits[dto.UnitId] = dto;
-        }
+            var scopeState = GetOrCreateScopeStateUnsafe(scopeKey.Value);
+            scopeState.Units[dto.UnitId] = CloneUnitSnapshot(dto);
 
-        lock (_lock)
-        {
-            _pendingDeltas.Add(new WorldDeltaDto
+            if (isStatic)
+                scopeState.StaticUnitIds.Add(dto.UnitId);
+            else
+                scopeState.StaticUnitIds.Remove(dto.UnitId);
+
+            AppendDeltaUnsafe(scopeState, new WorldDeltaDto
             {
                 EventType = "unit.updated",
                 EntityId = dto.UnitId,
                 Changes = UnitToChanges(dto)
             });
+
+            if (isStatic)
+                SavePersistedStateUnsafe();
         }
     }
 
-    private void HandleUnitRemoved(Unit unit)
+    private void HandleUnitRemoved(Unit unit, int clusterId)
     {
-        var unitId = unit.Name;
+        EnsurePersistenceConfigured();
+
         if (IsStaticUnit(unit))
             return;
 
-        lock (_lock)
+        var scopeKey = ResolveScopeKey(clusterId);
+        if (scopeKey is null)
+            return;
+
+        var unitId = unit.Name;
+
+        lock (_stateLock)
         {
-            _knownDynamicUnits.Remove(unitId);
-            _pendingDeltas.Add(new WorldDeltaDto
+            var scopeState = GetOrCreateScopeStateUnsafe(scopeKey.Value);
+            scopeState.Units.Remove(unitId);
+            scopeState.StaticUnitIds.Remove(unitId);
+
+            AppendDeltaUnsafe(scopeState, new WorldDeltaDto
             {
                 EventType = "unit.removed",
                 EntityId = unitId
             });
+        }
+    }
+
+    private MappingScopeKey? ResolveScopeKey(int? clusterIdOverride = null)
+    {
+        var scope = _scopeResolver();
+        if (scope is null || string.IsNullOrWhiteSpace(scope.Value.GalaxyId))
+            return null;
+
+        var clusterId = clusterIdOverride ?? scope.Value.ClusterId;
+        return new MappingScopeKey(scope.Value.GalaxyId, clusterId);
+    }
+
+    private static ScopeState GetOrCreateScopeStateUnsafe(MappingScopeKey scopeKey)
+    {
+        if (!_scopeStates.TryGetValue(scopeKey, out var state))
+        {
+            state = new ScopeState();
+            _scopeStates[scopeKey] = state;
+        }
+
+        return state;
+    }
+
+    private static void AppendDeltaUnsafe(ScopeState scopeState, WorldDeltaDto delta)
+    {
+        scopeState.Deltas.Add(new SequencedDelta(scopeState.NextSequence++, CloneWorldDelta(delta)));
+
+        if (scopeState.Deltas.Count > MaxStoredDeltasPerScope)
+        {
+            var removeCount = scopeState.Deltas.Count - MaxStoredDeltasPerScope;
+            scopeState.Deltas.RemoveRange(0, removeCount);
+            scopeState.FirstSequence = scopeState.Deltas.Count == 0
+                ? scopeState.NextSequence
+                : scopeState.Deltas[0].Sequence;
         }
     }
 
@@ -223,17 +341,235 @@ public sealed class MappingService : IConnectorEventHandler
             { "angle", unit.Angle },
             { "radius", unit.Radius }
         };
-        if (unit.TeamName is not null) changes["teamName"] = unit.TeamName;
-        if (unit.SunEnergy.HasValue) changes["sunEnergy"] = unit.SunEnergy;
-        if (unit.SunIons.HasValue) changes["sunIons"] = unit.SunIons;
-        if (unit.SunNeutrinos.HasValue) changes["sunNeutrinos"] = unit.SunNeutrinos;
-        if (unit.SunHeat.HasValue) changes["sunHeat"] = unit.SunHeat;
-        if (unit.SunDrain.HasValue) changes["sunDrain"] = unit.SunDrain;
+
+        if (unit.TeamName is not null)
+            changes["teamName"] = unit.TeamName;
+
+        if (unit.SunEnergy.HasValue)
+            changes["sunEnergy"] = unit.SunEnergy;
+
+        if (unit.SunIons.HasValue)
+            changes["sunIons"] = unit.SunIons;
+
+        if (unit.SunNeutrinos.HasValue)
+            changes["sunNeutrinos"] = unit.SunNeutrinos;
+
+        if (unit.SunHeat.HasValue)
+            changes["sunHeat"] = unit.SunHeat;
+
+        if (unit.SunDrain.HasValue)
+            changes["sunDrain"] = unit.SunDrain;
+
         return changes;
     }
 
     private static bool IsStaticUnit(Unit unit)
     {
         return unit is SteadyUnit;
+    }
+
+    private static void EnsurePersistenceConfigured()
+    {
+        if (_persistenceConfigured)
+            return;
+
+        lock (_stateLock)
+        {
+            if (_persistenceConfigured)
+                return;
+
+            _worldStateFilePath = ResolveWorldStateFilePath(null);
+            LoadPersistedStateUnsafe();
+            _persistenceConfigured = true;
+        }
+    }
+
+    private static string ResolveWorldStateFilePath(string? configuredPath)
+    {
+        var candidate = string.IsNullOrWhiteSpace(configuredPath)
+            ? Path.Combine(AppContext.BaseDirectory, "world-state.json")
+            : configuredPath!;
+
+        return Path.GetFullPath(candidate);
+    }
+
+    private static void LoadPersistedStateUnsafe()
+    {
+        if (string.IsNullOrWhiteSpace(_worldStateFilePath) || !File.Exists(_worldStateFilePath))
+            return;
+
+        try
+        {
+            var json = File.ReadAllText(_worldStateFilePath);
+            if (string.IsNullOrWhiteSpace(json))
+                return;
+
+            var stateFile = JsonSerializer.Deserialize<WorldStateFile>(json, _jsonOptions);
+            if (stateFile is null)
+                return;
+
+            _scopeStates.Clear();
+
+            if (stateFile.Scopes is { Count: > 0 })
+            {
+                foreach (var scope in stateFile.Scopes)
+                    LoadScopeFromPersistenceUnsafe(scope);
+            }
+            else if (stateFile.StaticUnits is { Count: > 0 })
+            {
+                // Backward compatibility for old persisted format.
+                var legacyScope = new PersistedScopeDto
+                {
+                    GalaxyId = LegacyGalaxyId,
+                    ClusterId = 0,
+                    StaticUnits = stateFile.StaticUnits
+                };
+                LoadScopeFromPersistenceUnsafe(legacyScope);
+            }
+        }
+        catch
+        {
+            // Keep running with in-memory state if persisted state is malformed.
+        }
+    }
+
+    private static void LoadScopeFromPersistenceUnsafe(PersistedScopeDto scope)
+    {
+        if (string.IsNullOrWhiteSpace(scope.GalaxyId) || scope.StaticUnits is null || scope.StaticUnits.Count == 0)
+            return;
+
+        var key = new MappingScopeKey(scope.GalaxyId, scope.ClusterId);
+        var scopeState = GetOrCreateScopeStateUnsafe(key);
+
+        foreach (var unit in scope.StaticUnits)
+        {
+            if (string.IsNullOrWhiteSpace(unit.UnitId))
+                continue;
+
+            scopeState.Units[unit.UnitId] = CloneUnitSnapshot(unit);
+            scopeState.StaticUnitIds.Add(unit.UnitId);
+        }
+    }
+
+    private static void SavePersistedStateUnsafe()
+    {
+        if (string.IsNullOrWhiteSpace(_worldStateFilePath))
+            return;
+
+        try
+        {
+            var directory = Path.GetDirectoryName(_worldStateFilePath);
+            if (!string.IsNullOrWhiteSpace(directory))
+                Directory.CreateDirectory(directory);
+
+            var persistedScopes = new List<PersistedScopeDto>();
+            foreach (var (scopeKey, scopeState) in _scopeStates)
+            {
+                if (scopeState.StaticUnitIds.Count == 0)
+                    continue;
+
+                var staticUnits = new List<UnitSnapshotDto>();
+                foreach (var staticUnitId in scopeState.StaticUnitIds)
+                {
+                    if (scopeState.Units.TryGetValue(staticUnitId, out var unit))
+                        staticUnits.Add(CloneUnitSnapshot(unit));
+                }
+
+                if (staticUnits.Count == 0)
+                    continue;
+
+                persistedScopes.Add(new PersistedScopeDto
+                {
+                    GalaxyId = scopeKey.GalaxyId,
+                    ClusterId = scopeKey.ClusterId,
+                    StaticUnits = staticUnits
+                });
+            }
+
+            var stateFile = new WorldStateFile { Scopes = persistedScopes };
+            var json = JsonSerializer.Serialize(stateFile, _jsonOptions);
+            var temporaryPath = $"{_worldStateFilePath}.tmp";
+
+            File.WriteAllText(temporaryPath, json);
+            File.Move(temporaryPath, _worldStateFilePath, overwrite: true);
+        }
+        catch
+        {
+            // Non-fatal by design; state stays available in memory.
+        }
+    }
+
+    private static UnitSnapshotDto CloneUnitSnapshot(UnitSnapshotDto source)
+    {
+        return new UnitSnapshotDto
+        {
+            UnitId = source.UnitId,
+            ClusterId = source.ClusterId,
+            Kind = source.Kind,
+            X = source.X,
+            Y = source.Y,
+            Angle = source.Angle,
+            Radius = source.Radius,
+            TeamName = source.TeamName,
+            SunEnergy = source.SunEnergy,
+            SunIons = source.SunIons,
+            SunNeutrinos = source.SunNeutrinos,
+            SunHeat = source.SunHeat,
+            SunDrain = source.SunDrain
+        };
+    }
+
+    private static WorldDeltaDto CloneWorldDelta(WorldDeltaDto source)
+    {
+        var changes = source.Changes is null
+            ? null
+            : new Dictionary<string, object?>(source.Changes);
+
+        return new WorldDeltaDto
+        {
+            EventType = source.EventType,
+            EntityId = source.EntityId,
+            Changes = changes
+        };
+    }
+
+    public readonly record struct MappingScopeContext(string GalaxyId, int ClusterId);
+
+    private readonly record struct MappingScopeKey(string GalaxyId, int ClusterId);
+
+    private sealed class SequencedDelta
+    {
+        public SequencedDelta(long sequence, WorldDeltaDto delta)
+        {
+            Sequence = sequence;
+            Delta = delta;
+        }
+
+        public long Sequence { get; }
+        public WorldDeltaDto Delta { get; }
+    }
+
+    private sealed class ScopeState
+    {
+        public Dictionary<string, UnitSnapshotDto> Units { get; } = new();
+        public HashSet<string> StaticUnitIds { get; } = new();
+        public List<SequencedDelta> Deltas { get; } = new();
+        public long NextSequence { get; set; } = 1;
+        public long FirstSequence { get; set; } = 1;
+    }
+
+    private sealed class WorldStateFile
+    {
+        public List<PersistedScopeDto> Scopes { get; set; } = new();
+
+        // Backward compatibility with the previous single-scope persistence format.
+        public List<UnitSnapshotDto>? StaticUnits { get; set; }
+    }
+
+    private sealed class PersistedScopeDto
+    {
+        public string GalaxyId { get; set; } = "";
+        public int ClusterId { get; set; }
+        public List<UnitSnapshotDto> StaticUnits { get; set; } = new();
     }
 }

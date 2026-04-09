@@ -24,7 +24,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     private string _displayName = "";
     private bool _connected;
     private string _galaxyUrl;
-    private readonly MappingService _mappingService = new();
+    private readonly MappingService _mappingService;
     private readonly ScanningService _scanningService = new();
 
     public string Id => _id;
@@ -42,6 +42,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         _teamName = teamName;
         _galaxyUrl = galaxyUrl;
         _logger = logger;
+        _mappingService = new MappingService(BuildMappingScopeContext);
     }
 
     public async Task ConnectAsync()
@@ -548,6 +549,34 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         }
 
         return null;
+    }
+
+    private MappingService.MappingScopeContext? BuildMappingScopeContext()
+    {
+        var galaxy = Galaxy;
+        if (galaxy is null)
+            return null;
+
+        var clusterId = ResolveCurrentClusterId(galaxy);
+        var galaxyId = $"{_galaxyUrl}|{galaxy.Name}";
+        return new MappingService.MappingScopeContext(galaxyId, clusterId);
+    }
+
+    private static int ResolveCurrentClusterId(Galaxy galaxy)
+    {
+        foreach (var controllable in galaxy.Controllables)
+        {
+            if (controllable is { Active: true, Cluster: not null })
+                return controllable.Cluster.Id;
+        }
+
+        foreach (var controllable in galaxy.Controllables)
+        {
+            if (controllable?.Cluster is not null)
+                return controllable.Cluster.Id;
+        }
+
+        return 0;
     }
 
     /// <summary>
