@@ -9,6 +9,7 @@ import type {
   DetachPlayerSessionMessage,
   FireWeaponCommandMessage,
   RemoveShipCommandMessage,
+  ScannerCommandMessage,
   SelectPlayerSessionMessage,
   SetEngineCommandMessage,
   SetNavigationTargetCommandMessage,
@@ -126,6 +127,22 @@ export function buildSetEngineCommand(controllableId: string, engineId: string, 
         thrust,
         x,
         y,
+      },
+    },
+  };
+}
+
+export function buildScannerCommand(controllableId: string, mode?: string, width?: number): CommandEnvelope<ScannerCommandMessage> {
+  const commandId = createCommandId();
+  return {
+    commandId,
+    message: {
+      type: 'command.scanner',
+      commandId,
+      payload: {
+        controllableId,
+        mode,
+        width,
       },
     },
   };

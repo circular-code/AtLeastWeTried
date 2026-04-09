@@ -49,4 +49,4 @@ lerna-debug.log*
 *.timestamp-*-*.mjs
 
 # World State files
-world-stat.*.json
+world-state.*.json

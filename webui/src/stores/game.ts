@@ -122,6 +122,30 @@ export const useGameStore = defineStore('game', {
       const overlayState = objectValue(state.overlayById.get(controllableId)) ?? {};
       return deriveScannerMode(resolveScannerState(overlayState.scanner));
     },
+    scannerWidthFor: (state) => (controllableId: string): number => {
+      if (!controllableId) {
+        return 90;
+      }
+
+      const overlayState = objectValue(state.overlayById.get(controllableId)) ?? {};
+      return deriveScannerWidth(resolveScannerState(overlayState.scanner));
+    },
+    scannerWidthMinimumFor: (state) => (controllableId: string): number => {
+      if (!controllableId) {
+        return 5;
+      }
+
+      const overlayState = objectValue(state.overlayById.get(controllableId)) ?? {};
+      return deriveScannerMinimumWidth(resolveScannerState(overlayState.scanner));
+    },
+    scannerWidthMaximumFor: (state) => (controllableId: string): number => {
+      if (!controllableId) {
+        return 90;
+      }
+
+      const overlayState = objectValue(state.overlayById.get(controllableId)) ?? {};
+      return deriveScannerMaximumWidth(resolveScannerState(overlayState.scanner));
+    },
     recentActivity: (state) => (lifetimeMs: number) => {
       const now = Date.now();
       return state.activityEntries.filter((entry) => now - entry.createdAt < lifetimeMs);
@@ -607,8 +631,39 @@ function deriveScannerMode(scannerState: Record<string, unknown> | undefined): S
     return 'forward';
   }
 
+  if (explicitMode === 'sweep') {
+    return 'sweep';
+  }
+
   const targetWidth = numberValue(scannerState.targetWidth, numberValue(scannerState.currentWidth, 0));
   return targetWidth >= 180 ? '360' : 'forward';
+}
+
+function deriveScannerWidth(scannerState: Record<string, unknown> | undefined) {
+  if (!scannerState) {
+    return 90;
+  }
+
+  return numberValue(
+    scannerState.requestedWidth,
+    numberValue(scannerState.targetWidth, numberValue(scannerState.currentWidth, deriveScannerMaximumWidth(scannerState))),
+  );
+}
+
+function deriveScannerMinimumWidth(scannerState: Record<string, unknown> | undefined) {
+  if (!scannerState) {
+    return 5;
+  }
+
+  return numberValue(scannerState.minimumWidth, 5);
+}
+
+function deriveScannerMaximumWidth(scannerState: Record<string, unknown> | undefined) {
+  if (!scannerState) {
+    return 90;
+  }
+
+  return numberValue(scannerState.maximumWidth, 90);
 }
 
 function resolveScannerState(scannerValue: unknown) {

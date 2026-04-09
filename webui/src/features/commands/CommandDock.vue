@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useGateway } from '../../composables/useGateway';
 import { useGameStore } from '../../stores/game';
 import { useUiStore } from '../../stores/ui';
@@ -19,9 +19,36 @@ const thrust = computed({
 });
 const tacticalMode = ref<TacticalMode>('off');
 const scannerMode = computed<ScannerMode>(() => gameStore.scannerModeFor(activeControllableId.value));
+const scannerWidthMin = computed(() => gameStore.scannerWidthMinimumFor(activeControllableId.value));
+const scannerWidthMax = computed(() => gameStore.scannerWidthMaximumFor(activeControllableId.value));
+const scannerWidth = ref(90);
+
+watch(
+  () => ({
+    controllableId: activeControllableId.value,
+    width: gameStore.scannerWidthFor(activeControllableId.value),
+    min: scannerWidthMin.value,
+    max: scannerWidthMax.value,
+  }),
+  ({ width, min, max }) => {
+    scannerWidth.value = Math.min(Math.max(width, min), max);
+  },
+  { immediate: true },
+);
 
 function setScanner(mode: ScannerMode) {
   gateway.setScannerMode(activeControllableId.value, mode);
+}
+
+function setScannerWidth(value: number) {
+  const controllableId = activeControllableId.value;
+  if (!controllableId) {
+    return;
+  }
+
+  const clampedWidth = Math.min(Math.max(value, scannerWidthMin.value), scannerWidthMax.value);
+  scannerWidth.value = clampedWidth;
+  gateway.setScannerWidth(controllableId, clampedWidth);
 }
 
 function setTactical(mode: TacticalMode) {
@@ -41,11 +68,27 @@ function setTactical(mode: TacticalMode) {
 
     <span class="dock-sep" aria-hidden="true"></span>
 
-    <div class="dock-group">
-      <span class="dock-label">Scanner</span>
-      <button class="dock-btn" :class="{ active: scannerMode === '360' }" type="button" @click="setScanner('360')">360°</button>
-      <button class="dock-btn" :class="{ active: scannerMode === 'forward' }" type="button" @click="setScanner('forward')">Fwd</button>
-      <button class="dock-btn" :class="{ active: scannerMode === 'off' }" type="button" @click="setScanner('off')">Off</button>
+    <div class="dock-group-stack">
+      <div class="dock-group">
+        <span class="dock-label">Scanner</span>
+        <button class="dock-btn" :class="{ active: scannerMode === '360' }" type="button" @click="setScanner('360')">360°</button>
+        <button class="dock-btn" :class="{ active: scannerMode === 'forward' }" type="button" @click="setScanner('forward')">Fwd</button>
+        <button class="dock-btn" :class="{ active: scannerMode === 'sweep' }" type="button" @click="setScanner('sweep')">Sweep</button>
+        <button class="dock-btn" :class="{ active: scannerMode === 'off' }" type="button" @click="setScanner('off')">Off</button>
+      </div>
+      <div class="dock-group">
+        <span class="dock-label">Width</span>
+        <input
+          :value="scannerWidth"
+          class="dock-slider"
+          type="range"
+          :min="scannerWidthMin"
+          :max="scannerWidthMax"
+          step="1"
+          @input="setScannerWidth(Number(($event.target as HTMLInputElement).value))"
+        />
+        <span class="dock-value">{{ scannerWidth.toFixed(0) }}&deg;</span>
+      </div>
     </div>
 
     <span class="dock-sep" aria-hidden="true"></span>

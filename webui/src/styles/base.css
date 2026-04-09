@@ -868,6 +868,17 @@ h2 {
   padding: 0 0.4rem;
 }
 
+.dock-group-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0 0.4rem;
+}
+
+.dock-group-stack > .dock-group {
+  padding: 0;
+}
+
 .dock-label {
   font-size: 0.65rem;
   font-weight: 600;
