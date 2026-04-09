@@ -349,10 +349,12 @@ public sealed class MappingService : IConnectorEventHandler
             ClusterId = clusterId,
             Kind = MapUnitKind(unit.Kind),
             FullStateKnown = unit.FullStateKnown,
+            IsSolid = unit.IsSolid,
             X = unit.Position.X,
             Y = unit.Position.Y,
             Angle = unit.Angle,
             Radius = unit.Radius,
+            Gravity = unit.Gravity,
             TeamName = unit.Team?.Name
         };
 
@@ -418,12 +420,14 @@ public sealed class MappingService : IConnectorEventHandler
             { "kind", unit.Kind },
             { "fullStateKnown", unit.FullStateKnown },
             { "isStatic", unit.IsStatic },
+            { "isSolid", unit.IsSolid ?? true },
             { "isSeen", unit.IsSeen },
             { "lastSeenTick", unit.LastSeenTick },
             { "x", unit.X },
             { "y", unit.Y },
             { "angle", unit.Angle },
-            { "radius", unit.Radius }
+            { "radius", unit.Radius },
+            { "gravity", unit.Gravity }
         };
 
         if (unit.TeamName is not null)
@@ -726,12 +730,14 @@ public sealed class MappingService : IConnectorEventHandler
             Kind = source.Kind,
             FullStateKnown = source.FullStateKnown,
             IsStatic = source.IsStatic,
+            IsSolid = source.IsSolid,
             IsSeen = source.IsSeen,
             LastSeenTick = source.LastSeenTick,
             X = source.X,
             Y = source.Y,
             Angle = source.Angle,
             Radius = source.Radius,
+            Gravity = source.Gravity,
             TeamName = source.TeamName,
             SunEnergy = source.SunEnergy,
             SunIons = source.SunIons,

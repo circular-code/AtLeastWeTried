@@ -7,6 +7,7 @@ using Flattiverse.Gateway.Connector;
 using Flattiverse.Gateway.Protocol.Dtos;
 using Flattiverse.Gateway.Protocol.ServerMessages;
 using Flattiverse.Gateway.Services;
+using Flattiverse.Gateway.Services.Navigation;
 using Microsoft.Extensions.Logging;
 
 namespace Flattiverse.Gateway.Sessions;
@@ -27,6 +28,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     private readonly MappingService _mappingService;
     private readonly ScanningService _scanningService;
     private readonly ManeuveringService _maneuveringService = new();
+    private readonly PathfindingService _pathfindingService;
 
     public string Id => _id;
     public string DisplayName => _displayName;
@@ -46,6 +48,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         _logger = logger;
         _mappingService = new MappingService(BuildMappingScopeContext);
         _scanningService = new ScanningService(ResolveScanTarget);
+        _pathfindingService = new PathfindingService(_mappingService, _maneuveringService);
     }
 
     public async Task ConnectAsync()
@@ -70,7 +73,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             _connectionManager = new GalaxyConnectionManager(_galaxyUrl, _apiKey, _teamName, _logger);
             _connectionManager.ConnectionLost += OnConnectionLost;
 
-            var handlers = new List<IConnectorEventHandler> { _mappingService, _scanningService, _maneuveringService, this };
+            var handlers = new List<IConnectorEventHandler> { _mappingService, _scanningService, _pathfindingService, _maneuveringService, this };
             await _connectionManager.ConnectAsync(handlers);
 
             _connected = true;
@@ -213,6 +216,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
         if (controllable is ClassicShipControllable classic)
         {
+            _pathfindingService.TrackShip(classic);
             _maneuveringService.TrackShip(classic);
             changes["ammo"] = (int)classic.ShotMagazine.CurrentShots;
             changes["position"] = new Dictionary<string, object>
@@ -249,7 +253,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 { "current", controllable.EnergyBattery.Current },
                 { "maximum", controllable.EnergyBattery.Maximum }
             };
-            changes["navigation"] = _maneuveringService.BuildOverlay(classic.Id);
+            changes["navigation"] = BuildNavigationOverlay(classic.Id);
         }
 
         return new OwnerOverlayDeltaDto
@@ -258,6 +262,19 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             ControllableId = $"p{Galaxy!.Player.Id}-c{controllable.Id}",
             Changes = changes
         };
+    }
+
+    private Dictionary<string, object?> BuildNavigationOverlay(int controllableId)
+    {
+        var overlay = _maneuveringService.BuildOverlay(controllableId)
+            .ToDictionary(entry => entry.Key, entry => (object?)entry.Value, StringComparer.Ordinal);
+
+        foreach (var (key, value) in _pathfindingService.BuildOverlay(controllableId))
+        {
+            overlay[key] = value;
+        }
+
+        return overlay;
     }
 
     public async Task<CommandReplyMessage> HandleCommandAsync(string commandType, string commandId, System.Text.Json.JsonElement? payload)
@@ -368,6 +385,9 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         if (controllable is not ClassicShipControllable classic)
             return Rejected(commandId, "invalid_controllable", "Controllable not found or not a classic ship.");
 
+        _pathfindingService.ClearNavigationGoal(classic.Id);
+        _maneuveringService.ClearNavigationTarget(classic.Id);
+
         var thrust = payload?.GetProperty("thrust").GetSingle() ?? 0f;
 
         if (payload?.TryGetProperty("x", out var xEl) == true && payload?.TryGetProperty("y", out var yEl) == true &&
@@ -409,7 +429,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             ? thrustEl.GetSingle()
             : 1f;
 
-        _maneuveringService.SetNavigationTarget(classic, targetX, targetY, thrustPercentage);
+        _pathfindingService.SetNavigationGoal(classic, targetX, targetY, thrustPercentage);
 
         return Completed(commandId);
     }
@@ -419,12 +439,16 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
         if (FindControllable(controllableId) is ClassicShipControllable classic)
         {
+            _pathfindingService.ClearNavigationGoal(classic.Id);
             _maneuveringService.ClearNavigationTarget(classic.Id);
             return Completed(commandId);
         }
 
         if (TryParseControllableLocalId(controllableId, out var localControllableId))
+        {
+            _pathfindingService.ClearNavigationGoal(localControllableId);
             _maneuveringService.ClearNavigationTarget(localControllableId);
+        }
 
         return Completed(commandId);
     }

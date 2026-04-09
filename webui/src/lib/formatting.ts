@@ -8,6 +8,24 @@ export function magnitude(x: number, y: number) {
   return Math.hypot(x, y);
 }
 
+/** Connector gravity values are often ~1e-4–1e-2; show enough precision to be readable. */
+export function formatGravity(value: number) {
+  if (!Number.isFinite(value)) {
+    return '—';
+  }
+
+  if (value === 0) {
+    return '0';
+  }
+
+  const absolute = Math.abs(value);
+  if (absolute < 0.0001) {
+    return value.toExponential(2);
+  }
+
+  return value.toFixed(4).replace(/\.?0+$/, '');
+}
+
 export function formatMetric(value: number) {
   const absolute = Math.abs(value);
 

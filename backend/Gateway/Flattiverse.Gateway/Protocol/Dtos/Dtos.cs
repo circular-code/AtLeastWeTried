@@ -23,12 +23,20 @@ public sealed class UnitSnapshotDto
     public string Kind { get; set; } = "";
     public bool FullStateKnown { get; set; }
     public bool IsStatic { get; set; }
+    /// <summary>
+    /// When false, the unit does not block navigation (e.g. mission targets). Null means unknown (legacy JSON) and is treated as solid for pathfinding.
+    /// </summary>
+    public bool? IsSolid { get; set; }
     public bool IsSeen { get; set; } = true;
     public uint LastSeenTick { get; set; }
     public float X { get; set; }
     public float Y { get; set; }
     public float Angle { get; set; }
     public float Radius { get; set; }
+    /// <summary>
+    /// Connector gravity strength; used for navigation clearance (higher → stay farther). Omitted in legacy JSON deserializes as 0.
+    /// </summary>
+    public float Gravity { get; set; }
     public string? TeamName { get; set; }
     public float? SunEnergy { get; set; }
     public float? SunIons { get; set; }

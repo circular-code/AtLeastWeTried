@@ -4,6 +4,7 @@ import {
   clamp01,
   formatAngle,
   formatCommandReplyDetail,
+  formatGravity,
   formatMetric,
   formatWholeValue,
   humanizeCode,
@@ -328,8 +329,10 @@ function cloneSnapshot(source: GalaxySnapshotDto): GalaxySnapshotDto {
       ...unit,
       fullStateKnown: booleanValue(unit.fullStateKnown, false),
       isStatic: booleanValue(unit.isStatic, false),
+      isSolid: booleanValue(unit.isSolid, true),
       isSeen: booleanValue(unit.isSeen, true),
       lastSeenTick: numberValue(unit.lastSeenTick, 0),
+      gravity: numberValue(unit.gravity, 0),
     })),
     controllables: source.controllables.map((controllable) => ({ ...controllable })),
   };
@@ -349,12 +352,14 @@ function applyWorldDeltaToSnapshot(current: GalaxySnapshotDto, message: WorldDel
       unit.kind = stringValue(event.changes.kind, unit.kind);
       unit.fullStateKnown = booleanValue(event.changes.fullStateKnown, booleanValue(unit.fullStateKnown, false));
       unit.isStatic = booleanValue(event.changes.isStatic, unit.isStatic);
+      unit.isSolid = booleanValue(event.changes.isSolid, booleanValue(unit.isSolid, true));
       unit.isSeen = booleanValue(event.changes.isSeen, unit.isSeen);
       unit.lastSeenTick = numberValue(event.changes.lastSeenTick, unit.lastSeenTick);
       unit.x = numberValue(event.changes.x, unit.x);
       unit.y = numberValue(event.changes.y, unit.y);
       unit.angle = numberValue(event.changes.angle, unit.angle);
       unit.radius = numberValue(event.changes.radius, unit.radius);
+      unit.gravity = numberValue(event.changes.gravity, numberValue(unit.gravity, 0));
       unit.teamName = hasRecordKey(event.changes, 'teamName') ? optionalStringValue(event.changes.teamName) : unit.teamName;
       applyOptionalUnitMetric(unit, 'sunEnergy', event.changes.sunEnergy);
       applyOptionalUnitMetric(unit, 'sunIons', event.changes.sunIons);
@@ -377,12 +382,14 @@ function applyWorldDeltaToSnapshot(current: GalaxySnapshotDto, message: WorldDel
           kind: stringValue(event.changes.kind, 'unknown'),
           fullStateKnown: booleanValue(event.changes.fullStateKnown, false),
           isStatic: booleanValue(event.changes.isStatic, false),
+          isSolid: booleanValue(event.changes.isSolid, true),
           isSeen: booleanValue(event.changes.isSeen, true),
           lastSeenTick: numberValue(event.changes.lastSeenTick, 0),
           x: numberValue(event.changes.x, 0),
           y: numberValue(event.changes.y, 0),
           angle: numberValue(event.changes.angle, 0),
           radius: numberValue(event.changes.radius, 3),
+          gravity: numberValue(event.changes.gravity, 0),
           teamName: optionalStringValue(event.changes.teamName),
           sunEnergy: optionalNumberValue(event.changes.sunEnergy),
           sunIons: optionalNumberValue(event.changes.sunIons),
@@ -639,8 +646,13 @@ function buildClickedUnitEntry(
     { label: 'Cluster', value: clusterId > 0 ? `${clusterName} · C${clusterId}` : clusterName },
     { label: 'Position', value: `${formatMetric(unitX)}, ${formatMetric(unitY)}` },
     { label: 'Heading', value: formatAngle(angle) },
-    { label: 'Speed', value: formatMetric(speed) },
   ];
+
+  if (publicUnit) {
+    stats.push({ label: 'Gravity', value: formatGravity(numberValue(publicUnit.gravity, 0)) });
+  }
+
+  stats.push({ label: 'Speed', value: formatMetric(speed) });
 
   if (publicControllable) {
     stats.push({ label: 'Score', value: formatMetric(publicControllable.score) });

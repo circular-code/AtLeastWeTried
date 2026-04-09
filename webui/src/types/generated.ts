@@ -276,12 +276,16 @@ export interface UnitSnapshotDto {
   kind: string;
   fullStateKnown?: boolean;
   isStatic: boolean;
+  /** When false, unit does not block navigation. Omitted/legacy snapshots default to solid. */
+  isSolid?: boolean;
   isSeen: boolean;
   lastSeenTick: number;
   x: number;
   y: number;
   angle: number;
   radius: number;
+  /** Connector gravity; higher values imply larger navigation standoff. */
+  gravity?: number;
   teamName?: string;
   sunEnergy?: number | null;
   sunIons?: number | null;

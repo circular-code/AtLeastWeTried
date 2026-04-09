@@ -69,18 +69,33 @@ public sealed class ManeuveringService : IConnectorEventHandler
         };
     }
 
-    public void SetNavigationTarget(ClassicShipControllable ship, float targetX, float targetY, float thrustPercentage)
+    public void SetNavigationTarget(
+        ClassicShipControllable ship,
+        float targetX,
+        float targetY,
+        float thrustPercentage,
+        bool resetController = true)
     {
         TrackShip(ship);
 
         var state = _states[ship.Id];
+        var clampedThrust = Clamp01(thrustPercentage);
+        var targetChanged = !state.HasTarget
+            || Math.Abs(state.TargetX - targetX) > 0.001f
+            || Math.Abs(state.TargetY - targetY) > 0.001f
+            || Math.Abs(state.ThrustPercentage - clampedThrust) > 0.0001f;
+
         state.Ship = ship;
         state.HasTarget = true;
         state.TargetX = targetX;
         state.TargetY = targetY;
-        state.ThrustPercentage = Clamp01(thrustPercentage);
-        state.TargetErrorIntegral = 0f;
-        state.LastAppliedVector = new Vector(float.NaN, float.NaN);
+        state.ThrustPercentage = clampedThrust;
+
+        if (resetController || targetChanged)
+        {
+            state.TargetErrorIntegral = 0f;
+            state.LastAppliedVector = new Vector(float.NaN, float.NaN);
+        }
     }
 
     public void RebindShip(ClassicShipControllable ship)

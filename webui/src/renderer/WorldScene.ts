@@ -8,7 +8,9 @@ import { createSelectionRing } from './selectionRing';
 import { createNavigationMarker } from './navigationMarker';
 import { createNavigationPointer } from './navigationPointer';
 import { type TrackedTargetVisual, createTrackedTargetVisual, disposeTrackedTargetVisual } from './trackOverlay';
+import { createNavigationLookaheadMarker } from './navigationLookaheadMarker';
 import { createGrid, createGlowField } from './grid';
+import type { NavigationOverlayPoint, NavigationOverlaySegment, NavigationOverlayState as TypedNavigationOverlayState } from '../types/navigation';
 
 export type WorldSceneSelection = {
   worldX: number;
@@ -32,6 +34,15 @@ type WorldSceneNavigationPointer = {
   vectorY: number;
 } | null;
 
+type WorldSceneNavigationPath = NavigationOverlayPoint[] | null;
+
+type WorldSceneNavigationLookahead = {
+  x: number;
+  y: number;
+} | null;
+
+type WorldSceneNavigationSearch = NavigationOverlaySegment[] | null;
+
 type WorldSceneOptions = {
   onSelection?: (selection: WorldSceneSelection) => void;
   onNavigationTargetRequested?: (selection: WorldSceneSelection) => void;
@@ -48,12 +59,14 @@ type RawRenderableUnit = {
   clusterId: number;
   kind: string;
   isStatic: boolean;
+  isSolid?: boolean;
   isSeen: boolean;
   lastSeenTick: number;
   x: number;
   y: number;
   angle: number;
   radius: number;
+  gravity?: number;
   teamName?: string;
 };
 
@@ -81,6 +94,9 @@ export class WorldScene {
   private readonly navigationMarker: THREE.Group;
   private readonly navigationPointer: THREE.LineSegments;
   private readonly trackedTargetVisuals: Map<string, TrackedTargetVisual>;
+  private readonly navigationPathPreview: THREE.Line;
+  private readonly navigationSearchPreview: THREE.LineSegments;
+  private readonly navigationLookaheadMarker: THREE.Group;
   private readonly unitBodyMaterial: UnitShaderMaterial;
   private readonly resizeObserver: ResizeObserver;
   private readonly unitVisuals: Map<string, UnitVisual>;
@@ -142,6 +158,33 @@ export class WorldScene {
     this.navigationMarker = createNavigationMarker();
     this.navigationPointer = createNavigationPointer();
     this.trackedTargetVisuals = new Map();
+    this.navigationPathPreview = new THREE.Line(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({
+        color: 0x7cd0ff,
+        transparent: true,
+        opacity: 0.94,
+        depthTest: false,
+        depthWrite: false,
+      }),
+    );
+    this.navigationSearchPreview = new THREE.LineSegments(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({
+        color: 0x4f6f8f,
+        transparent: true,
+        opacity: 0.4,
+        depthTest: false,
+        depthWrite: false,
+      }),
+    );
+    this.navigationLookaheadMarker = createNavigationLookaheadMarker();
+    this.navigationPathPreview.visible = false;
+    this.navigationPathPreview.frustumCulled = false;
+    this.navigationPathPreview.renderOrder = 39;
+    this.navigationSearchPreview.visible = false;
+    this.navigationSearchPreview.frustumCulled = false;
+    this.navigationSearchPreview.renderOrder = 38;
     this.scannerCones = new Map();
     this.scene.add(this.grid);
     this.scene.add(this.staticBodies.mesh);
@@ -151,6 +194,9 @@ export class WorldScene {
     this.root.add(this.selectedRing);
     this.root.add(this.navigationMarker);
     this.root.add(this.navigationPointer);
+    this.root.add(this.navigationSearchPreview);
+    this.root.add(this.navigationPathPreview);
+    this.root.add(this.navigationLookaheadMarker);
 
     this.snapshot = null;
     this.ownerOverlay = {};
@@ -264,6 +310,9 @@ export class WorldScene {
       if (selectedControllableChanged || navigationTargetChanged) {
         this.updateNavigationMarker();
         this.updateNavigationPointer();
+        this.updateNavigationPathPreview();
+        this.updateNavigationSearchPreview();
+        this.updateNavigationLookaheadMarker();
       }
     }
 
@@ -504,6 +553,9 @@ export class WorldScene {
     this.updateFocusSelection();
     this.updateNavigationMarker();
     this.updateNavigationPointer();
+    this.updateNavigationPathPreview();
+    this.updateNavigationSearchPreview();
+    this.updateNavigationLookaheadMarker();
     this.updateScannerCones();
     this.updateTrackedTargets();
   }
@@ -709,6 +761,11 @@ export class WorldScene {
       return;
     }
 
+    if (!this.isSelectedControllableAlive()) {
+      this.navigationPointer.visible = false;
+      return;
+    }
+
     const vectorLength = Math.hypot(navigationPointer.vectorX, navigationPointer.vectorY);
     if (vectorLength <= 0.0001) {
       this.navigationPointer.visible = false;
@@ -733,7 +790,7 @@ export class WorldScene {
     const headBaseY = endY - unitY * clampedHeadSize;
     const wingSize = clampedHeadSize * 0.55;
 
-    this.navigationPointer.geometry.setFromPoints([
+    this.replaceLineGeometry(this.navigationPointer, [
       new THREE.Vector3(startX, -startY, 4),
       new THREE.Vector3(endX, -endY, 4),
       new THREE.Vector3(headBaseX + normalX * wingSize, -headBaseY - normalY * wingSize, 4),
@@ -855,6 +912,115 @@ export class WorldScene {
       endX: targetUnit.x - unitX * endOffset,
       endY: targetUnit.y - unitY * endOffset,
     };
+  }
+
+  private isSelectedControllableAlive(): boolean {
+    if (!this.selectedControllableId) {
+      return false;
+    }
+
+    const overlayState = this.ownerOverlay[this.selectedControllableId];
+    const publicControllable = this.snapshot?.controllables.find(
+      (entry) => entry.controllableId === this.selectedControllableId,
+    );
+
+    if (publicControllable) {
+      return getControllableAliveState(publicControllable, overlayState);
+    }
+
+    if (overlayState && typeof overlayState === 'object' && Object.prototype.hasOwnProperty.call(overlayState, 'alive')) {
+      return typeof (overlayState as Record<string, unknown>).alive === 'boolean'
+        ? ((overlayState as Record<string, unknown>).alive as boolean)
+        : true;
+    }
+
+    return true;
+  }
+
+  private updateNavigationPathPreview() {
+    const path = readNavigationPath(this.ownerOverlay, this.selectedControllableId);
+    if (!path || path.length < 2) {
+      this.navigationPathPreview.visible = false;
+      this.setDynamicLinePoints(this.navigationPathPreview, []);
+      return;
+    }
+
+    this.setDynamicLinePoints(
+      this.navigationPathPreview,
+      path.map((point) => new THREE.Vector3(point.x, -point.y, 3.2)),
+    );
+    this.navigationPathPreview.renderOrder = 39;
+    this.navigationPathPreview.frustumCulled = false;
+    this.navigationPathPreview.visible = true;
+  }
+
+  private updateNavigationSearchPreview() {
+    const searchEdges = readNavigationSearch(this.ownerOverlay, this.selectedControllableId);
+    if (!searchEdges || searchEdges.length === 0) {
+      this.navigationSearchPreview.visible = false;
+      this.setDynamicLinePoints(this.navigationSearchPreview, []);
+      return;
+    }
+
+    const points = searchEdges.flatMap((segment) => [
+      new THREE.Vector3(segment.startX, -segment.startY, 2.8),
+      new THREE.Vector3(segment.endX, -segment.endY, 2.8),
+    ]);
+    this.navigationSearchPreview.renderOrder = 38;
+    this.navigationSearchPreview.frustumCulled = false;
+    this.setDynamicLinePoints(this.navigationSearchPreview, points);
+    this.navigationSearchPreview.visible = true;
+  }
+
+  /**
+   * Replaces line geometry. Always disposes the previous BufferGeometry so Three.js
+   * never resizes an in-place position buffer (which triggers "Buffer size too small").
+   */
+  private replaceLineGeometry(line: THREE.Line | THREE.LineSegments, points: THREE.Vector3[]) {
+    const safe = this.sanitizePolylinePoints(line, points);
+    const previous = line.geometry as THREE.BufferGeometry;
+    previous.dispose();
+    line.geometry = new THREE.BufferGeometry().setFromPoints(safe);
+  }
+
+  private setDynamicLinePoints(line: THREE.Line | THREE.LineSegments, points: THREE.Vector3[]) {
+    this.replaceLineGeometry(line, points);
+  }
+
+  /** THREE.Line needs ≥2 vertices; THREE.LineSegments needs an even count ≥2. Empty uses a degenerate segment. */
+  private sanitizePolylinePoints(line: THREE.Line | THREE.LineSegments, points: THREE.Vector3[]): THREE.Vector3[] {
+    const degenerate = (): THREE.Vector3[] => [new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 0)];
+
+    if (points.length === 0) {
+      return degenerate();
+    }
+
+    if (line instanceof THREE.LineSegments) {
+      let even = points.length % 2 === 0 ? points : points.slice(0, points.length - 1);
+      if (even.length < 2) {
+        even = degenerate();
+      }
+      return even;
+    }
+
+    if (points.length < 2) {
+      return degenerate();
+    }
+
+    return points;
+  }
+
+  private updateNavigationLookaheadMarker() {
+    const lookaheadTarget = readNavigationLookaheadTarget(this.ownerOverlay, this.selectedControllableId);
+    if (!lookaheadTarget) {
+      this.navigationLookaheadMarker.visible = false;
+      return;
+    }
+
+    const markerScale = Math.max(7, this.getWorldUnitsPerPixel() * 15);
+    this.navigationLookaheadMarker.position.set(lookaheadTarget.x, -lookaheadTarget.y, 4.2);
+    this.navigationLookaheadMarker.scale.set(markerScale, markerScale, 1);
+    this.navigationLookaheadMarker.visible = true;
   }
 
   private updateScannerCones() {
@@ -1027,6 +1193,16 @@ export class WorldScene {
     }
     this.navigationPointer.geometry.dispose();
     (this.navigationPointer.material as THREE.Material).dispose();
+    this.navigationPathPreview.geometry.dispose();
+    (this.navigationPathPreview.material as THREE.Material).dispose();
+    this.navigationSearchPreview.geometry.dispose();
+    (this.navigationSearchPreview.material as THREE.Material).dispose();
+    for (const child of this.navigationLookaheadMarker.children) {
+      if (child instanceof THREE.Line || child instanceof THREE.LineLoop || child instanceof THREE.LineSegments) {
+        child.geometry.dispose();
+        (child.material as THREE.Material).dispose();
+      }
+    }
   }
 
   private disposeTrackedTargetVisuals() {
@@ -1173,18 +1349,8 @@ export function formatTeamAccent(teamName: string | undefined, teams: TeamSnapsh
 }
 
 export function readNavigationTarget(ownerOverlay: Record<string, unknown>, controllableId: string) {
-  const overlay = ownerOverlay[controllableId];
-  if (!overlay || typeof overlay !== 'object') {
-    return null;
-  }
-
-  const navigation = (overlay as Record<string, unknown>).navigation;
-  if (!navigation || typeof navigation !== 'object') {
-    return null;
-  }
-
-  const navigationState = navigation as Record<string, unknown>;
-  if (navigationState.active !== true) {
+  const navigationState = readNavigationOverlay(ownerOverlay, controllableId);
+  if (!navigationState || navigationState.active !== true) {
     return null;
   }
 
@@ -1201,13 +1367,8 @@ export function readNavigationPointer(ownerOverlay: Record<string, unknown>, con
   }
 
   const overlayState = overlay as Record<string, unknown>;
-  const navigation = overlayState.navigation;
-  if (!navigation || typeof navigation !== 'object') {
-    return null;
-  }
-
-  const navigationState = navigation as Record<string, unknown>;
-  if (navigationState.active !== true) {
+  const navigationState = readNavigationOverlay(ownerOverlay, controllableId);
+  if (!navigationState || navigationState.active !== true) {
     return null;
   }
 
@@ -1253,10 +1414,74 @@ export function readNavigationPointer(ownerOverlay: Record<string, unknown>, con
   };
 }
 
+export function readNavigationPath(ownerOverlay: Record<string, unknown>, controllableId: string): WorldSceneNavigationPath {
+  const navigationState = readNavigationOverlay(ownerOverlay, controllableId);
+  if (!navigationState || navigationState.active !== true || !Array.isArray(navigationState.path)) {
+    return null;
+  }
+
+  return navigationState.path
+    .map((value) => objectValue(value))
+    .filter((value): value is Record<string, unknown> => value !== undefined)
+    .map((point) => ({
+      x: numberValue(point.x, 0),
+      y: numberValue(point.y, 0),
+    }));
+}
+
+export function readNavigationSearch(ownerOverlay: Record<string, unknown>, controllableId: string): WorldSceneNavigationSearch {
+  const navigationState = readNavigationOverlay(ownerOverlay, controllableId);
+  if (!navigationState || navigationState.active !== true || !Array.isArray(navigationState.searchEdges)) {
+    return null;
+  }
+
+  return navigationState.searchEdges
+    .map((value) => objectValue(value))
+    .filter((value): value is Record<string, unknown> => value !== undefined)
+    .map((segment) => ({
+      startX: numberValue(segment.startX, 0),
+      startY: numberValue(segment.startY, 0),
+      endX: numberValue(segment.endX, 0),
+      endY: numberValue(segment.endY, 0),
+    }));
+}
+
+export function readNavigationLookaheadTarget(ownerOverlay: Record<string, unknown>, controllableId: string): WorldSceneNavigationLookahead {
+  const navigationState = readNavigationOverlay(ownerOverlay, controllableId);
+  if (!navigationState || navigationState.active !== true) {
+    return null;
+  }
+
+  const currentTargetX = numberValue(navigationState.currentTargetX, Number.NaN);
+  const currentTargetY = numberValue(navigationState.currentTargetY, Number.NaN);
+  if (!Number.isFinite(currentTargetX) || !Number.isFinite(currentTargetY)) {
+    return null;
+  }
+
+  return {
+    x: currentTargetX,
+    y: currentTargetY,
+  };
+}
+
 function normalizeOwnerOverlay(ownerOverlay: Record<string, unknown>) {
   return ownerOverlay && typeof ownerOverlay === 'object'
     ? ownerOverlay as Record<string, OwnerOverlayState>
     : {};
+}
+
+function readNavigationOverlay(ownerOverlay: Record<string, unknown>, controllableId: string): TypedNavigationOverlayState | null {
+  const overlay = ownerOverlay[controllableId];
+  if (!overlay || typeof overlay !== 'object') {
+    return null;
+  }
+
+  const navigation = (overlay as Record<string, unknown>).navigation;
+  if (!navigation || typeof navigation !== 'object') {
+    return null;
+  }
+
+  return navigation as TypedNavigationOverlayState;
 }
 
 function sameNavigationTarget(left: WorldSceneNavigationTarget, right: WorldSceneNavigationTarget) {
@@ -1306,12 +1531,14 @@ function sameRenderableUnits(left: NormalizedUnit[], right: NormalizedUnit[]) {
       || leftUnit.clusterId !== rightUnit.clusterId
       || leftUnit.kind !== rightUnit.kind
       || leftUnit.isStatic !== rightUnit.isStatic
+      || (leftUnit.isSolid ?? true) !== (rightUnit.isSolid ?? true)
       || leftUnit.isSeen !== rightUnit.isSeen
       || leftUnit.lastSeenTick !== rightUnit.lastSeenTick
       || leftUnit.x !== rightUnit.x
       || leftUnit.y !== rightUnit.y
       || leftUnit.angle !== rightUnit.angle
       || leftUnit.radius !== rightUnit.radius
+      || (leftUnit.gravity ?? 0) !== (rightUnit.gravity ?? 0)
       || leftUnit.teamName !== rightUnit.teamName
       || leftUnit.isTrace !== rightUnit.isTrace
       || leftUnit.renderKind !== rightUnit.renderKind
@@ -1330,12 +1557,14 @@ function buildRenderableUnitSignature(unit: RawRenderableUnit | NormalizedUnit, 
     unit.clusterId,
     unit.kind,
     unit.isStatic ? 1 : 0,
+    unit.isSolid === false ? 0 : 1,
     unit.isSeen ? 1 : 0,
     unit.lastSeenTick,
     unit.x,
     unit.y,
     unit.angle,
     unit.radius,
+    unit.gravity ?? 0,
     unit.teamName ?? '',
     isTrace ? 1 : 0,
   ].join('|');
@@ -1394,6 +1623,12 @@ function getControllableAliveState(
 
 function numberValue(value: unknown, fallback: number) {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function objectValue(value: unknown) {
+  return value && typeof value === 'object'
+    ? value as Record<string, unknown>
+    : undefined;
 }
 
 function stringValue(value: unknown, fallback: string) {

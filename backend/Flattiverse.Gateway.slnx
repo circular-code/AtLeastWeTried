@@ -7,4 +7,7 @@
     <Project Path="Gateway/Flattiverse.Gateway/Flattiverse.Gateway.csproj" />
     <Project Path="Gateway/Flattiverse.Gateway.Host/Flattiverse.Gateway.Host.csproj" />
   </Folder>
+  <Folder Name="/Gateway/tests/">
+    <Project Path="Gateway/tests/Flattiverse.Gateway.Tests/Flattiverse.Gateway.Tests.csproj" />
+  </Folder>
 </Solution>
