@@ -74,7 +74,6 @@ select {
   border: 1px solid rgba(239, 191, 132, 0.16);
   background: rgba(13, 18, 21, 0.92);
   color: inherit;
-  padding: 0.38rem 0.7rem;
 }
 
 input:focus,
