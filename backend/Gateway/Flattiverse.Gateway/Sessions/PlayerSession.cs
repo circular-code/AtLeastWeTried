@@ -26,6 +26,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     private string _galaxyUrl;
     private readonly MappingService _mappingService;
     private readonly ScanningService _scanningService = new();
+    private readonly ManeuveringService _maneuveringService;
 
     public string Id => _id;
     public string DisplayName => _displayName;
@@ -42,6 +43,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         _teamName = teamName;
         _galaxyUrl = galaxyUrl;
         _logger = logger;
+        _maneuveringService = new ManeuveringService(id, logger);
         _mappingService = new MappingService(BuildMappingScopeContext);
     }
 
@@ -67,7 +69,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             _connectionManager = new GalaxyConnectionManager(_galaxyUrl, _apiKey, _teamName, _logger);
             _connectionManager.ConnectionLost += OnConnectionLost;
 
-            var handlers = new List<IConnectorEventHandler> { _mappingService, _scanningService, this };
+            var handlers = new List<IConnectorEventHandler> { _mappingService, _scanningService, _maneuveringService, this };
             await _connectionManager.ConnectAsync(handlers);
 
             _connected = true;
@@ -246,13 +248,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 { "maximum", controllable.EnergyBattery.Maximum }
             };
             var cId = $"p{Galaxy!.Player.Id}-c{controllable.Id}";
-            var navTarget = GetNavigationTarget(cId);
-            changes["navigation"] = new Dictionary<string, object>
-            {
-                { "active", navTarget.HasValue },
-                { "targetX", navTarget?.x ?? 0f },
-                { "targetY", navTarget?.y ?? 0f }
-            };
+            changes["navigation"] = _maneuveringService.BuildOverlay(cId);
         }
 
         return new OwnerOverlayDeltaDto
@@ -397,30 +393,20 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return Completed(commandId);
     }
 
-    // Navigation state per controllable (gateway-only, not in connector)
-    private readonly Dictionary<string, (float x, float y)> _navigationTargets = new();
-
     private CommandReplyMessage HandleSetNavigationTarget(string commandId, System.Text.Json.JsonElement? payload)
     {
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
         var targetX = payload?.GetProperty("targetX").GetSingle() ?? 0f;
         var targetY = payload?.GetProperty("targetY").GetSingle() ?? 0f;
-
-        _navigationTargets[controllableId] = (targetX, targetY);
-
+        _maneuveringService.SetNavigationTarget(controllableId, targetX, targetY);
         return Completed(commandId);
     }
 
     private CommandReplyMessage HandleClearNavigationTarget(string commandId, System.Text.Json.JsonElement? payload)
     {
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
-        _navigationTargets.Remove(controllableId);
+        _maneuveringService.ClearNavigationTarget(controllableId);
         return Completed(commandId);
-    }
-
-    public (float x, float y)? GetNavigationTarget(string controllableId)
-    {
-        return _navigationTargets.TryGetValue(controllableId, out var target) ? target : null;
     }
 
     private async Task<CommandReplyMessage> HandleFireWeapon(string commandId, System.Text.Json.JsonElement? payload)
@@ -585,6 +571,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     /// </summary>
     public void FlushTickDeltas()
     {
+        _maneuveringService.Tick(Galaxy);
+
         List<BrowserConnection> connections;
         lock (_lock)
             connections = _attachedConnections.ToList();
