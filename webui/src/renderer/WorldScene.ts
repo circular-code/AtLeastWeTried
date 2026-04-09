@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { GalaxySnapshotDto, PublicControllableSnapshotDto, TeamSnapshotDto } from '../types/generated';
 import { DEFAULT_VIEW_HALF_HEIGHT, DEBUG_SUN_COUNT, MIN_PICK_RADIUS_PX, PICK_RADIUS_PADDING_PX } from './constants';
 import { type NormalizedUnit, type UnitShaderMaterial, type UnitBodyMesh, createUnitBodyMaterial, createUnitBodyMesh, createDebugSuns } from './unitBody';
-import { type UnitVisual, normalizeKind, getRenderRadius, getFallbackRenderRadius, getRenderScale, getColorForUnit, getShaderKindCode, getOpacityForKind, toSceneRotation, isDirectionalKind, isShipKind, getHeadingPoints } from './unitVisuals';
+import { type UnitVisual, normalizeKind, getRenderRadius, getFallbackRenderRadius, getRenderScale, getColorForUnit, getShaderKindCode, getOpacityForUnit, isUnseenDynamicUnit, toSceneRotation, isDirectionalKind, isShipKind, getHeadingPoints } from './unitVisuals';
 import { type ScannerConeVisual, createScannerConeMesh } from './scannerCone';
 import { createSelectionRing } from './selectionRing';
 import { createNavigationMarker } from './navigationMarker';
@@ -416,6 +416,9 @@ export class WorldScene {
           unitId: controllable.controllableId,
           clusterId: numberValue(overlay.clusterId, 0),
           kind: stringValue(overlay.kind, 'controllable_marker'),
+          isStatic: false,
+          isSeen: true,
+          lastSeenTick: 0,
           x: numberValue((overlay.position as OwnerOverlayState | undefined)?.x, 0),
           y: numberValue((overlay.position as OwnerOverlayState | undefined)?.y, 0),
           angle: numberValue((overlay.position as OwnerOverlayState | undefined)?.angle, 0),
@@ -433,6 +436,9 @@ export class WorldScene {
         unitId: controllable.controllableId,
         clusterId: 0,
         kind: 'controllable_marker',
+        isStatic: false,
+        isSeen: true,
+        lastSeenTick: 0,
         x: 0,
         y: 0,
         angle: 0,
@@ -472,6 +478,7 @@ export class WorldScene {
       visual.heading.position.set(unit.x, -unit.y, 0);
       visual.heading.rotation.z = toSceneRotation(unit.angle);
       headingMaterial.color.copy(bodyColor);
+      headingMaterial.opacity = isUnseenDynamicUnit(unit) ? 0.34 : 0.8;
       const headingScale = isShipKind(unit.renderKind) ? scale * 0.85 : scale * 1.8;
       visual.heading.scale.set(headingScale, headingScale, 1);
     }
@@ -489,7 +496,7 @@ export class WorldScene {
     this.bodyMesh.setMatrixAt(index, this.tempBodyTransform.matrix);
     this.bodyColorAttribute.setXYZ(index, bodyColor.r, bodyColor.g, bodyColor.b);
     this.bodyKindAttribute.setX(index, getShaderKindCode(unit.renderKind));
-    this.bodyOpacityAttribute.setX(index, getOpacityForKind(unit.renderKind));
+    this.bodyOpacityAttribute.setX(index, getOpacityForUnit(unit));
   }
 
   private updateSelectionRing() {

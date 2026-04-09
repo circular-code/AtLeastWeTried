@@ -21,6 +21,9 @@ public sealed class UnitSnapshotDto
     public string UnitId { get; set; } = "";
     public int ClusterId { get; set; }
     public string Kind { get; set; } = "";
+    public bool IsStatic { get; set; }
+    public bool IsSeen { get; set; } = true;
+    public uint LastSeenTick { get; set; }
     public float X { get; set; }
     public float Y { get; set; }
     public float Angle { get; set; }

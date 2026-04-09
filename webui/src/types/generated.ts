@@ -261,6 +261,9 @@ export interface UnitSnapshotDto {
   unitId: string;
   clusterId: number;
   kind: string;
+  isStatic: boolean;
+  isSeen: boolean;
+  lastSeenTick: number;
   x: number;
   y: number;
   angle: number;

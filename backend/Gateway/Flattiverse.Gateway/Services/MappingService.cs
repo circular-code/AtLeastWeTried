@@ -31,6 +31,7 @@ public sealed class MappingService : IConnectorEventHandler
     private static string? _worldStateFileExtension;
     private static bool _persistenceConfigured;
     private static readonly HashSet<string> _loadedGalaxyIds = new();
+    private static readonly Dictionary<string, uint> _latestTickByGalaxy = new();
 
     private readonly Func<MappingScopeContext?> _scopeResolver;
     private readonly Dictionary<MappingScopeKey, long> _lastDeliveredSequenceByScope = new();
@@ -61,6 +62,10 @@ public sealed class MappingService : IConnectorEventHandler
     {
         switch (@event)
         {
+            case GalaxyTickEvent tickEvent:
+                HandleGalaxyTick(tickEvent);
+                break;
+
             case AppearedUnitEvent newUnit:
                 HandleUnitCreated(newUnit.Unit, newUnit.Unit.Cluster?.Id ?? 0);
                 break;
@@ -157,6 +162,9 @@ public sealed class MappingService : IConnectorEventHandler
             return;
 
         var isStatic = IsStaticUnit(unit);
+        dto.IsStatic = isStatic;
+        dto.IsSeen = true;
+        dto.LastSeenTick = GetCurrentTick(scopeKey.Value.GalaxyId);
 
         lock (_stateLock)
         {
@@ -197,6 +205,9 @@ public sealed class MappingService : IConnectorEventHandler
             return;
 
         var isStatic = IsStaticUnit(unit);
+        dto.IsStatic = isStatic;
+        dto.IsSeen = true;
+        dto.LastSeenTick = GetCurrentTick(scopeKey.Value.GalaxyId);
 
         lock (_stateLock)
         {
@@ -240,13 +251,25 @@ public sealed class MappingService : IConnectorEventHandler
             EnsureGalaxyLoadedUnsafe(scopeKey.Value.GalaxyId);
 
             var scopeState = GetOrCreateScopeStateUnsafe(scopeKey.Value);
-            scopeState.Units.Remove(unitId);
-            scopeState.StaticUnitIds.Remove(unitId);
+            if (!scopeState.Units.TryGetValue(unitId, out var existing))
+            {
+                var mapped = MapUnit(unit, clusterId);
+                if (mapped is null)
+                    return;
+
+                existing = mapped;
+                existing.LastSeenTick = GetCurrentTick(scopeKey.Value.GalaxyId);
+                scopeState.Units[unitId] = existing;
+            }
+
+            existing.IsStatic = false;
+            existing.IsSeen = false;
 
             AppendDeltaUnsafe(scopeState, new WorldDeltaDto
             {
-                EventType = "unit.removed",
-                EntityId = unitId
+                EventType = "unit.updated",
+                EntityId = unitId,
+                Changes = UnitToChanges(existing)
             });
         }
     }
@@ -352,6 +375,9 @@ public sealed class MappingService : IConnectorEventHandler
             { "unitId", unit.UnitId },
             { "clusterId", unit.ClusterId },
             { "kind", unit.Kind },
+            { "isStatic", unit.IsStatic },
+            { "isSeen", unit.IsSeen },
+            { "lastSeenTick", unit.LastSeenTick },
             { "x", unit.X },
             { "y", unit.Y },
             { "angle", unit.Angle },
@@ -382,6 +408,22 @@ public sealed class MappingService : IConnectorEventHandler
     private static bool IsStaticUnit(Unit unit)
     {
         return unit is SteadyUnit;
+    }
+
+    private void HandleGalaxyTick(GalaxyTickEvent tickEvent)
+    {
+        var scopeKey = ResolveScopeKey();
+        if (scopeKey is null)
+            return;
+
+        lock (_stateLock)
+            _latestTickByGalaxy[scopeKey.Value.GalaxyId] = tickEvent.Tick;
+    }
+
+    private static uint GetCurrentTick(string galaxyId)
+    {
+        lock (_stateLock)
+            return _latestTickByGalaxy.TryGetValue(galaxyId, out var tick) ? tick : 0;
     }
 
     private static void EnsurePersistenceConfigured()
@@ -498,6 +540,8 @@ public sealed class MappingService : IConnectorEventHandler
             if (string.IsNullOrWhiteSpace(unit.UnitId))
                 continue;
 
+            unit.IsStatic = true;
+            unit.IsSeen = true;
             scopeState.Units[unit.UnitId] = CloneUnitSnapshot(unit);
             scopeState.StaticUnitIds.Add(unit.UnitId);
         }
@@ -607,6 +651,9 @@ public sealed class MappingService : IConnectorEventHandler
             UnitId = source.UnitId,
             ClusterId = source.ClusterId,
             Kind = source.Kind,
+            IsStatic = source.IsStatic,
+            IsSeen = source.IsSeen,
+            LastSeenTick = source.LastSeenTick,
             X = source.X,
             Y = source.Y,
             Angle = source.Angle,

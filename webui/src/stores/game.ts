@@ -268,7 +268,12 @@ function cloneSnapshot(source: GalaxySnapshotDto): GalaxySnapshotDto {
     ...source,
     teams: source.teams.map((team) => ({ ...team })),
     clusters: source.clusters.map((cluster) => ({ ...cluster })),
-    units: source.units.map((unit) => ({ ...unit })),
+    units: source.units.map((unit) => ({
+      ...unit,
+      isStatic: booleanValue(unit.isStatic, false),
+      isSeen: booleanValue(unit.isSeen, true),
+      lastSeenTick: numberValue(unit.lastSeenTick, 0),
+    })),
     controllables: source.controllables.map((controllable) => ({ ...controllable })),
   };
 }
@@ -285,6 +290,9 @@ function applyWorldDeltaToSnapshot(current: GalaxySnapshotDto, message: WorldDel
 
       unit.clusterId = numberValue(event.changes.clusterId, unit.clusterId);
       unit.kind = stringValue(event.changes.kind, unit.kind);
+      unit.isStatic = booleanValue(event.changes.isStatic, unit.isStatic);
+      unit.isSeen = booleanValue(event.changes.isSeen, unit.isSeen);
+      unit.lastSeenTick = numberValue(event.changes.lastSeenTick, unit.lastSeenTick);
       unit.x = numberValue(event.changes.x, unit.x);
       unit.y = numberValue(event.changes.y, unit.y);
       unit.angle = numberValue(event.changes.angle, unit.angle);
@@ -305,6 +313,9 @@ function applyWorldDeltaToSnapshot(current: GalaxySnapshotDto, message: WorldDel
           unitId: event.entityId,
           clusterId: numberValue(event.changes.clusterId, 1),
           kind: stringValue(event.changes.kind, 'unknown'),
+          isStatic: booleanValue(event.changes.isStatic, false),
+          isSeen: booleanValue(event.changes.isSeen, true),
+          lastSeenTick: numberValue(event.changes.lastSeenTick, 0),
           x: numberValue(event.changes.x, 0),
           y: numberValue(event.changes.y, 0),
           angle: numberValue(event.changes.angle, 0),

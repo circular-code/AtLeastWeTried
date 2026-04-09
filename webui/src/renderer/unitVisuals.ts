@@ -7,6 +7,9 @@ export type UnitVisual = {
   instanceIndex: number;
 };
 
+const unseenDynamicTint = new THREE.Color('#90a2b5');
+const unseenDynamicAccent = new THREE.Color('#7fc9ff');
+
 export function normalizeKind(kind: string): string {
   const lower = kind.toLowerCase();
   if (lower.includes('classicshipplayerunit')) return 'classic-ship';
@@ -62,10 +65,23 @@ export function getRenderScale(unit: NormalizedUnit): number {
   return unit.renderRadius / getBodyExtent(unit.renderKind);
 }
 
-export function getOpacityForKind(kind: string): number {
+export function isUnseenDynamicUnit(unit: NormalizedUnit): boolean {
+  return !unit.isStatic && !unit.isSeen;
+}
+
+function getBaseOpacityForKind(kind: string): number {
   if (kind === 'wormhole' || kind === 'gate') return 0.82;
   if (kind === 'shot' || kind === 'rail') return 0.9;
   return 1;
+}
+
+export function getOpacityForUnit(unit: NormalizedUnit): number {
+  const baseOpacity = getBaseOpacityForKind(unit.renderKind);
+  if (!isUnseenDynamicUnit(unit)) {
+    return baseOpacity;
+  }
+
+  return Math.max(0.22, baseOpacity * 0.38);
 }
 
 export function getShaderKindCode(kind: string): number {
@@ -85,20 +101,30 @@ export function isShipKind(kind: string): boolean {
 }
 
 export function getColorForUnit(unit: NormalizedUnit, teamColors: Map<string, string>): string {
+  let baseColor: string;
   if (unit.teamName && teamColors.has(unit.teamName)) {
-    return teamColors.get(unit.teamName)!;
+    baseColor = teamColors.get(unit.teamName)!;
+  } else {
+    switch (unit.renderKind) {
+      case 'sun': baseColor = '#ffb347'; break;
+      case 'planet': baseColor = '#7dd3fc'; break;
+      case 'moon': baseColor = '#c9d8ff'; break;
+      case 'wormhole': baseColor = '#7aebff'; break;
+      case 'gate': baseColor = '#90f1b8'; break;
+      case 'shot': baseColor = '#ffd369'; break;
+      case 'rail': baseColor = '#ff8a5b'; break;
+      default: baseColor = '#d7ecff'; break;
+    }
   }
 
-  switch (unit.renderKind) {
-    case 'sun': return '#ffb347';
-    case 'planet': return '#7dd3fc';
-    case 'moon': return '#c9d8ff';
-    case 'wormhole': return '#7aebff';
-    case 'gate': return '#90f1b8';
-    case 'shot': return '#ffd369';
-    case 'rail': return '#ff8a5b';
-    default: return '#d7ecff';
+  if (!isUnseenDynamicUnit(unit)) {
+    return baseColor;
   }
+
+  const faded = new THREE.Color(baseColor)
+    .lerp(unseenDynamicTint, 0.72)
+    .lerp(unseenDynamicAccent, 0.16);
+  return `#${faded.getHexString()}`;
 }
 
 export function createShipArrowPoints(): THREE.Vector3[] {
