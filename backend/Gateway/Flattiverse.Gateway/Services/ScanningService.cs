@@ -6,15 +6,21 @@ namespace Flattiverse.Gateway.Services;
 
 /// <summary>
 /// Per-player-session service that manages scanner state for each controllable.
+/// Subscribes to <see cref="DynamicScannerSubsystemEvent"/> to track scanner geometry.
+/// Forward mode tracks ship heading. Sweep mode oscillates around ship heading.
+/// Targeted mode points scanner toward a selected unit with short-horizon prediction.
 /// Called synchronously on the connector event loop.
 /// </summary>
 public sealed class ScanningService : IConnectorEventHandler
 {
+    private const float SweepHalfArc = 60f;
+
     public enum ScannerMode
     {
         Off,
         Full,
         Forward,
+        Sweep,
         Targeted
     }
 
@@ -34,12 +40,14 @@ public sealed class ScanningService : IConnectorEventHandler
     {
         public ScannerMode Mode { get; set; } = ScannerMode.Off;
         public bool Active { get; set; }
+        public float DesiredWidth { get; set; } = 90f;
         public float CurrentWidth { get; set; }
         public float CurrentLength { get; set; }
         public float CurrentAngle { get; set; }
         public float TargetWidth { get; set; }
         public float TargetLength { get; set; }
         public float TargetAngle { get; set; }
+        public bool SweepForward { get; set; } = true;
         public ClassicShipControllable? Ship { get; set; }
         public string? TargetUnitId { get; set; }
         public TargetTrackState TargetTrack { get; } = new();
@@ -73,18 +81,30 @@ public sealed class ScanningService : IConnectorEventHandler
         state.TargetLength = scanEvent.TargetLength;
         state.TargetAngle = scanEvent.TargetAngle;
 
-        if (state is { Mode: ScannerMode.Forward, Active: true, Ship: { } forwardShip })
+        if (state is { Mode: ScannerMode.Forward, Active: true, Ship: { } ship })
         {
-            var scanner = forwardShip.MainScanner;
-            var width = MathF.Min(90f, scanner.MaximumWidth);
-            _ = scanner.Set(width, scanner.MaximumLength, forwardShip.Angle);
+            var scanner = ship.MainScanner;
+            var width = ResolveWidth(scanner, state);
+            _ = scanner.Set(width, scanner.MaximumLength, ship.Angle);
             return;
         }
 
         if (state is { Mode: ScannerMode.Full, Active: true, Ship: { } fullShip })
         {
             var scanner = fullShip.MainScanner;
-            _ = scanner.Set(scanner.MaximumWidth / 2f, scanner.MaximumLength, state.CurrentAngle + 20f);
+            _ = scanner.Set(ResolveWidth(scanner, state), scanner.MaximumLength, state.CurrentAngle + 20f);
+            return;
+        }
+
+        if (state is { Mode: ScannerMode.Sweep, Active: true, Ship: { } sweepShip })
+        {
+            var scanner = sweepShip.MainScanner;
+            var limitAngle = sweepShip.Angle + (state.SweepForward ? SweepHalfArc : -SweepHalfArc);
+            if (Math.Abs(ShortestAngleDelta(state.CurrentAngle, limitAngle)) <= scanner.AngleSpeed * 1.5f)
+                state.SweepForward = !state.SweepForward;
+
+            var nextLimit = sweepShip.Angle + (state.SweepForward ? SweepHalfArc : -SweepHalfArc);
+            _ = scanner.Set(ResolveWidth(scanner, state), scanner.MaximumLength, nextLimit);
             return;
         }
 
@@ -92,42 +112,63 @@ public sealed class ScanningService : IConnectorEventHandler
             && TryResolveTargetedAngle(state, targetedShip, out var targetAngle))
         {
             var scanner = targetedShip.MainScanner;
-            var width = MathF.Min(90f, scanner.MaximumWidth);
-            _ = scanner.Set(width, scanner.MaximumLength, targetAngle);
+            _ = scanner.Set(ResolveWidth(scanner, state), scanner.MaximumLength, targetAngle);
         }
     }
 
-    public async Task ApplyModeAsync(ClassicShipControllable ship, ScannerMode mode)
+    public async Task ApplyAsync(ClassicShipControllable ship, ScannerMode? mode = null, float? width = null)
     {
         var state = GetOrCreateState(ship);
-        state.Mode = mode;
-        if (mode != ScannerMode.Targeted)
+
+        if (width.HasValue && float.IsFinite(width.Value))
+            state.DesiredWidth = ClampWidth(ship.MainScanner, width.Value);
+
+        if (mode.HasValue)
         {
-            state.TargetUnitId = null;
-            ResetTrack(state.TargetTrack);
+            state.Mode = mode.Value;
+            if (state.Mode != ScannerMode.Targeted)
+            {
+                state.TargetUnitId = null;
+                ResetTrack(state.TargetTrack);
+            }
         }
+
+        if (state.DesiredWidth <= 0f)
+            state.DesiredWidth = ResolveDefaultWidth(ship.MainScanner, state.Mode);
 
         if (!ship.Alive)
             return;
 
         var scanner = ship.MainScanner;
-        switch (mode)
+        var targetWidth = ResolveWidth(scanner, state);
+
+        switch (state.Mode)
         {
             case ScannerMode.Off:
                 await scanner.Off();
                 break;
             case ScannerMode.Full:
-                await scanner.Set(scanner.MaximumWidth / 2f, scanner.MaximumLength, scanner.CurrentAngle);
+                await scanner.Set(targetWidth, scanner.MaximumLength, scanner.CurrentAngle);
                 await scanner.On();
                 break;
             case ScannerMode.Forward:
-                await scanner.Set(MathF.Min(90f, scanner.MaximumWidth), scanner.MaximumLength, ship.Angle);
+                await scanner.Set(targetWidth, scanner.MaximumLength, ship.Angle);
+                await scanner.On();
+                break;
+            case ScannerMode.Sweep:
+                state.SweepForward = true;
+                await scanner.Set(targetWidth, scanner.MaximumLength, ship.Angle + SweepHalfArc);
                 await scanner.On();
                 break;
             case ScannerMode.Targeted:
                 // Targeted mode is configured via ApplyTargetModeAsync.
                 break;
         }
+    }
+
+    public async Task ApplyModeAsync(ClassicShipControllable ship, ScannerMode mode)
+    {
+        await ApplyAsync(ship, mode, null);
     }
 
     public async Task ApplyTargetModeAsync(ClassicShipControllable ship, string targetUnitId)
@@ -138,17 +179,17 @@ public sealed class ScanningService : IConnectorEventHandler
 
         state.Mode = ScannerMode.Targeted;
         state.TargetUnitId = targetUnitId;
+        state.DesiredWidth = ClampWidth(ship.MainScanner, Math.Min(90f, ship.MainScanner.MaximumWidth));
 
         if (!ship.Alive)
             return;
 
         var scanner = ship.MainScanner;
-        var width = MathF.Min(90f, scanner.MaximumWidth);
         var targetAngle = ship.Angle;
         if (TryResolveTargetedAngle(state, ship, out var resolvedAngle))
             targetAngle = resolvedAngle;
 
-        await scanner.Set(width, scanner.MaximumLength, targetAngle);
+        await scanner.Set(ResolveWidth(scanner, state), scanner.MaximumLength, targetAngle);
         await scanner.On();
     }
 
@@ -164,7 +205,7 @@ public sealed class ScanningService : IConnectorEventHandler
             return;
         }
 
-        await ApplyModeAsync(ship, state.Mode);
+        await ApplyAsync(ship, state.Mode, state.DesiredWidth);
     }
 
     public ScannerMode GetMode(int controllableId)
@@ -183,18 +224,21 @@ public sealed class ScanningService : IConnectorEventHandler
             };
         }
 
-        var mode = state.Mode switch
-        {
-            ScannerMode.Full => "360",
-            ScannerMode.Forward => "forward",
-            ScannerMode.Targeted => "targeted",
-            _ => "off"
-        };
-
         var overlay = new Dictionary<string, object>
         {
             { "active", state.Active },
-            { "mode", mode },
+            { "mode", state.Mode switch
+                {
+                    ScannerMode.Full => "360",
+                    ScannerMode.Forward => "forward",
+                    ScannerMode.Sweep => "sweep",
+                    ScannerMode.Targeted => "targeted",
+                    _ => "off"
+                }
+            },
+            { "requestedWidth", state.DesiredWidth },
+            { "minimumWidth", state.Ship?.MainScanner.MinimumWidth ?? 5f },
+            { "maximumWidth", state.Ship?.MainScanner.MaximumWidth ?? 90f },
             { "currentWidth", state.CurrentWidth },
             { "currentLength", state.CurrentLength },
             { "currentAngle", state.CurrentAngle },
@@ -308,5 +352,38 @@ public sealed class ScanningService : IConnectorEventHandler
         track.LastSampleTicks = 0;
         track.EstimatedVelocityX = 0f;
         track.EstimatedVelocityY = 0f;
+    }
+
+    private static float ShortestAngleDelta(float from, float to)
+    {
+        var delta = (to - from) % 360f;
+        if (delta > 180f) delta -= 360f;
+        else if (delta <= -180f) delta += 360f;
+        return delta;
+    }
+
+    private static float ResolveDefaultWidth(DynamicScannerSubsystem scanner, ScannerMode mode)
+    {
+        return mode switch
+        {
+            ScannerMode.Full => Math.Max(scanner.MinimumWidth, scanner.MaximumWidth / 2f),
+            _ => Math.Min(90f, scanner.MaximumWidth),
+        };
+    }
+
+    private static float ClampWidth(DynamicScannerSubsystem scanner, float width)
+    {
+        if (float.IsNaN(width) || float.IsInfinity(width))
+            return ResolveDefaultWidth(scanner, ScannerMode.Forward);
+
+        return Math.Clamp(width, scanner.MinimumWidth, scanner.MaximumWidth);
+    }
+
+    private static float ResolveWidth(DynamicScannerSubsystem scanner, ScannerState state)
+    {
+        var width = state.DesiredWidth > 0f
+            ? state.DesiredWidth
+            : ResolveDefaultWidth(scanner, state.Mode);
+        return ClampWidth(scanner, width);
     }
 }

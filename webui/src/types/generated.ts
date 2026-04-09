@@ -219,6 +219,18 @@ export interface SetEngineCommandPayloadDto {
   y?: number | null;
 }
 
+export interface ScannerCommandMessage {
+  type: 'command.scanner';
+  commandId: string;
+  payload: ScannerCommandPayloadDto;
+}
+
+export interface ScannerCommandPayloadDto {
+  controllableId: string;
+  mode?: string | null;
+  width?: number | null;
+}
+
 export interface SetNavigationTargetCommandMessage {
   type: 'command.set_navigation_target';
   commandId: string;
@@ -295,4 +307,4 @@ export interface WorldDeltaMessage {
 
 export type ServerMessage = ChatReceivedMessage | CommandReplyMessage | OwnerOverlayDeltaMessage | PingMessage | ServerStatusMessage | SessionReadyMessage | SnapshotMessage | WorldDeltaMessage;
 
-export type ClientMessage = AttachConnectionMessage | ChatCommandMessage | ClearNavigationTargetCommandMessage | ContinueShipCommandMessage | CreateShipCommandMessage | DestroyShipCommandMessage | DetachPlayerSessionMessage | FireWeaponCommandMessage | PongMessage | RemoveShipCommandMessage | SelectPlayerSessionMessage | SetEngineCommandMessage | SetNavigationTargetCommandMessage | SetSubsystemModeCommandMessage;
+export type ClientMessage = AttachConnectionMessage | ChatCommandMessage | ClearNavigationTargetCommandMessage | ContinueShipCommandMessage | CreateShipCommandMessage | DestroyShipCommandMessage | DetachPlayerSessionMessage | FireWeaponCommandMessage | PongMessage | RemoveShipCommandMessage | ScannerCommandMessage | SelectPlayerSessionMessage | SetEngineCommandMessage | SetNavigationTargetCommandMessage | SetSubsystemModeCommandMessage;

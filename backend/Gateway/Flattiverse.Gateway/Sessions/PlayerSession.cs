@@ -272,6 +272,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 "command.chat" => await HandleChat(commandId, payload),
                 "command.create_ship" => await HandleCreateShip(commandId, payload),
                 "command.set_engine" => await HandleSetEngine(commandId, payload),
+                "command.scanner" => await HandleScanner(commandId, payload),
                 "command.set_navigation_target" => HandleSetNavigationTarget(commandId, payload),
                 "command.clear_navigation_target" => HandleClearNavigationTarget(commandId, payload),
                 "command.fire_weapon" => await HandleFireWeapon(commandId, payload),
@@ -428,6 +429,38 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return Completed(commandId);
     }
 
+    private async Task<CommandReplyMessage> HandleScanner(string commandId, System.Text.Json.JsonElement? payload)
+    {
+        var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
+        var controllable = FindControllable(controllableId);
+        if (controllable is not ClassicShipControllable classic)
+            return Rejected(commandId, "invalid_controllable", "Controllable not found or not a classic ship.");
+
+        ScanningService.ScannerMode? mode = null;
+        if (payload?.TryGetProperty("mode", out var modeEl) == true && modeEl.ValueKind != System.Text.Json.JsonValueKind.Null)
+        {
+            var modeValue = modeEl.GetString() ?? "";
+            mode = modeValue.ToLowerInvariant() switch
+            {
+                "360" or "full" => ScanningService.ScannerMode.Full,
+                "forward" => ScanningService.ScannerMode.Forward,
+                "sweep" => ScanningService.ScannerMode.Sweep,
+                "off" => ScanningService.ScannerMode.Off,
+                _ => null
+            };
+
+            if (mode is null)
+                return Rejected(commandId, "invalid_mode", $"Unknown scanner mode: {modeValue}");
+        }
+
+        float? width = null;
+        if (payload?.TryGetProperty("width", out var widthEl) == true && widthEl.ValueKind != System.Text.Json.JsonValueKind.Null)
+            width = widthEl.GetSingle();
+
+        await _scanningService.ApplyAsync(classic, mode, width);
+        return Completed(commandId);
+    }
+
     private async Task<CommandReplyMessage> HandleFireWeapon(string commandId, System.Text.Json.JsonElement? payload)
     {
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
@@ -475,11 +508,11 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             case "scanner":
                 if (mode == "off")
                 {
-                    await _scanningService.ApplyModeAsync(classic, ScanningService.ScannerMode.Off);
+                    await _scanningService.ApplyAsync(classic, ScanningService.ScannerMode.Off);
                 }
                 else if (mode == "on")
                 {
-                    await _scanningService.ApplyModeAsync(classic, ScanningService.ScannerMode.Forward);
+                    await _scanningService.ApplyAsync(classic, ScanningService.ScannerMode.Forward);
                 }
                 else if (mode == "set")
                 {
@@ -489,7 +522,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                     var scanMode = width >= 180f
                         ? ScanningService.ScannerMode.Full
                         : ScanningService.ScannerMode.Forward;
-                    await _scanningService.ApplyModeAsync(classic, scanMode);
+                    await _scanningService.ApplyAsync(classic, scanMode, width);
                 }
                 else if (mode == "target")
                 {

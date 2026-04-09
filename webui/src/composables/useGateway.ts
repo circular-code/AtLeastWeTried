@@ -1,5 +1,5 @@
-import { computed, ref } from 'vue';
-import { buildAttachConnectionMessage, buildChatCommand, buildClearNavigationTargetCommand, buildContinueShipCommand, buildCreateShipCommand, buildDestroyShipCommand, buildDetachPlayerSessionMessage, buildFireWeaponCommand, buildRemoveShipCommand, buildSelectPlayerSessionMessage, buildSetEngineCommand, buildSetNavigationTargetCommand, buildSetSubsystemModeCommand } from '../transport/commands';
+﻿import { computed, ref } from 'vue';
+import { buildAttachConnectionMessage, buildChatCommand, buildClearNavigationTargetCommand, buildContinueShipCommand, buildCreateShipCommand, buildDestroyShipCommand, buildDetachPlayerSessionMessage, buildFireWeaponCommand, buildRemoveShipCommand, buildScannerCommand, buildSelectPlayerSessionMessage, buildSetEngineCommand, buildSetNavigationTargetCommand, buildSetSubsystemModeCommand } from '../transport/commands';
 import { createGatewayClient } from '../transport/gateway';
 import { loadSavedConnections, removeSavedConnection, upsertSavedConnection } from '../lib/savedConnections';
 import { truncateText } from '../lib/formatting';
@@ -313,9 +313,7 @@ function createGatewayApi() {
       return;
     }
 
-    const envelope = mode === 'off'
-      ? buildSetSubsystemModeCommand(controllableId, 'scanner', 'off')
-      : buildSetSubsystemModeCommand(controllableId, 'scanner', 'set', mode === '360' ? 360 : 90);
+    const envelope = buildScannerCommand(controllableId, mode, gameStore.scannerWidthFor(controllableId));
 
     gameStore.trackCommand(envelope.commandId, {
       label: `Scanner ${mode}`,
@@ -334,6 +332,21 @@ function createGatewayApi() {
     gameStore.trackCommand(envelope.commandId, {
       label: 'Initiate target scan',
       subject: `${gameStore.getControllableLabel(controllableId)} -> ${truncateText(targetId, 40)}`,
+    });
+
+    client.send(envelope.message);
+  }
+
+  function setScannerWidth(controllableId: string, width: number) {
+    if (!controllableId) {
+      return;
+    }
+
+    const envelope = buildScannerCommand(controllableId, undefined, width);
+
+    gameStore.trackCommand(envelope.commandId, {
+      label: `Scanner width ${width.toFixed(0)}ï¿½`,
+      subject: gameStore.getControllableLabel(controllableId),
     });
 
     client.send(envelope.message);
@@ -409,8 +422,10 @@ function createGatewayApi() {
     fireWeapon,
     setScannerMode,
     initiateTargetedScan,
+    setScannerWidth,
     setTacticalMode,
     setNavigationTarget,
     clearNavigationTarget,
   };
 }
+

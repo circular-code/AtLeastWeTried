@@ -74,7 +74,11 @@ function downloadSnapshot() {
       <div class="debug-log-toolbar">
         <label class="field debug-log-limit">
           <span>Limit</span>
-          <input v-model.number="debugLogLimitModel" type="number" min="1" step="1" />
+          <div class="debug-log-limit-row">
+            <strong class="debug-log-count">{{ uiStore.debugLogEntries.length }}</strong>
+            <span class="debug-log-limit-separator" aria-hidden="true">/</span>
+            <input v-model.number="debugLogLimitModel" type="number" min="1" step="1" />
+          </div>
         </label>
         <label class="field debug-log-search">
           <span>Search</span>
@@ -96,9 +100,6 @@ function downloadSnapshot() {
         </div>
       </div>
 
-      <p v-if="uiStore.isDebugLogAtLimit" class="debug-log-notice">
-        Debug log is full at {{ uiStore.normalizedDebugLogLimit }} messages. Clear it or raise the limit to capture more traffic.
-      </p>
       <p v-if="uiStore.activeDebugCaptureSearch" class="debug-log-notice">
         Capture filter active. Only new messages matching "{{ uiStore.activeDebugCaptureSearch }}" will be added until you clear again with a different search.
       </p>
