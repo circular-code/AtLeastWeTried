@@ -77,23 +77,30 @@ public sealed class MappingService : IConnectorEventHandler
         var dto = MapUnit(unit, clusterId);
         if (dto is null) return;
         var isStatic = IsStaticUnit(unit);
+        var alreadyKnown = false;
 
         if (isStatic)
         {
             lock (_staticLock)
+            {
+                alreadyKnown = _knownStaticUnits.ContainsKey(dto.UnitId);
                 _knownStaticUnits[dto.UnitId] = dto;
+            }
         }
         else
         {
             lock (_lock)
+            {
+                alreadyKnown = _knownDynamicUnits.ContainsKey(dto.UnitId);
                 _knownDynamicUnits[dto.UnitId] = dto;
+            }
         }
 
         lock (_lock)
         {
             _pendingDeltas.Add(new WorldDeltaDto
             {
-                EventType = "unit.created",
+                EventType = alreadyKnown ? "unit.updated" : "unit.created",
                 EntityId = dto.UnitId,
                 Changes = UnitToChanges(dto)
             });
