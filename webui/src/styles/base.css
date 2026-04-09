@@ -230,6 +230,26 @@ h2 {
   justify-items: end;
 }
 
+.overlay-shell.is-debug-log-ingame-active .overlay-top {
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    'left .'
+    '. .'
+    'right .';
+}
+
+.overlay-shell.is-debug-log-ingame-active .overlay-column-right {
+  justify-items: start;
+  align-self: end;
+}
+
+.overlay-shell.is-debug-log-ingame-active .overlay-column-right > .panel,
+.overlay-shell.is-debug-log-ingame-active .overlay-column-right > .overlay-card,
+.overlay-shell.is-debug-log-ingame-active .overlay-column-right > .text-muted {
+  width: min(100%, 320px);
+}
+
 .overlay-column-right > .panel {
   width: min(100%, 300px);
 }

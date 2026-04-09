@@ -73,7 +73,7 @@ onBeforeUnmount(() => {
     <section class="scene-stage">
       <WorldViewport />
 
-      <div class="overlay-shell">
+      <div :class="['overlay-shell', { 'is-debug-log-ingame-active': uiStore.isDebugLogOpen && uiStore.isDebugLogIngame }]">
         <div class="overlay-top">
           <OverlayPanel />
           <SelectionPanel />

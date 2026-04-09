@@ -6,9 +6,22 @@ import { formatDebugPayload } from '../lib/formatting';
 
 const DEBUG_LOG_OPEN_STORAGE_KEY = 'flattiverse.debugLog.open';
 const DEBUG_LOG_INGAME_STORAGE_KEY = 'flattiverse.debugLog.ingame';
+const DEBUG_LOG_SETTINGS_STORAGE_KEY = 'flattiverse.debugLog.settings';
+
+type StoredDebugLogSettings = {
+  limit?: number;
+  search?: string;
+  exclude?: string;
+  captureSearch?: string;
+  showClient?: boolean;
+  showServer?: boolean;
+};
 
 export const useUiStore = defineStore('ui', {
-  state: () => ({
+  state: () => {
+    const storedSettings = readStoredDebugLogSettings();
+
+    return ({
     selectedControllableId: '',
     lastSelection: null as WorldSceneSelection | null,
     isManagerPopupOpen: false,
@@ -17,12 +30,14 @@ export const useUiStore = defineStore('ui', {
     isDebugLogOpen: false,
     isDebugLogIngame: false,
     debugLogEntries: [] as DebugLogEntry[],
-    debugLogLimit: 200,
-    debugLogSearch: '',
-    debugLogExclude: '',
-    showClientDebugMessages: true,
-    showServerDebugMessages: true,
-  }),
+    debugLogLimit: readStoredDebugLogLimit(storedSettings),
+    debugLogSearch: storedSettings.search ?? '',
+    debugLogExclude: storedSettings.exclude ?? '',
+    debugLogCaptureSearch: storedSettings.captureSearch ?? '',
+    showClientDebugMessages: storedSettings.showClient ?? true,
+    showServerDebugMessages: storedSettings.showServer ?? true,
+  });
+  },
   getters: {
     normalizedDebugLogLimit: (state) => {
       if (!Number.isFinite(state.debugLogLimit)) {
@@ -31,34 +46,21 @@ export const useUiStore = defineStore('ui', {
 
       return Math.max(1, Math.floor(state.debugLogLimit));
     },
+    activeDebugCaptureSearch: (state) => state.debugLogCaptureSearch.trim(),
     filteredDebugLogEntries(state): DebugLogEntry[] {
-      const includeQuery = state.debugLogSearch.trim().toLowerCase();
-      const excludeQuery = state.debugLogExclude.trim().toLowerCase();
-
-      return state.debugLogEntries.filter((entry) => {
-        if (entry.direction === 'client' && !state.showClientDebugMessages) {
-          return false;
-        }
-
-        if (entry.direction === 'server' && !state.showServerDebugMessages) {
-          return false;
-        }
-
-        const searchable = `${entry.messageType}\n${entry.payload}`.toLowerCase();
-
-        if (excludeQuery && searchable.includes(excludeQuery)) {
-          return false;
-        }
-
-        if (!includeQuery) {
-          return true;
-        }
-
-        return searchable.includes(includeQuery);
-      });
+      return state.debugLogEntries.filter((entry) => matchesDebugLogFilters(
+        state,
+        entry.direction,
+        entry.messageType,
+        entry.payload,
+      ));
     },
-    latestDebugEntry: (state) => state.debugLogEntries.at(-1) ?? null,
+    latestDebugEntry: (state) => state.debugLogEntries[0] ?? null,
     isDebugLogAtLimit(): boolean {
+      if (this.activeDebugCaptureSearch && this.filteredDebugLogEntries.length === 0) {
+        return false;
+      }
+
       return this.debugLogEntries.length >= this.normalizedDebugLogLimit;
     },
   },
@@ -88,25 +90,59 @@ export const useUiStore = defineStore('ui', {
       if (this.debugLogEntries.length > this.debugLogLimit) {
         this.debugLogEntries = this.debugLogEntries.slice(0, this.debugLogLimit);
       }
+      this.persistPreferences();
+    },
+    setDebugLogSearch(value: string) {
+      this.debugLogSearch = value;
+      this.refreshDebugCaptureBuffer();
+      this.persistPreferences();
+    },
+    setDebugLogExclude(value: string) {
+      this.debugLogExclude = value;
+      this.refreshDebugCaptureBuffer();
+      this.persistPreferences();
+    },
+    setShowClientDebugMessages(value: boolean) {
+      this.showClientDebugMessages = value;
+      this.refreshDebugCaptureBuffer();
+      this.persistPreferences();
+    },
+    setShowServerDebugMessages(value: boolean) {
+      this.showServerDebugMessages = value;
+      this.refreshDebugCaptureBuffer();
+      this.persistPreferences();
     },
     recordDebugMessage(direction: GatewayMessageDirection, message: ClientMessage | ServerMessage) {
+      const payload = formatDebugPayload(message);
+      const captureQuery = this.debugLogCaptureSearch.trim().toLowerCase();
+      if (captureQuery && !matchesDebugLogFilters(this, direction, message.type, payload, captureQuery)) {
+        return;
+      }
+
       if (this.debugLogEntries.length >= this.normalizedDebugLogLimit) {
         return;
       }
 
-      this.debugLogEntries = [
-        ...this.debugLogEntries,
-        {
-          id: `debug-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-          direction,
-          messageType: message.type,
-          payload: formatDebugPayload(message),
-          createdAt: Date.now(),
-        },
-      ];
+      this.debugLogEntries = [{
+        id: `debug-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        direction,
+        messageType: message.type,
+        payload,
+        createdAt: Date.now(),
+      }, ...this.debugLogEntries];
     },
     clearDebugLog() {
       this.debugLogEntries = [];
+      this.debugLogCaptureSearch = this.debugLogSearch.trim();
+      this.persistPreferences();
+    },
+    refreshDebugCaptureBuffer() {
+      if (!this.activeDebugCaptureSearch) {
+        return;
+      }
+
+      this.debugLogEntries = [];
+      this.debugLogCaptureSearch = this.debugLogSearch.trim();
     },
     restorePreferences() {
       this.isDebugLogOpen = readBoolean(DEBUG_LOG_OPEN_STORAGE_KEY);
@@ -115,6 +151,14 @@ export const useUiStore = defineStore('ui', {
     persistPreferences() {
       persistBoolean(DEBUG_LOG_OPEN_STORAGE_KEY, this.isDebugLogOpen);
       persistBoolean(DEBUG_LOG_INGAME_STORAGE_KEY, this.isDebugLogIngame);
+      persistDebugLogSettings({
+        limit: this.debugLogLimit,
+        search: this.debugLogSearch,
+        exclude: this.debugLogExclude,
+        captureSearch: this.debugLogCaptureSearch,
+        showClient: this.showClientDebugMessages,
+        showServer: this.showServerDebugMessages,
+      });
     },
   },
 });
@@ -133,4 +177,76 @@ function persistBoolean(key: string, value: boolean) {
   } catch {
     // Ignore browser storage failures.
   }
+}
+
+function readStoredDebugLogSettings(): StoredDebugLogSettings {
+  try {
+    const storedValue = globalThis.localStorage?.getItem(DEBUG_LOG_SETTINGS_STORAGE_KEY);
+    if (!storedValue) {
+      return {};
+    }
+
+    const parsed = JSON.parse(storedValue);
+    if (!parsed || typeof parsed !== 'object') {
+      return {};
+    }
+
+    return parsed as StoredDebugLogSettings;
+  } catch {
+    return {};
+  }
+}
+
+function persistDebugLogSettings(settings: StoredDebugLogSettings) {
+  try {
+    globalThis.localStorage?.setItem(DEBUG_LOG_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  } catch {
+    // Ignore browser storage failures.
+  }
+}
+
+function readStoredDebugLogLimit(settings: StoredDebugLogSettings) {
+  if (!Number.isFinite(settings.limit)) {
+    return 200;
+  }
+
+  return Math.max(1, Math.floor(settings.limit ?? 200));
+}
+
+function buildDebugSearchableText(messageType: string, payload: string) {
+  return `${messageType}\n${payload}`.toLowerCase();
+}
+
+function matchesDebugLogFilters(
+  state: {
+    debugLogSearch: string;
+    debugLogExclude: string;
+    showClientDebugMessages: boolean;
+    showServerDebugMessages: boolean;
+  },
+  direction: GatewayMessageDirection,
+  messageType: string,
+  payload: string,
+  includeQuery = state.debugLogSearch.trim().toLowerCase(),
+) {
+  if (direction === 'client' && !state.showClientDebugMessages) {
+    return false;
+  }
+
+  if (direction === 'server' && !state.showServerDebugMessages) {
+    return false;
+  }
+
+  const searchable = buildDebugSearchableText(messageType, payload);
+  const excludeQuery = state.debugLogExclude.trim().toLowerCase();
+
+  if (excludeQuery && searchable.includes(excludeQuery)) {
+    return false;
+  }
+
+  if (!includeQuery) {
+    return true;
+  }
+
+  return searchable.includes(includeQuery);
 }
