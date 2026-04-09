@@ -29,6 +29,9 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     private readonly ScanningService _scanningService;
     private readonly ManeuveringService _maneuveringService = new();
     private readonly PathfindingService _pathfindingService;
+    private readonly TacticalService _tacticalService = new();
+    private readonly object _autoFireSync = new();
+    private readonly HashSet<string> _autoFireInFlight = new();
 
     public string Id => _id;
     public string DisplayName => _displayName;
@@ -73,7 +76,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             _connectionManager = new GalaxyConnectionManager(_galaxyUrl, _apiKey, _teamName, _logger);
             _connectionManager.ConnectionLost += OnConnectionLost;
 
-            var handlers = new List<IConnectorEventHandler> { _mappingService, _scanningService, _pathfindingService, _maneuveringService, this };
+            var handlers = new List<IConnectorEventHandler> { _mappingService, _scanningService, _pathfindingService, _tacticalService, _maneuveringService, this };
             await _connectionManager.ConnectAsync(handlers);
 
             _connected = true;
@@ -574,6 +577,59 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return Completed(commandId);
     }
 
+    private Task<CommandReplyMessage> HandleSetTacticalMode(string commandId, System.Text.Json.JsonElement? payload)
+    {
+        var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
+        var mode = payload?.GetProperty("mode").GetString() ?? "";
+        var controllable = FindControllable(controllableId);
+        if (controllable is null)
+            return Task.FromResult(Rejected(commandId, "invalid_controllable", "Controllable not found."));
+
+        if (mode != "enemy" && mode != "target" && mode != "off")
+            return Task.FromResult(Rejected(commandId, "invalid_mode", "Tactical mode must be one of: enemy, target, off."));
+
+        var tacticalMode = mode == "enemy"
+            ? TacticalService.TacticalMode.Enemy
+            : mode == "target"
+                ? TacticalService.TacticalMode.Target
+                : TacticalService.TacticalMode.Off;
+
+        if (controllable is ClassicShipControllable classic)
+            _tacticalService.AttachControllable(controllableId, classic);
+
+        _tacticalService.SetMode(controllableId, tacticalMode);
+        return Task.FromResult(Completed(commandId));
+    }
+
+    private Task<CommandReplyMessage> HandleSetTacticalTarget(string commandId, System.Text.Json.JsonElement? payload)
+    {
+        var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
+        var targetId = payload?.GetProperty("targetId").GetString() ?? "";
+        var controllable = FindControllable(controllableId);
+        if (controllable is null)
+            return Task.FromResult(Rejected(commandId, "invalid_controllable", "Controllable not found."));
+
+        if (string.IsNullOrWhiteSpace(targetId))
+            return Task.FromResult(Rejected(commandId, "invalid_target", "Target id is required."));
+
+        if (controllable is ClassicShipControllable classic)
+            _tacticalService.AttachControllable(controllableId, classic);
+
+        _tacticalService.SetTarget(controllableId, targetId);
+        return Task.FromResult(Completed(commandId));
+    }
+
+    private Task<CommandReplyMessage> HandleClearTacticalTarget(string commandId, System.Text.Json.JsonElement? payload)
+    {
+        var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
+        var controllable = FindControllable(controllableId);
+        if (controllable is null)
+            return Task.FromResult(Rejected(commandId, "invalid_controllable", "Controllable not found."));
+
+        _tacticalService.ClearTarget(controllableId);
+        return Task.FromResult(Completed(commandId));
+    }
+
     private async Task<CommandReplyMessage> HandleDestroyShip(string commandId, System.Text.Json.JsonElement? payload)
     {
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
@@ -721,6 +777,12 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     /// </summary>
     public void Handle(FlattiverseEvent @event)
     {
+        if (@event is GalaxyTickEvent)
+        {
+            DispatchPendingAutoFireRequests();
+            return;
+        }
+
         List<BrowserConnection> connections;
         lock (_lock)
             connections = _attachedConnections.ToList();
@@ -792,6 +854,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                     {
                         if (c is ClassicShipControllable respawnedShip && c.Id == continued.ControllableInfo.Id)
                         {
+                            _tacticalService.AttachControllable($"p{continued.Player.Id}-c{continued.ControllableInfo.Id}", respawnedShip);
                             _ = _scanningService.ReapplyModeAsync(respawnedShip);
                             _maneuveringService.RebindShip(respawnedShip);
                             break;
@@ -828,6 +891,47 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                     BroadcastWorldDelta(connections, new List<WorldDeltaDto> { cDelta2 });
                 }
                 break;
+        }
+    }
+
+    private void DispatchPendingAutoFireRequests()
+    {
+        var requests = _tacticalService.DequeuePendingAutoFireRequests();
+        if (requests.Count == 0)
+            return;
+
+        foreach (var request in requests)
+        {
+            bool canStart;
+            lock (_autoFireSync)
+                canStart = _autoFireInFlight.Add(request.ControllableId);
+
+            if (!canStart)
+                continue;
+
+            _ = ExecuteAutoFireAsync(request);
+        }
+    }
+
+    private async Task ExecuteAutoFireAsync(TacticalService.AutoFireRequest request)
+    {
+        try
+        {
+            await request.Ship.ShotLauncher.Shoot(request.RelativeMovement, request.Ticks, request.Load, request.Damage)
+                .ConfigureAwait(false);
+        }
+        catch (GameException ex)
+        {
+            _logger.LogDebug(ex, "Auto-fire rejected for controllable {ControllableId}", request.ControllableId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Auto-fire failed for controllable {ControllableId}", request.ControllableId);
+        }
+        finally
+        {
+            lock (_autoFireSync)
+                _autoFireInFlight.Remove(request.ControllableId);
         }
     }
 
