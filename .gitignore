@@ -50,3 +50,4 @@ lerna-debug.log*
 
 # World State files
 world-state.*.json
+backend/Gateway/Flattiverse.Gateway.Host/data/world-state.*.json
