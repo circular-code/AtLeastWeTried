@@ -6,8 +6,10 @@ import { loadSavedConnections, maskApiKey, removeSavedConnection, upsertSavedCon
 import { readNavigationTarget, type WorldSceneSelection } from './lib/worldScene';
 import type {
   ChatEntryDto,
+  ClientMessage,
   CommandReplyMessage,
   GalaxySnapshotDto,
+  GatewayMessageDirection,
   OwnerOverlayDeltaMessage,
   PlayerSessionSummaryDto,
   ServerMessage,
@@ -83,6 +85,17 @@ type PendingCommandDescriptor = {
   subject?: string;
 };
 
+type DebugLogEntry = {
+  id: string;
+  direction: GatewayMessageDirection;
+  messageType: string;
+  payload: string;
+  createdAt: number;
+};
+
+const DEBUG_LOG_OPEN_STORAGE_KEY = 'flattiverse.debugLog.open';
+const DEBUG_LOG_INGAME_STORAGE_KEY = 'flattiverse.debugLog.ingame';
+
 const gatewayUrl = import.meta.env.VITE_GATEWAY_URL ?? 'ws://127.0.0.1:5260/ws';
 const connectionState = ref<ClientConnectionState>('idle');
 const session = ref<SessionReadyMessage | null>(null);
@@ -107,10 +120,19 @@ const pendingAttachments = ref<QueuedAttachment[]>([]);
 const lastSelection = ref<WorldSceneSelection | null>(null);
 const pendingCommands = ref<Record<string, PendingCommandDescriptor>>({});
 const isActivityHistoryOpen = ref(false);
+const isDebugLogOpen = ref(readStoredBoolean(DEBUG_LOG_OPEN_STORAGE_KEY));
+const isDebugLogIngame = ref(readStoredBoolean(DEBUG_LOG_INGAME_STORAGE_KEY));
+const debugLogEntries = ref<DebugLogEntry[]>([]);
+const debugLogLimit = ref(200);
+const debugLogSearch = ref('');
+const debugLogExclude = ref('');
+const showClientDebugMessages = ref(true);
+const showServerDebugMessages = ref(true);
 const playerApiKeyPattern = /^[0-9a-f]{64}$/i;
 const recentActivityLimit = 3;
 const activityHistoryLimit = 48;
 const activityToastLifetimeMs = 8000;
+const debugDeltaLimit = 200;
 const activityClock = ref(Date.now());
 let activityClockHandle: number | undefined;
 
@@ -122,7 +144,12 @@ const client = createGatewayClient(gatewayUrl, {
       flushPendingAttachments();
     }
   },
+  onSend(message) {
+    recordDebugMessage('client', message);
+  },
   onMessage(message) {
+    recordDebugMessage('server', message);
+
     if (message.type === 'ping') {
       client.send({ type: 'pong' });
       return;
@@ -219,6 +246,34 @@ const floatingActivityEntries = computed(() => activityEntries.value
   .slice(0, recentActivityLimit));
 
 const olderActivityCount = computed(() => Math.max(0, activityEntries.value.length - floatingActivityEntries.value.length));
+const isDebugLogAtLimit = computed(() => debugLogEntries.value.length >= normalizeDebugLogLimit());
+const latestDebugEntry = computed(() => debugLogEntries.value.at(-1) ?? null);
+const filteredDebugLogEntries = computed(() => {
+  const includeQuery = debugLogSearch.value.trim().toLowerCase();
+  const excludeQuery = debugLogExclude.value.trim().toLowerCase();
+
+  return debugLogEntries.value.filter((entry) => {
+    if (entry.direction === 'client' && !showClientDebugMessages.value) {
+      return false;
+    }
+
+    if (entry.direction === 'server' && !showServerDebugMessages.value) {
+      return false;
+    }
+
+    const searchable = `${entry.messageType}\n${entry.payload}`.toLowerCase();
+
+    if (excludeQuery && searchable.includes(excludeQuery)) {
+      return false;
+    }
+
+    if (!includeQuery) {
+      return true;
+    }
+
+    return searchable.includes(includeQuery);
+  });
+});
 
 const latestChatEntry = computed(() => chatEntries.value[0] ?? null);
 
@@ -446,6 +501,27 @@ function openActivityHistory() {
 
 function closeActivityHistory() {
   isActivityHistoryOpen.value = false;
+}
+
+function openDebugLog() {
+  if (isDebugLogOpen.value) {
+    closeDebugLog();
+    return;
+  }
+
+  isDebugLogOpen.value = true;
+}
+
+function closeDebugLog() {
+  isDebugLogOpen.value = false;
+}
+
+function handleDebugBackdropClick() {
+  if (isDebugLogIngame.value) {
+    return;
+  }
+
+  closeDebugLog();
 }
 
 function disconnect() {
@@ -720,6 +796,11 @@ function handleWindowKeydown(event: KeyboardEvent) {
 
   if (isActivityHistoryOpen.value) {
     closeActivityHistory();
+    return;
+  }
+
+  if (isDebugLogOpen.value) {
+    closeDebugLog();
     return;
   }
 
@@ -1008,6 +1089,117 @@ function recordActivity(entry: Omit<ActivityEntry, 'id' | 'createdAt'> & Partial
   ].slice(0, activityHistoryLimit);
 }
 
+function recordDebugMessage(direction: GatewayMessageDirection, message: ClientMessage | ServerMessage) {
+  if (debugLogEntries.value.length >= normalizeDebugLogLimit()) {
+    return;
+  }
+
+  debugLogEntries.value = [
+    ...debugLogEntries.value,
+    {
+      id: `debug-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      direction,
+      messageType: message.type,
+      payload: formatDebugPayload(message),
+      createdAt: Date.now(),
+    },
+  ];
+}
+
+function clearDebugLog() {
+  debugLogEntries.value = [];
+}
+
+function normalizeDebugLogLimit() {
+  if (!Number.isFinite(debugLogLimit.value)) {
+    return 1;
+  }
+
+  return Math.max(1, Math.floor(debugLogLimit.value));
+}
+
+function normalizedDebugLogLimit() {
+  return normalizeDebugLogLimit();
+}
+
+function downloadDebugLogSnapshot() {
+  if (filteredDebugLogEntries.value.length === 0) {
+    return;
+  }
+
+  const createdAt = Date.now();
+  const fileName = `gateway-debug-log-${formatDebugSnapshotFileName(createdAt)}.txt`;
+  const filters = [
+    `limit=${normalizeDebugLogLimit()}`,
+    `search=${debugLogSearch.value || '(none)'}`,
+    `exclude=${debugLogExclude.value || '(none)'}`,
+    `client=${showClientDebugMessages.value}`,
+    `server=${showServerDebugMessages.value}`,
+  ].join('\n');
+  const content = [
+    'Gateway Debug Log Snapshot',
+    `created=${new Date(createdAt).toISOString()}`,
+    filters,
+    '',
+    ...filteredDebugLogEntries.value.map((entry) => [
+      `[${new Date(entry.createdAt).toISOString()}] ${entry.direction.toUpperCase()} ${entry.messageType}`,
+      entry.payload,
+      '',
+    ].join('\n')),
+  ].join('\n');
+
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function formatDebugPayload(message: ClientMessage | ServerMessage) {
+  try {
+    return JSON.stringify(message, null, 2);
+  } catch {
+    return '[unserializable message]';
+  }
+}
+
+function formatDebugDisplayPayload(payload: string) {
+  const trimmed = payload.trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
+    return payload;
+  }
+
+  const inner = trimmed.slice(1, -1).trim();
+  if (!inner) {
+    return '';
+  }
+
+  return inner.replace(/^  /gm, '');
+}
+function formatDebugSnapshotFileName(createdAt: number) {
+  return new Date(createdAt).toISOString().replace(/[:.]/g, '-');
+}
+
+function readStoredBoolean(key: string) {
+  try {
+    return globalThis.localStorage?.getItem(key) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function writeStoredBoolean(key: string, value: boolean) {
+  try {
+    globalThis.localStorage?.setItem(key, value ? 'true' : 'false');
+  } catch {
+    // Ignore storage failures in the prototype UI.
+  }
+}
+
 function statusKindToTone(kind: ServerStatusMessage['kind']): ActivityTone {
   switch (kind) {
     case 'error':
@@ -1035,6 +1227,14 @@ function formatActivityTime(createdAt: number) {
   return new Intl.DateTimeFormat(undefined, {
     hour: '2-digit',
     minute: '2-digit',
+  }).format(createdAt);
+}
+
+function formatDebugTime(createdAt: number) {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
   }).format(createdAt);
 }
 
@@ -1232,6 +1432,30 @@ watch(
   },
   { immediate: true },
 );
+
+watch(
+  debugLogLimit,
+  (nextLimit) => {
+    const normalizedLimit = Number.isFinite(nextLimit) ? Math.max(1, Math.floor(nextLimit)) : 1;
+    if (debugLogLimit.value !== normalizedLimit) {
+      debugLogLimit.value = normalizedLimit;
+      return;
+    }
+
+    if (debugLogEntries.value.length > normalizedLimit) {
+      debugLogEntries.value = debugLogEntries.value.slice(0, normalizedLimit);
+    }
+  },
+  { immediate: true },
+);
+
+watch(isDebugLogOpen, (nextValue) => {
+  writeStoredBoolean(DEBUG_LOG_OPEN_STORAGE_KEY, nextValue);
+});
+
+watch(isDebugLogIngame, (nextValue) => {
+  writeStoredBoolean(DEBUG_LOG_INGAME_STORAGE_KEY, nextValue);
+});
 
 onMounted(() => {
   if (savedConnections.value.length > 0) {
@@ -1605,6 +1829,15 @@ onBeforeUnmount(() => {
               <button class="secondary button-compact status-bar-button" type="button" @click="openChatPopup">Open Chat</button>
             </div>
 
+            <div class="status-bar-item status-bar-item-debug" :title="latestDebugEntry ? `${latestDebugEntry.direction} ${latestDebugEntry.messageType}` : 'Gateway debug log'">
+              <span class="status-bar-icon" aria-hidden="true">
+                <svg viewBox="0 0 16 16" focusable="false">
+                  <path d="M5 2.75h6M6.15 1.75h3.7M5.1 8h5.8M3.25 5.15h9.5v6.1a1.5 1.5 0 0 1-1.5 1.5h-6.5a1.5 1.5 0 0 1-1.5-1.5zM2.2 8h1.05M12.75 8h1.05M5.2 12.75v1.05M10.8 12.75v1.05" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.15"></path>
+                </svg>
+              </span>
+              <button :class="['secondary', 'button-compact', 'status-bar-button', { 'is-active': isDebugLogOpen }]" type="button" @click="openDebugLog">Debug {{ debugLogEntries.length }}</button>
+            </div>
+
             <div class="status-bar-item status-bar-item-history">
               <button
                 class="secondary button-compact status-bar-button status-bar-icon-button"
@@ -1647,6 +1880,74 @@ onBeforeUnmount(() => {
                 </div>
                 <p v-if="entry.detail">{{ entry.detail }}</p>
                 <small v-if="entry.meta">{{ entry.meta }}</small>
+              </li>
+            </ul>
+          </section>
+        </div>
+
+        <div v-if="isDebugLogOpen" :class="['modal-backdrop', 'debug-log-backdrop', { 'is-ingame': isDebugLogIngame }]" @click.self="handleDebugBackdropClick">
+          <section :class="['modal-panel', 'panel', 'panel-glass', 'debug-log-panel', { 'is-ingame': isDebugLogIngame }]" aria-label="Gateway debug log">
+            <div class="modal-header">
+              <div>
+                <p class="eyebrow">Transport Trace</p>
+                <h1>Gateway Debug Log</h1>
+              </div>
+              <div class="actions actions-tight">
+                <label :class="['secondary', 'button-compact', 'debug-log-toggle', 'is-ingame', { 'is-active': isDebugLogIngame }]">
+                  <input v-model="isDebugLogIngame" type="checkbox" />
+                  <span>Ingame</span>
+                </label>
+                <button class="secondary" type="button" :disabled="filteredDebugLogEntries.length === 0" @click="downloadDebugLogSnapshot">Download Snapshot</button>
+                <button class="secondary" type="button" :disabled="debugLogEntries.length === 0" @click="clearDebugLog">Clear</button>
+                <button class="secondary" type="button" @click="closeDebugLog">Close</button>
+              </div>
+            </div>
+
+            <div class="debug-log-toolbar">
+              <label class="field debug-log-limit">
+                <span>Limit</span>
+                <input v-model.number="debugLogLimit" type="number" min="1" step="1" />
+              </label>
+              <label class="field debug-log-search">
+                <span>Search</span>
+                <input v-model="debugLogSearch" type="text" placeholder="Filter by type or message content" />
+              </label>
+              <label class="field debug-log-search debug-log-exclude">
+                <span>Exclude</span>
+                <input v-model="debugLogExclude" type="text" placeholder="Hide matches like delta or ping" />
+              </label>
+              <div class="debug-log-filters">
+                <label :class="['debug-log-toggle', 'is-client', { 'is-active': showClientDebugMessages }]">
+                  <input v-model="showClientDebugMessages" type="checkbox" />
+                  <span>Client</span>
+                </label>
+                <label :class="['debug-log-toggle', 'is-server', { 'is-active': showServerDebugMessages }]">
+                  <input v-model="showServerDebugMessages" type="checkbox" />
+                  <span>Server</span>
+                </label>
+              </div>
+            </div>
+
+            <p v-if="isDebugLogAtLimit" class="debug-log-notice">
+              Debug log is full at {{ normalizeDebugLogLimit() }} messages. Clear it or raise the limit to capture more traffic.
+            </p>
+
+            <ul class="debug-log-list">
+              <li v-if="debugLogEntries.length === 0" class="debug-log-empty text-muted">No gateway traffic captured yet.</li>
+              <li v-else-if="filteredDebugLogEntries.length === 0" class="debug-log-empty text-muted">{{ 'No messages match the current filters.' }}</li>
+              <li
+                v-for="entry in filteredDebugLogEntries"
+                :key="entry.id"
+                :class="['debug-log-entry', `is-${entry.direction}`]"
+              >
+                <div class="debug-log-head">
+                  <div class="debug-log-meta">
+                    <span :class="['debug-log-direction', `is-${entry.direction}`]">{{ entry.direction }}</span>
+                    <strong>{{ entry.messageType }}</strong>
+                  </div>
+                  <span>{{ formatDebugTime(entry.createdAt) }}</span>
+                </div>
+                <pre>{{ formatDebugDisplayPayload(entry.payload) }}</pre>
               </li>
             </ul>
           </section>
@@ -1769,3 +2070,4 @@ onBeforeUnmount(() => {
     </section>
   </main>
 </template>
+

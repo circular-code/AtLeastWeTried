@@ -23,6 +23,7 @@ export type ClientConnectionState = 'idle' | 'connecting' | 'open' | 'closed' | 
 type Handlers = {
   onStateChange?: (state: ClientConnectionState) => void;
   onMessage?: (message: ServerMessage) => void;
+  onSend?: (message: ClientMessage) => void;
 };
 
 export function createGatewayClient(url: string, handlers: Handlers) {
@@ -67,6 +68,7 @@ export function createGatewayClient(url: string, handlers: Handlers) {
       return;
     }
 
+    handlers.onSend?.(message);
     socket.send(JSON.stringify(message));
   }
 

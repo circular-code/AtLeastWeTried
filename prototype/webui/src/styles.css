@@ -740,6 +740,18 @@ h2 {
   padding-inline: 0.4rem;
 }
 
+.status-bar-item-debug {
+  max-width: min(16vw, 170px);
+  padding-inline: 0.4rem;
+}
+
+.status-bar-item-debug .status-bar-button.is-active {
+  background: rgba(124, 179, 221, 0.22);
+  color: #f2f8fd;
+  border-color: rgba(124, 179, 221, 0.34);
+  box-shadow: inset 0 0 0 1px rgba(124, 179, 221, 0.12);
+}
+
 .command-dock {
   position: absolute;
   bottom: calc(var(--status-bar-desktop-height) + var(--status-bar-floating-gap) + 0.6rem);
@@ -1038,6 +1050,299 @@ h2 {
 
 .activity-history-panel {
   width: min(760px, 100%);
+}
+
+.debug-log-panel {
+  width: min(960px, 100%);
+  max-height: min(92vh, 980px);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.debug-log-backdrop.is-ingame {
+  place-items: stretch end;
+  padding: 0.75rem 0.75rem calc(var(--status-bar-desktop-height) + 0.75rem) 0;
+  background: transparent;
+  backdrop-filter: none;
+  pointer-events: none;
+}
+
+.debug-log-panel.is-ingame {
+  width: clamp(320px, 20vw, 420px);
+  height: calc(100vh - var(--status-bar-desktop-height) - 1.5rem);
+  max-height: none;
+  border-radius: 18px 0 0 18px;
+  pointer-events: auto;
+}
+
+.debug-log-panel.is-ingame.panel-glass {
+  background:
+    linear-gradient(180deg, rgba(8, 12, 15, 0.94), rgba(8, 12, 15, 0.9)),
+    linear-gradient(180deg, rgba(124, 179, 221, 0.08), rgba(239, 191, 132, 0.05));
+  backdrop-filter: none;
+}
+
+.debug-log-panel.is-ingame .modal-header {
+  gap: 0.6rem;
+  align-items: start;
+}
+
+.debug-log-panel.is-ingame .modal-header h1 {
+  font-size: clamp(0.98rem, 1.2vw, 1.22rem);
+  line-height: 1.15;
+}
+
+.debug-log-panel.is-ingame .actions {
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
+.debug-log-panel.is-ingame .debug-log-toolbar {
+  grid-template-columns: minmax(0, calc(100% - 170px)) max-content;
+  grid-template-areas:
+    'search limit'
+    'exclude filters';
+  gap: 0.4rem 0.35rem;
+  align-items: end;
+}
+
+.debug-log-panel.is-ingame .debug-log-limit {
+  grid-area: limit;
+}
+
+.debug-log-panel.is-ingame .debug-log-search {
+  grid-area: search;
+}
+
+.debug-log-panel.is-ingame .debug-log-exclude {
+  grid-area: exclude;
+}
+
+.debug-log-panel.is-ingame .debug-log-filters {
+  grid-area: filters;
+  justify-content: flex-start;
+  align-self: end;
+  flex-wrap: nowrap;
+}
+
+.debug-log-panel.is-ingame .debug-log-limit span,
+.debug-log-panel.is-ingame .debug-log-search span {
+  font-size: 0.68rem;
+}
+
+.debug-log-panel.is-ingame .field input {
+  padding: 0.26rem 0.52rem;
+  border-radius: 8px;
+  font-size: 0.72rem;
+}
+
+.debug-log-panel.is-ingame .actions .secondary {
+  padding: 0.28rem 0.58rem;
+  font-size: 0.69rem;
+}
+
+.debug-log-panel.is-ingame .debug-log-toggle {
+  padding: 0.26rem 0.46rem;
+  font-size: 0.68rem;
+}
+
+.debug-log-panel.is-ingame .debug-log-toggle span {
+  white-space: nowrap;
+}
+
+.debug-log-panel.is-ingame .debug-log-direction {
+  min-width: 3.85rem;
+  font-size: 0.56rem;
+}
+
+.debug-log-panel.is-ingame .debug-log-entry {
+  padding: 0.5rem 0.58rem;
+  gap: 0.32rem;
+}
+
+.debug-log-panel.is-ingame .debug-log-entry pre {
+  padding: 0.45rem 0.55rem;
+  font-size: 0.66rem;
+  line-height: 1.35;
+}
+
+.debug-log-panel.is-ingame .debug-log-head {
+  gap: 0.35rem;
+}
+
+.debug-log-panel.is-ingame .debug-log-head span:last-child {
+  font-size: 0.66rem;
+}
+
+.debug-log-toolbar {
+  display: grid;
+  grid-template-columns: minmax(120px, 140px) minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: end;
+}
+
+.debug-log-limit {
+  margin-bottom: 0;
+}
+
+.debug-log-search {
+  margin-bottom: 0;
+}
+
+.debug-log-filters {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.debug-log-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  padding: 0.4rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(12, 17, 20, 0.8);
+  color: rgba(220, 232, 244, 0.76);
+  font-size: 0.74rem;
+  cursor: pointer;
+  transition:
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    color 0.18s ease,
+    opacity 0.18s ease;
+}
+
+.debug-log-toggle.is-active.is-client {
+  color: #cde7fb;
+  background: rgba(124, 179, 221, 0.16);
+  border-color: rgba(124, 179, 221, 0.28);
+}
+
+.debug-log-toggle.is-active.is-server {
+  color: #ffe7c0;
+  background: rgba(239, 191, 132, 0.14);
+  border-color: rgba(239, 191, 132, 0.24);
+}
+
+.debug-log-toggle.is-ingame {
+  background: rgba(124, 179, 221, 0.1);
+  color: #d9e7f1;
+  border-color: rgba(124, 179, 221, 0.2);
+}
+
+.debug-log-toggle.is-active.is-ingame {
+  background: rgba(124, 179, 221, 0.18);
+  color: #f2f8fd;
+  border-color: rgba(124, 179, 221, 0.28);
+}
+
+.debug-log-toggle input {
+  width: auto;
+  margin: 0;
+  accent-color: currentColor;
+}
+
+.debug-log-list {
+  list-style: none;
+  padding: 0 0.5rem 0 0;
+  margin: 0;
+  display: grid;
+  gap: 0.55rem;
+  min-height: 0;
+  overflow: auto;
+}
+
+.debug-log-notice {
+  margin: 0;
+  padding: 0.55rem 0.7rem;
+  border-radius: 12px;
+  border: 1px solid rgba(239, 191, 132, 0.2);
+  background: rgba(239, 191, 132, 0.08);
+  color: #f2ddbb;
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.debug-log-empty {
+  padding-left: 0.2rem;
+}
+
+.debug-log-entry {
+  padding: 0.65rem 0.8rem;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(10, 14, 18, 0.92);
+  display: grid;
+  gap: 0.45rem;
+}
+
+.debug-log-entry.is-client {
+  border-color: rgba(124, 179, 221, 0.24);
+}
+
+.debug-log-entry.is-server {
+  border-color: rgba(239, 191, 132, 0.24);
+}
+
+.debug-log-head,
+.debug-log-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.debug-log-meta {
+  justify-content: flex-start;
+}
+
+.debug-log-direction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 4.4rem;
+  padding: 0.16rem 0.42rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 0.62rem;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.debug-log-direction.is-client {
+  color: #cde7fb;
+  background: rgba(124, 179, 221, 0.16);
+  border-color: rgba(124, 179, 221, 0.28);
+}
+
+.debug-log-direction.is-server {
+  color: #ffe7c0;
+  background: rgba(239, 191, 132, 0.14);
+  border-color: rgba(239, 191, 132, 0.24);
+}
+
+.debug-log-entry pre {
+  padding: 0.7rem 0.8rem;
+  border-radius: 12px;
+  background: rgba(4, 7, 9, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  color: #dfeaf4;
+  font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+  font-size: 0.74rem;
+  line-height: 1.5;
+  max-height: 26rem;
+  overflow: auto;
+}
+
+@media (max-width: 760px) {
+  .debug-log-toolbar {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
 }
 
 .chat-modal-panel {
