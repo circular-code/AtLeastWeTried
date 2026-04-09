@@ -556,8 +556,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 }
                 else if (mode == "target")
                 {
-                    var targetUnitId = payload?.TryGetProperty("targetId", out var targetEl) == true
-                        ? targetEl.GetString()
+                    var targetUnitId = payload?.TryGetProperty("targetId", out var scannerTargetEl) == true
+                        ? scannerTargetEl.GetString()
                         : null;
                     if (string.IsNullOrWhiteSpace(targetUnitId))
                         return Rejected(commandId, "missing_target", "targetId is required for scanner target mode.");
