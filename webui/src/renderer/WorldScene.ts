@@ -7,6 +7,7 @@ import { type ScannerConeVisual, createScannerConeMesh } from './scannerCone';
 import { createSelectionRing } from './selectionRing';
 import { createNavigationMarker } from './navigationMarker';
 import { createNavigationPointer } from './navigationPointer';
+import { type TrackedTargetVisual, createTrackedTargetVisual, disposeTrackedTargetVisual } from './trackOverlay';
 import { createGrid, createGlowField } from './grid';
 
 export type WorldSceneSelection = {
@@ -56,6 +57,13 @@ type RawRenderableUnit = {
   teamName?: string;
 };
 
+type ViewBounds = {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+};
+
 export class WorldScene {
   private readonly container: HTMLElement;
   private readonly onSelection?: (selection: WorldSceneSelection) => void;
@@ -72,6 +80,7 @@ export class WorldScene {
   private readonly selectedRing: THREE.LineLoop;
   private readonly navigationMarker: THREE.Group;
   private readonly navigationPointer: THREE.LineSegments;
+  private readonly trackedTargetVisuals: Map<string, TrackedTargetVisual>;
   private readonly unitBodyMaterial: UnitShaderMaterial;
   private readonly resizeObserver: ResizeObserver;
   private readonly unitVisuals: Map<string, UnitVisual>;
@@ -90,6 +99,7 @@ export class WorldScene {
   private selectedControllableId: string;
   private selectedUnitId: string;
   private selectedNavigationTarget: WorldSceneNavigationTarget;
+  private trackedUnitColors: Record<string, string>;
   private readonly scannerCones: Map<string, ScannerConeVisual>;
   private animationFrame: number | null;
   private dragStartClient: { x: number; y: number } | null;
@@ -131,6 +141,7 @@ export class WorldScene {
     this.selectedRing = createSelectionRing();
     this.navigationMarker = createNavigationMarker();
     this.navigationPointer = createNavigationPointer();
+    this.trackedTargetVisuals = new Map();
     this.scannerCones = new Map();
     this.scene.add(this.grid);
     this.scene.add(this.staticBodies.mesh);
@@ -146,6 +157,7 @@ export class WorldScene {
     this.selectedControllableId = '';
     this.selectedUnitId = '';
     this.selectedNavigationTarget = null;
+    this.trackedUnitColors = {};
     this.unitVisuals = new Map<string, UnitVisual>();
     this.teamColors = new Map<string, string>();
     this.debugUnits = createDebugSuns();
@@ -187,6 +199,17 @@ export class WorldScene {
     this.requestRender();
   }
 
+  setTrackedUnits(trackedUnitColors: Record<string, string>) {
+    if (sameTrackedUnitColors(this.trackedUnitColors, trackedUnitColors)) {
+      return;
+    }
+
+    this.trackedUnitColors = { ...trackedUnitColors };
+    this.syncTrackedTargetVisuals();
+    this.updateTrackedTargets();
+    this.requestRender();
+  }
+
   dispose() {
     this.isDisposed = true;
     if (this.animationFrame !== null) {
@@ -203,6 +226,7 @@ export class WorldScene {
     this.container.removeEventListener('wheel', this.handleWheel);
     this.disposeBodyMeshes();
     this.disposeVisuals();
+    this.disposeTrackedTargetVisuals();
     this.disposeScannerCones();
     this.unitBodyMaterial.dispose();
     this.renderer.dispose();
@@ -415,6 +439,7 @@ export class WorldScene {
     }
 
     this.updateFocusSelection();
+    this.updateTrackedTargets();
     this.reportVisibleUnits();
     this.renderer.render(this.scene, this.camera);
     this.animationFrame = window.requestAnimationFrame(this.renderFrame);
@@ -480,6 +505,7 @@ export class WorldScene {
     this.updateNavigationMarker();
     this.updateNavigationPointer();
     this.updateScannerCones();
+    this.updateTrackedTargets();
   }
 
   private updateFocusSelection() {
@@ -718,6 +744,119 @@ export class WorldScene {
     this.navigationPointer.visible = true;
   }
 
+  private syncTrackedTargetVisuals() {
+    for (const [unitId, visual] of this.trackedTargetVisuals.entries()) {
+      if (this.trackedUnitColors[unitId] === visual.color) {
+        continue;
+      }
+
+      this.root.remove(visual.line);
+      this.root.remove(visual.marker);
+      this.root.remove(visual.edgeIndicator);
+      disposeTrackedTargetVisual(visual);
+      this.trackedTargetVisuals.delete(unitId);
+    }
+
+    for (const [unitId, color] of Object.entries(this.trackedUnitColors)) {
+      if (this.trackedTargetVisuals.has(unitId)) {
+        continue;
+      }
+
+      const visual = createTrackedTargetVisual(color);
+      this.trackedTargetVisuals.set(unitId, visual);
+      this.root.add(visual.line);
+      this.root.add(visual.marker);
+      this.root.add(visual.edgeIndicator);
+    }
+  }
+
+  private updateTrackedTargets() {
+    if (this.trackedTargetVisuals.size === 0) {
+      return;
+    }
+
+    const viewBounds = this.getViewBounds();
+    const worldUnitsPerPixel = this.getWorldUnitsPerPixel();
+    const markerScale = Math.max(10, worldUnitsPerPixel * 20);
+    const edgeIndicatorScale = Math.max(11, worldUnitsPerPixel * 22);
+    const sourceUnit = this.renderableUnitsById.get(this.selectedControllableId) ?? null;
+    const sourceVisible = sourceUnit ? this.isUnitVisible(sourceUnit, viewBounds) : false;
+    const rayAnchor = sourceVisible && sourceUnit
+      ? { x: sourceUnit.x, y: sourceUnit.y }
+      : { x: this.camera.position.x, y: -this.camera.position.y };
+
+    for (const [unitId, visual] of this.trackedTargetVisuals.entries()) {
+      const targetUnit = this.renderableUnitsById.get(unitId);
+      if (!targetUnit) {
+        this.hideTrackedTargetVisual(visual);
+        continue;
+      }
+
+      const targetVisible = this.isUnitVisible(targetUnit, viewBounds);
+      visual.marker.scale.set(markerScale, markerScale, 1);
+      visual.edgeIndicator.scale.set(edgeIndicatorScale, edgeIndicatorScale, 1);
+
+      if (targetVisible) {
+        visual.marker.visible = true;
+        visual.marker.position.set(targetUnit.x, -targetUnit.y, 8);
+        visual.edgeIndicator.visible = false;
+
+        if (sourceVisible && sourceUnit && sourceUnit.unitId !== targetUnit.unitId) {
+          const trackedLine = this.buildTrackedLinePoints(sourceUnit, targetUnit, worldUnitsPerPixel);
+          if (trackedLine) {
+            visual.line.geometry.setFromPoints([
+              new THREE.Vector3(trackedLine.startX, -trackedLine.startY, 7),
+              new THREE.Vector3(trackedLine.endX, -trackedLine.endY, 7),
+            ]);
+            visual.line.visible = true;
+          } else {
+            visual.line.visible = false;
+          }
+        } else {
+          visual.line.visible = false;
+        }
+
+        continue;
+      }
+
+      visual.marker.visible = false;
+      visual.line.visible = false;
+
+      const edgePoint = getViewEdgeIntersection(rayAnchor, { x: targetUnit.x, y: targetUnit.y }, viewBounds);
+      if (!edgePoint) {
+        visual.edgeIndicator.visible = false;
+        continue;
+      }
+
+      visual.edgeIndicator.visible = true;
+      visual.edgeIndicator.position.set(edgePoint.x, -edgePoint.y, 8);
+    }
+  }
+
+  private buildTrackedLinePoints(sourceUnit: NormalizedUnit, targetUnit: NormalizedUnit, worldUnitsPerPixel: number) {
+    const deltaX = targetUnit.x - sourceUnit.x;
+    const deltaY = targetUnit.y - sourceUnit.y;
+    const distance = Math.hypot(deltaX, deltaY);
+    if (distance <= 0.0001) {
+      return null;
+    }
+
+    const unitX = deltaX / distance;
+    const unitY = deltaY / distance;
+    const startOffset = Math.max(sourceUnit.renderRadius * 1.08, worldUnitsPerPixel * 12);
+    const endOffset = Math.max(targetUnit.renderRadius * 1.18, worldUnitsPerPixel * 12);
+    if (distance <= startOffset + endOffset) {
+      return null;
+    }
+
+    return {
+      startX: sourceUnit.x + unitX * startOffset,
+      startY: sourceUnit.y + unitY * startOffset,
+      endX: targetUnit.x - unitX * endOffset,
+      endY: targetUnit.y - unitY * endOffset,
+    };
+  }
+
   private updateScannerCones() {
     const activeScanners = new Map<string, {
       unit: NormalizedUnit;
@@ -813,6 +952,18 @@ export class WorldScene {
     return Math.max(unit.renderRadius, minimumPickRadius);
   }
 
+  private getViewBounds(): ViewBounds {
+    const visibleWorldWidth = (this.camera.right - this.camera.left) / this.camera.zoom;
+    const visibleWorldHeight = (this.camera.top - this.camera.bottom) / this.camera.zoom;
+
+    return {
+      minX: this.camera.position.x - visibleWorldWidth / 2,
+      maxX: this.camera.position.x + visibleWorldWidth / 2,
+      minY: -this.camera.position.y - visibleWorldHeight / 2,
+      maxY: -this.camera.position.y + visibleWorldHeight / 2,
+    };
+  }
+
   private getWorldUnitsPerPixel() {
     const width = Math.max(this.container.clientWidth, 1);
     const height = Math.max(this.container.clientHeight, 1);
@@ -826,21 +977,10 @@ export class WorldScene {
       return;
     }
 
-    const visibleWorldWidth = (this.camera.right - this.camera.left) / this.camera.zoom;
-    const visibleWorldHeight = (this.camera.top - this.camera.bottom) / this.camera.zoom;
-    const minX = this.camera.position.x - visibleWorldWidth / 2;
-    const maxX = this.camera.position.x + visibleWorldWidth / 2;
-    const minY = -this.camera.position.y - visibleWorldHeight / 2;
-    const maxY = -this.camera.position.y + visibleWorldHeight / 2;
+    const viewBounds = this.getViewBounds();
 
     const visibleUnitIds = this.renderableUnits
-      .filter((unit) => {
-        const padding = unit.renderRadius;
-        return unit.x + padding >= minX
-          && unit.x - padding <= maxX
-          && unit.y + padding >= minY
-          && unit.y - padding <= maxY;
-      })
+      .filter((unit) => this.isUnitVisible(unit, viewBounds))
       .map((unit) => unit.unitId)
       .sort();
 
@@ -887,6 +1027,17 @@ export class WorldScene {
     }
     this.navigationPointer.geometry.dispose();
     (this.navigationPointer.material as THREE.Material).dispose();
+  }
+
+  private disposeTrackedTargetVisuals() {
+    for (const visual of this.trackedTargetVisuals.values()) {
+      this.root.remove(visual.line);
+      this.root.remove(visual.marker);
+      this.root.remove(visual.edgeIndicator);
+      disposeTrackedTargetVisual(visual);
+    }
+
+    this.trackedTargetVisuals.clear();
   }
 
   private disposeBodyMeshes() {
@@ -944,6 +1095,20 @@ export class WorldScene {
     }
 
     return normalizedUnits;
+  }
+
+  private isUnitVisible(unit: NormalizedUnit, viewBounds: ViewBounds) {
+    const padding = unit.renderRadius;
+    return unit.x + padding >= viewBounds.minX
+      && unit.x - padding <= viewBounds.maxX
+      && unit.y + padding >= viewBounds.minY
+      && unit.y - padding <= viewBounds.maxY;
+  }
+
+  private hideTrackedTargetVisual(visual: TrackedTargetVisual) {
+    visual.marker.visible = false;
+    visual.line.visible = false;
+    visual.edgeIndicator.visible = false;
   }
 
   private captureLostUnitTraces(visibleUnits: NormalizedUnit[]): NormalizedUnit[] {
@@ -1106,6 +1271,20 @@ function sameNavigationTarget(left: WorldSceneNavigationTarget, right: WorldScen
   return left.x === right.x && left.y === right.y;
 }
 
+function sameTrackedUnitColors(left: Record<string, string>, right: Record<string, string>) {
+  if (left === right) {
+    return true;
+  }
+
+  const leftEntries = Object.entries(left);
+  const rightEntries = Object.entries(right);
+  if (leftEntries.length !== rightEntries.length) {
+    return false;
+  }
+
+  return leftEntries.every(([unitId, color]) => right[unitId] === color);
+}
+
 function sameRenderableUnits(left: NormalizedUnit[], right: NormalizedUnit[]) {
   if (left === right) {
     return true;
@@ -1160,6 +1339,44 @@ function buildRenderableUnitSignature(unit: RawRenderableUnit | NormalizedUnit, 
     unit.teamName ?? '',
     isTrace ? 1 : 0,
   ].join('|');
+}
+
+function getViewEdgeIntersection(
+  anchor: { x: number; y: number },
+  target: { x: number; y: number },
+  viewBounds: ViewBounds,
+) {
+  const deltaX = target.x - anchor.x;
+  const deltaY = target.y - anchor.y;
+  if (Math.abs(deltaX) <= 0.0001 && Math.abs(deltaY) <= 0.0001) {
+    return null;
+  }
+
+  const intersectionFactors: number[] = [];
+  if (deltaX > 0) {
+    intersectionFactors.push((viewBounds.maxX - anchor.x) / deltaX);
+  } else if (deltaX < 0) {
+    intersectionFactors.push((viewBounds.minX - anchor.x) / deltaX);
+  }
+
+  if (deltaY > 0) {
+    intersectionFactors.push((viewBounds.maxY - anchor.y) / deltaY);
+  } else if (deltaY < 0) {
+    intersectionFactors.push((viewBounds.minY - anchor.y) / deltaY);
+  }
+
+  const positiveFactor = intersectionFactors
+    .filter((factor) => Number.isFinite(factor) && factor >= 0)
+    .sort((left, right) => left - right)[0];
+
+  if (positiveFactor === undefined) {
+    return null;
+  }
+
+  return {
+    x: THREE.MathUtils.clamp(anchor.x + deltaX * positiveFactor, viewBounds.minX, viewBounds.maxX),
+    y: THREE.MathUtils.clamp(anchor.y + deltaY * positiveFactor, viewBounds.minY, viewBounds.maxY),
+  };
 }
 
 function getControllableAliveState(

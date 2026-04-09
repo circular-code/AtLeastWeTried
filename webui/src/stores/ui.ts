@@ -8,6 +8,16 @@ const DEBUG_LOG_OPEN_STORAGE_KEY = 'flattiverse.debugLog.open';
 const DEBUG_LOG_INGAME_STORAGE_KEY = 'flattiverse.debugLog.ingame';
 const DEBUG_LOG_SETTINGS_STORAGE_KEY = 'flattiverse.debugLog.settings';
 const GAMEPLAY_DOCK_SETTINGS_STORAGE_KEY = 'flattiverse.gameplayDock.settings';
+const TRACKED_UNIT_COLOR_PALETTE = [
+  '#6ef2ff',
+  '#ff8a5b',
+  '#ffe66d',
+  '#83ffb3',
+  '#ff78c5',
+  '#9fa8ff',
+  '#f9a8ff',
+  '#7fffd4',
+];
 
 type StoredDebugLogSettings = {
   limit?: number;
@@ -38,6 +48,7 @@ export const useUiStore = defineStore('ui', {
     tacticalMode: readStoredTacticalMode(storedDockSettings),
     lastSelection: null as WorldSceneSelection | null,
     visibleUnitIds: [] as string[],
+    trackedUnitColors: {} as Record<string, string>,
     isManagerPopupOpen: false,
     isChatPopupOpen: false,
     isActivityHistoryOpen: false,
@@ -115,6 +126,23 @@ export const useUiStore = defineStore('ui', {
     },
     setVisibleUnitIds(unitIds: string[]) {
       this.visibleUnitIds = unitIds;
+    },
+    toggleTrackedUnit(unitId: string) {
+      if (!unitId) {
+        return;
+      }
+
+      if (this.trackedUnitColors[unitId]) {
+        const nextTrackedUnitColors = { ...this.trackedUnitColors };
+        delete nextTrackedUnitColors[unitId];
+        this.trackedUnitColors = nextTrackedUnitColors;
+        return;
+      }
+
+      this.trackedUnitColors = {
+        ...this.trackedUnitColors,
+        [unitId]: pickTrackedUnitColor(Object.values(this.trackedUnitColors)),
+      };
     },
     closeAllPopups() {
       this.isManagerPopupOpen = false;
@@ -329,6 +357,15 @@ function readStoredTacticalMode(settings: StoredGameplayDockSettings): TacticalM
     default:
       return 'off';
   }
+}
+
+function pickTrackedUnitColor(usedColors: string[]) {
+  const availableColors = TRACKED_UNIT_COLOR_PALETTE.filter((color) => !usedColors.includes(color));
+  if (availableColors.length > 0) {
+    return availableColors[Math.floor(Math.random() * availableColors.length)] ?? TRACKED_UNIT_COLOR_PALETTE[0];
+  }
+
+  return TRACKED_UNIT_COLOR_PALETTE[Math.floor(Math.random() * TRACKED_UNIT_COLOR_PALETTE.length)] ?? '#6ef2ff';
 }
 
 function buildDebugSearchableText(messageType: string, payload: string) {

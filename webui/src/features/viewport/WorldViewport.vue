@@ -17,6 +17,7 @@ const snapshot = computed(() => gameStore.snapshot);
 const ownerOverlay = computed(() => gameStore.ownerOverlay);
 const selectedControllableId = computed(() => uiStore.selectedControllableId || (gameStore.ownedControllables[0]?.controllableId ?? ''));
 const navigationTarget = computed(() => selectedControllableId.value ? readNavigationTarget(ownerOverlay.value, selectedControllableId.value) : null);
+const trackedUnitColors = computed(() => uiStore.trackedUnitColors);
 
 const clusterLabel = computed(() => {
   if (!snapshot.value || snapshot.value.clusters.length === 0) {
@@ -79,6 +80,7 @@ onMounted(() => {
   });
 
   worldScene.setSnapshot(snapshot.value, ownerOverlay.value, selectedControllableId.value, navigationTarget.value);
+  worldScene.setTrackedUnits(trackedUnitColors.value);
 });
 
 watch(
@@ -86,6 +88,14 @@ watch(
   ([nextSnapshot, nextOwnerOverlay, nextSelectedControllableId, nextNavigationTarget]) => {
     worldScene?.setSnapshot(nextSnapshot, nextOwnerOverlay, nextSelectedControllableId, nextNavigationTarget);
   },
+);
+
+watch(
+  trackedUnitColors,
+  (nextTrackedUnitColors) => {
+    worldScene?.setTrackedUnits(nextTrackedUnitColors);
+  },
+  { deep: true },
 );
 
 onBeforeUnmount(() => {
