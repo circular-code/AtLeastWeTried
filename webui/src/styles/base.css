@@ -1802,6 +1802,20 @@ h2 {
   justify-items: center;
 }
 
+.selection-scan-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+}
+
+.selection-scan-status {
+  color: var(--secondary);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
 .selection-detail-groups {
   display: grid;
   gap: 0.45rem;

@@ -25,7 +25,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     private bool _connected;
     private string _galaxyUrl;
     private readonly MappingService _mappingService;
-    private readonly ScanningService _scanningService = new();
+    private readonly ScanningService _scanningService;
     private readonly ManeuveringService _maneuveringService = new();
 
     public string Id => _id;
@@ -45,6 +45,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         _galaxyUrl = galaxyUrl;
         _logger = logger;
         _mappingService = new MappingService(BuildMappingScopeContext);
+        _scanningService = new ScanningService(ResolveScanTarget);
     }
 
     public async Task ConnectAsync()
@@ -490,6 +491,16 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                         : ScanningService.ScannerMode.Forward;
                     await _scanningService.ApplyModeAsync(classic, scanMode);
                 }
+                else if (mode == "target")
+                {
+                    var targetUnitId = payload?.TryGetProperty("targetId", out var targetEl) == true
+                        ? targetEl.GetString()
+                        : null;
+                    if (string.IsNullOrWhiteSpace(targetUnitId))
+                        return Rejected(commandId, "missing_target", "targetId is required for scanner target mode.");
+
+                    await _scanningService.ApplyTargetModeAsync(classic, targetUnitId);
+                }
                 break;
             case "ShotFabricator":
             case "shotFabricator":
@@ -563,6 +574,39 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             return false;
 
         return int.TryParse(controllableId[(markerIndex + 2)..], out localControllableId);
+    }
+
+    private ScanningService.TargetSnapshot? ResolveScanTarget(string targetUnitId)
+    {
+        var galaxy = Galaxy;
+        if (galaxy is null || string.IsNullOrWhiteSpace(targetUnitId))
+            return null;
+
+        if (TryParseControllableLocalId(targetUnitId, out var localControllableId))
+        {
+            var controllable = galaxy.Controllables.FirstOrDefault(item => item is not null && item.Id == localControllableId);
+            if (controllable is not null)
+            {
+                return new ScanningService.TargetSnapshot(
+                    controllable.Position.X,
+                    controllable.Position.Y,
+                    controllable.Movement.X,
+                    controllable.Movement.Y,
+                    HasVelocity: true);
+            }
+        }
+
+        if (_mappingService.TryGetUnitSnapshot(targetUnitId, out var unitSnapshot) && unitSnapshot is not null)
+        {
+            return new ScanningService.TargetSnapshot(
+                unitSnapshot.X,
+                unitSnapshot.Y,
+                VelocityX: 0f,
+                VelocityY: 0f,
+                HasVelocity: false);
+        }
+
+        return null;
     }
 
     private MappingService.MappingScopeContext? BuildMappingScopeContext()

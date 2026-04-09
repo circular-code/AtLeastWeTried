@@ -1,13 +1,33 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { useGateway } from '../../composables/useGateway';
 import GaugeMeter from '../../shared/GaugeMeter.vue';
 import { useGameStore } from '../../stores/game';
 import { useUiStore } from '../../stores/ui';
 
+const gateway = useGateway();
 const gameStore = useGameStore();
 const uiStore = useUiStore();
 
 const selectionEntry = computed(() => gameStore.selectionEntry(uiStore.lastSelection));
+const activeControllableId = computed(() => uiStore.selectedControllableId || (gameStore.ownedControllables[0]?.controllableId ?? ''));
+const scannerMode = computed(() => gameStore.scannerModeFor(activeControllableId.value));
+const scannerTargetId = computed(() => gameStore.scannerTargetFor(activeControllableId.value) ?? '');
+const canInitiateTargetedScan = computed(() => {
+  if (!selectionEntry.value || !activeControllableId.value) {
+    return false;
+  }
+
+  return selectionEntry.value.id !== activeControllableId.value;
+});
+
+function initiateTargetedScan() {
+  if (!selectionEntry.value || !activeControllableId.value) {
+    return;
+  }
+
+  gateway.initiateTargetedScan(activeControllableId.value, selectionEntry.value.id);
+}
 </script>
 
 <template>
@@ -32,6 +52,13 @@ const selectionEntry = computed(() => gameStore.selectionEntry(uiStore.lastSelec
 
       <div class="selection-unit-gauges">
         <GaugeMeter v-for="meter in selectionEntry.meters" :key="meter.label" :meter="meter" />
+      </div>
+
+      <div class="selection-scan-actions">
+        <button class="button-secondary button-compact" type="button" :disabled="!canInitiateTargetedScan" @click="initiateTargetedScan">
+          Initiate Scan
+        </button>
+        <span v-if="scannerMode === 'targeted' && scannerTargetId === selectionEntry.id" class="selection-scan-status">Target scan active</span>
       </div>
 
       <section v-for="group in selectionEntry.detailGroups" :key="group.title" class="selection-detail-group" :class="`tone-${group.tone}`">

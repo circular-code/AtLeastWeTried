@@ -21,6 +21,7 @@ public sealed class UnitSnapshotDto
     public string UnitId { get; set; } = "";
     public int ClusterId { get; set; }
     public string Kind { get; set; } = "";
+    public bool FullStateKnown { get; set; }
     public bool IsStatic { get; set; }
     public bool IsSeen { get; set; } = true;
     public uint LastSeenTick { get; set; }
@@ -34,6 +35,10 @@ public sealed class UnitSnapshotDto
     public float? SunNeutrinos { get; set; }
     public float? SunHeat { get; set; }
     public float? SunDrain { get; set; }
+    public float? PlanetMetal { get; set; }
+    public float? PlanetCarbon { get; set; }
+    public float? PlanetHydrogen { get; set; }
+    public float? PlanetSilicon { get; set; }
 }
 
 public sealed class PublicControllableSnapshotDto

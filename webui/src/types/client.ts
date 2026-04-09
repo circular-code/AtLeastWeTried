@@ -8,7 +8,7 @@ export type OverlayBadgeTone = 'accent' | 'ok' | 'muted' | 'warn';
 
 export type OverlayMeterTone = 'energy' | 'hull' | 'shield';
 
-export type ScannerMode = '360' | 'forward' | 'off';
+export type ScannerMode = '360' | 'forward' | 'targeted' | 'off';
 
 export type TacticalMode = 'enemy' | 'target' | 'off';
 

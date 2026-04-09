@@ -104,6 +104,35 @@ public sealed class MappingService : IConnectorEventHandler
     }
 
     /// <summary>
+    /// Try to resolve one unit snapshot in the current mapping scope.
+    /// </summary>
+    public bool TryGetUnitSnapshot(string unitId, out UnitSnapshotDto? snapshot)
+    {
+        snapshot = null;
+        if (string.IsNullOrWhiteSpace(unitId))
+            return false;
+
+        EnsurePersistenceConfigured();
+        var scopeKey = ResolveScopeKey();
+        if (scopeKey is null)
+            return false;
+
+        lock (_stateLock)
+        {
+            EnsureGalaxyLoadedUnsafe(scopeKey.Value.GalaxyId);
+
+            if (!_scopeStates.TryGetValue(scopeKey.Value, out var scopeState))
+                return false;
+
+            if (!scopeState.Units.TryGetValue(unitId, out var unit))
+                return false;
+
+            snapshot = CloneUnitSnapshot(unit);
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Collect all pending world deltas for this session's current scope.
     /// Called by TickService on each tick.
     /// </summary>
@@ -171,7 +200,8 @@ public sealed class MappingService : IConnectorEventHandler
             EnsureGalaxyLoadedUnsafe(scopeKey.Value.GalaxyId);
 
             var scopeState = GetOrCreateScopeStateUnsafe(scopeKey.Value);
-            var alreadyKnown = scopeState.Units.ContainsKey(dto.UnitId);
+            var alreadyKnown = scopeState.Units.TryGetValue(dto.UnitId, out var existing);
+            MergeKnownDetailState(dto, existing);
 
             scopeState.Units[dto.UnitId] = CloneUnitSnapshot(dto);
 
@@ -214,6 +244,8 @@ public sealed class MappingService : IConnectorEventHandler
             EnsureGalaxyLoadedUnsafe(scopeKey.Value.GalaxyId);
 
             var scopeState = GetOrCreateScopeStateUnsafe(scopeKey.Value);
+            scopeState.Units.TryGetValue(dto.UnitId, out var existing);
+            MergeKnownDetailState(dto, existing);
             scopeState.Units[dto.UnitId] = CloneUnitSnapshot(dto);
 
             if (isStatic)
@@ -316,6 +348,7 @@ public sealed class MappingService : IConnectorEventHandler
             UnitId = unit.Name,
             ClusterId = clusterId,
             Kind = MapUnitKind(unit.Kind),
+            FullStateKnown = unit.FullStateKnown,
             X = unit.Position.X,
             Y = unit.Position.Y,
             Angle = unit.Angle,
@@ -323,13 +356,21 @@ public sealed class MappingService : IConnectorEventHandler
             TeamName = unit.Team?.Name
         };
 
-        if (unit is Sun sun)
+        if (unit.FullStateKnown && unit is Sun sun)
         {
             dto.SunEnergy = sun.Energy;
             dto.SunIons = sun.Ions;
             dto.SunNeutrinos = sun.Neutrinos;
             dto.SunHeat = sun.Heat;
             dto.SunDrain = sun.Drain;
+        }
+
+        if (unit.FullStateKnown && unit is Planet planet)
+        {
+            dto.PlanetMetal = planet.Metal;
+            dto.PlanetCarbon = planet.Carbon;
+            dto.PlanetHydrogen = planet.Hydrogen;
+            dto.PlanetSilicon = planet.Silicon;
         }
 
         return dto;
@@ -375,6 +416,7 @@ public sealed class MappingService : IConnectorEventHandler
             { "unitId", unit.UnitId },
             { "clusterId", unit.ClusterId },
             { "kind", unit.Kind },
+            { "fullStateKnown", unit.FullStateKnown },
             { "isStatic", unit.IsStatic },
             { "isSeen", unit.IsSeen },
             { "lastSeenTick", unit.LastSeenTick },
@@ -402,7 +444,38 @@ public sealed class MappingService : IConnectorEventHandler
         if (unit.SunDrain.HasValue)
             changes["sunDrain"] = unit.SunDrain;
 
+        if (unit.PlanetMetal.HasValue)
+            changes["planetMetal"] = unit.PlanetMetal;
+
+        if (unit.PlanetCarbon.HasValue)
+            changes["planetCarbon"] = unit.PlanetCarbon;
+
+        if (unit.PlanetHydrogen.HasValue)
+            changes["planetHydrogen"] = unit.PlanetHydrogen;
+
+        if (unit.PlanetSilicon.HasValue)
+            changes["planetSilicon"] = unit.PlanetSilicon;
+
         return changes;
+    }
+
+    private static void MergeKnownDetailState(UnitSnapshotDto current, UnitSnapshotDto? previous)
+    {
+        if (previous is null)
+            return;
+
+        if (current.FullStateKnown)
+            return;
+
+        current.SunEnergy = previous.SunEnergy;
+        current.SunIons = previous.SunIons;
+        current.SunNeutrinos = previous.SunNeutrinos;
+        current.SunHeat = previous.SunHeat;
+        current.SunDrain = previous.SunDrain;
+        current.PlanetMetal = previous.PlanetMetal;
+        current.PlanetCarbon = previous.PlanetCarbon;
+        current.PlanetHydrogen = previous.PlanetHydrogen;
+        current.PlanetSilicon = previous.PlanetSilicon;
     }
 
     private static bool IsStaticUnit(Unit unit)
@@ -651,6 +724,7 @@ public sealed class MappingService : IConnectorEventHandler
             UnitId = source.UnitId,
             ClusterId = source.ClusterId,
             Kind = source.Kind,
+            FullStateKnown = source.FullStateKnown,
             IsStatic = source.IsStatic,
             IsSeen = source.IsSeen,
             LastSeenTick = source.LastSeenTick,
@@ -663,7 +737,11 @@ public sealed class MappingService : IConnectorEventHandler
             SunIons = source.SunIons,
             SunNeutrinos = source.SunNeutrinos,
             SunHeat = source.SunHeat,
-            SunDrain = source.SunDrain
+            SunDrain = source.SunDrain,
+            PlanetMetal = source.PlanetMetal,
+            PlanetCarbon = source.PlanetCarbon,
+            PlanetHydrogen = source.PlanetHydrogen,
+            PlanetSilicon = source.PlanetSilicon
         };
     }
 

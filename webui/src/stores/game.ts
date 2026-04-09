@@ -122,6 +122,15 @@ export const useGameStore = defineStore('game', {
       const overlayState = objectValue(state.overlayById.get(controllableId)) ?? {};
       return deriveScannerMode(resolveScannerState(overlayState.scanner));
     },
+    scannerTargetFor: (state) => (controllableId: string): string | undefined => {
+      if (!controllableId) {
+        return undefined;
+      }
+
+      const overlayState = objectValue(state.overlayById.get(controllableId)) ?? {};
+      const scannerState = resolveScannerState(overlayState.scanner);
+      return optionalStringValue(scannerState?.targetUnitId);
+    },
     recentActivity: (state) => (lifetimeMs: number) => {
       const now = Date.now();
       return state.activityEntries.filter((entry) => now - entry.createdAt < lifetimeMs);
@@ -270,6 +279,7 @@ function cloneSnapshot(source: GalaxySnapshotDto): GalaxySnapshotDto {
     clusters: source.clusters.map((cluster) => ({ ...cluster })),
     units: source.units.map((unit) => ({
       ...unit,
+      fullStateKnown: booleanValue(unit.fullStateKnown, false),
       isStatic: booleanValue(unit.isStatic, false),
       isSeen: booleanValue(unit.isSeen, true),
       lastSeenTick: numberValue(unit.lastSeenTick, 0),
@@ -290,6 +300,7 @@ function applyWorldDeltaToSnapshot(current: GalaxySnapshotDto, message: WorldDel
 
       unit.clusterId = numberValue(event.changes.clusterId, unit.clusterId);
       unit.kind = stringValue(event.changes.kind, unit.kind);
+      unit.fullStateKnown = booleanValue(event.changes.fullStateKnown, booleanValue(unit.fullStateKnown, false));
       unit.isStatic = booleanValue(event.changes.isStatic, unit.isStatic);
       unit.isSeen = booleanValue(event.changes.isSeen, unit.isSeen);
       unit.lastSeenTick = numberValue(event.changes.lastSeenTick, unit.lastSeenTick);
@@ -303,6 +314,10 @@ function applyWorldDeltaToSnapshot(current: GalaxySnapshotDto, message: WorldDel
       applyOptionalUnitMetric(unit, 'sunNeutrinos', event.changes.sunNeutrinos);
       applyOptionalUnitMetric(unit, 'sunHeat', event.changes.sunHeat);
       applyOptionalUnitMetric(unit, 'sunDrain', event.changes.sunDrain);
+      applyOptionalUnitMetric(unit, 'planetMetal', event.changes.planetMetal);
+      applyOptionalUnitMetric(unit, 'planetCarbon', event.changes.planetCarbon);
+      applyOptionalUnitMetric(unit, 'planetHydrogen', event.changes.planetHydrogen);
+      applyOptionalUnitMetric(unit, 'planetSilicon', event.changes.planetSilicon);
       continue;
     }
 
@@ -313,6 +328,7 @@ function applyWorldDeltaToSnapshot(current: GalaxySnapshotDto, message: WorldDel
           unitId: event.entityId,
           clusterId: numberValue(event.changes.clusterId, 1),
           kind: stringValue(event.changes.kind, 'unknown'),
+          fullStateKnown: booleanValue(event.changes.fullStateKnown, false),
           isStatic: booleanValue(event.changes.isStatic, false),
           isSeen: booleanValue(event.changes.isSeen, true),
           lastSeenTick: numberValue(event.changes.lastSeenTick, 0),
@@ -326,6 +342,10 @@ function applyWorldDeltaToSnapshot(current: GalaxySnapshotDto, message: WorldDel
           sunNeutrinos: optionalNumberValue(event.changes.sunNeutrinos),
           sunHeat: optionalNumberValue(event.changes.sunHeat),
           sunDrain: optionalNumberValue(event.changes.sunDrain),
+          planetMetal: optionalNumberValue(event.changes.planetMetal),
+          planetCarbon: optionalNumberValue(event.changes.planetCarbon),
+          planetHydrogen: optionalNumberValue(event.changes.planetHydrogen),
+          planetSilicon: optionalNumberValue(event.changes.planetSilicon),
         },
       ];
       continue;
@@ -387,7 +407,7 @@ function consumePendingCommand(store: GameState, commandId: string) {
 
 function applyOptionalUnitMetric(
   unit: UnitSnapshotDto,
-  key: 'sunEnergy' | 'sunIons' | 'sunNeutrinos' | 'sunHeat' | 'sunDrain',
+  key: 'sunEnergy' | 'sunIons' | 'sunNeutrinos' | 'sunHeat' | 'sunDrain' | 'planetMetal' | 'planetCarbon' | 'planetHydrogen' | 'planetSilicon',
   value: unknown,
 ) {
   if (value === undefined) {
@@ -491,6 +511,7 @@ function buildClickedUnitEntry(
   const alive = getControllableAliveState(publicControllable, overlayState);
   const active = booleanValue(overlayState.active, false);
   const scannerActive = booleanValue(scannerState?.active, false);
+  const fullStateKnown = booleanValue(publicUnit?.fullStateKnown, false);
   const speed = magnitude(numberValue(movementState?.x, 0), numberValue(movementState?.y, 0));
   const engineMax = numberValue(engineState?.maximum, 0);
   const engineLoad = engineMax > 0
@@ -516,6 +537,10 @@ function buildClickedUnitEntry(
 
   if (hasRecordKey(overlayState, 'scanner') || scannerActive) {
     badges.push({ label: scannerActive ? `scan ${stringValue(scannerState?.mode, '')}`.trim() : 'scan off', tone: scannerActive ? 'accent' : 'muted' });
+  }
+
+  if (publicUnit) {
+    badges.push({ label: fullStateKnown ? 'full scan' : 'partial scan', tone: fullStateKnown ? 'ok' : 'muted' });
   }
 
   const stats: OverlayStat[] = [
@@ -564,33 +589,52 @@ function buildClickedUnitEntry(
 }
 
 function buildDetailGroups(unit: UnitSnapshotDto | undefined | null) {
-  if (!hasSunTelemetry(unit)) {
-    return [];
+  const groups = [] as Array<{ title: string; tone: 'solar' | 'hazard'; stats: OverlayStat[] }>;
+
+  if (hasSunTelemetry(unit)) {
+    groups.push(
+      {
+        title: 'Stellar Output',
+        tone: 'solar' as const,
+        stats: [
+          { label: 'Photon Flux', value: formatMetric(unit?.sunEnergy ?? 0) },
+          { label: 'Plasma Wind', value: formatMetric(unit?.sunIons ?? 0) },
+          { label: 'Neutrino Flux', value: formatMetric(unit?.sunNeutrinos ?? 0) },
+        ],
+      },
+      {
+        title: 'Environmental Hazard',
+        tone: 'hazard' as const,
+        stats: [
+          { label: 'Heat', value: `${formatMetric(unit?.sunHeat ?? 0)} · ${formatMetric((unit?.sunHeat ?? 0) * 15)} energy/tick` },
+          { label: 'Radiation', value: `${formatMetric(unit?.sunDrain ?? 0)} · ${formatMetric((unit?.sunDrain ?? 0) * 0.125)} hull/tick` },
+        ],
+      },
+    );
   }
 
-  return [
-    {
-      title: 'Stellar Output',
+  if (hasPlanetTelemetry(unit)) {
+    groups.push({
+      title: 'Planetary Composition',
       tone: 'solar' as const,
       stats: [
-        { label: 'Photon Flux', value: formatMetric(unit?.sunEnergy ?? 0) },
-        { label: 'Plasma Wind', value: formatMetric(unit?.sunIons ?? 0) },
-        { label: 'Neutrino Flux', value: formatMetric(unit?.sunNeutrinos ?? 0) },
+        { label: 'Metal', value: formatMetric(unit?.planetMetal ?? 0) },
+        { label: 'Carbon', value: formatMetric(unit?.planetCarbon ?? 0) },
+        { label: 'Hydrogen', value: formatMetric(unit?.planetHydrogen ?? 0) },
+        { label: 'Silicon', value: formatMetric(unit?.planetSilicon ?? 0) },
       ],
-    },
-    {
-      title: 'Environmental Hazard',
-      tone: 'hazard' as const,
-      stats: [
-        { label: 'Heat', value: `${formatMetric(unit?.sunHeat ?? 0)} · ${formatMetric((unit?.sunHeat ?? 0) * 15)} energy/tick` },
-        { label: 'Radiation', value: `${formatMetric(unit?.sunDrain ?? 0)} · ${formatMetric((unit?.sunDrain ?? 0) * 0.125)} hull/tick` },
-      ],
-    },
-  ];
+    });
+  }
+
+  return groups;
 }
 
 function hasSunTelemetry(unit: UnitSnapshotDto | null | undefined) {
   return !!unit && [unit.sunEnergy, unit.sunIons, unit.sunNeutrinos, unit.sunHeat, unit.sunDrain].some((value) => typeof value === 'number');
+}
+
+function hasPlanetTelemetry(unit: UnitSnapshotDto | null | undefined) {
+  return !!unit && [unit.planetMetal, unit.planetCarbon, unit.planetHydrogen, unit.planetSilicon].some((value) => typeof value === 'number');
 }
 
 function deriveScannerMode(scannerState: Record<string, unknown> | undefined): ScannerMode {
@@ -605,6 +649,10 @@ function deriveScannerMode(scannerState: Record<string, unknown> | undefined): S
 
   if (explicitMode === 'forward') {
     return 'forward';
+  }
+
+  if (explicitMode === 'target' || explicitMode === 'targeted') {
+    return 'targeted';
   }
 
   const targetWidth = numberValue(scannerState.targetWidth, numberValue(scannerState.currentWidth, 0));

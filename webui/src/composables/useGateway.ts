@@ -309,6 +309,10 @@ function createGatewayApi() {
       return;
     }
 
+    if (mode === 'targeted') {
+      return;
+    }
+
     const envelope = mode === 'off'
       ? buildSetSubsystemModeCommand(controllableId, 'scanner', 'off')
       : buildSetSubsystemModeCommand(controllableId, 'scanner', 'set', mode === '360' ? 360 : 90);
@@ -316,6 +320,20 @@ function createGatewayApi() {
     gameStore.trackCommand(envelope.commandId, {
       label: `Scanner ${mode}`,
       subject: gameStore.getControllableLabel(controllableId),
+    });
+
+    client.send(envelope.message);
+  }
+
+  function initiateTargetedScan(controllableId: string, targetId: string) {
+    if (!controllableId || !targetId) {
+      return;
+    }
+
+    const envelope = buildSetSubsystemModeCommand(controllableId, 'scanner', 'target', undefined, targetId);
+    gameStore.trackCommand(envelope.commandId, {
+      label: 'Initiate target scan',
+      subject: `${gameStore.getControllableLabel(controllableId)} -> ${truncateText(targetId, 40)}`,
     });
 
     client.send(envelope.message);
@@ -390,6 +408,7 @@ function createGatewayApi() {
     setEngine,
     fireWeapon,
     setScannerMode,
+    initiateTargetedScan,
     setTacticalMode,
     setNavigationTarget,
     clearNavigationTarget,

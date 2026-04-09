@@ -262,6 +262,7 @@ export interface UnitSnapshotDto {
   unitId: string;
   clusterId: number;
   kind: string;
+  fullStateKnown?: boolean;
   isStatic: boolean;
   isSeen: boolean;
   lastSeenTick: number;
@@ -275,6 +276,10 @@ export interface UnitSnapshotDto {
   sunNeutrinos?: number | null;
   sunHeat?: number | null;
   sunDrain?: number | null;
+  planetMetal?: number | null;
+  planetCarbon?: number | null;
+  planetHydrogen?: number | null;
+  planetSilicon?: number | null;
 }
 
 export interface WorldDeltaDto {
