@@ -257,6 +257,26 @@ h2 {
   width: min(100%, 320px);
 }
 
+.overlay-shell.is-debug-log-ingame-active.has-multiple-owned-ships {
+  padding-right: calc(clamp(320px, 20vw, 420px) + 1.2rem);
+}
+
+.overlay-shell.is-debug-log-ingame-active.has-multiple-owned-ships .overlay-top {
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr) minmax(240px, 300px);
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: 'left . right';
+}
+
+.overlay-shell.is-debug-log-ingame-active.has-multiple-owned-ships .overlay-top:not(.overlay-top--has-selection) {
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  grid-template-areas: 'left .';
+}
+
+.overlay-shell.is-debug-log-ingame-active.has-multiple-owned-ships .overlay-column-right {
+  justify-items: end;
+  align-self: start;
+}
+
 .overlay-column-right > .panel {
   width: min(100%, 300px);
   max-height: 84vh;

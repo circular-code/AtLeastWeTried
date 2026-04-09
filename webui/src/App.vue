@@ -22,6 +22,7 @@ const uiStore = useUiStore();
 const activeControllableId = computed(() => uiStore.selectedControllableId || (gameStore.ownedControllables[0]?.controllableId ?? ''));
 
 const hasSelectionDetails = computed(() => !!gameStore.selectionEntry(uiStore.lastSelection));
+const hasMultipleOwnedShips = computed(() => gameStore.ownedControllables.length > 1);
 
 function handleWindowKeydown(event: KeyboardEvent) {
   if (isEditableTarget(event.target)) {
@@ -75,7 +76,15 @@ onBeforeUnmount(() => {
     <section class="scene-stage">
       <WorldViewport />
 
-      <div :class="['overlay-shell', { 'is-debug-log-ingame-active': uiStore.isDebugLogOpen && uiStore.isDebugLogIngame }]">
+      <div
+        :class="[
+          'overlay-shell',
+          {
+            'is-debug-log-ingame-active': uiStore.isDebugLogOpen && uiStore.isDebugLogIngame,
+            'has-multiple-owned-ships': hasMultipleOwnedShips,
+          },
+        ]"
+      >
         <div class="overlay-top" :class="{ 'overlay-top--has-selection': hasSelectionDetails }">
           <OverlayPanel />
           <SelectionPanel v-if="hasSelectionDetails" />

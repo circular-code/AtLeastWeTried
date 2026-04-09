@@ -5,6 +5,7 @@ export const DEBUG_SUN_BOUNDS_X = 5000;
 export const DEBUG_SUN_BOUNDS_Y = 2600;
 export const MIN_PICK_RADIUS_PX = 12;
 export const PICK_RADIUS_PADDING_PX = 4;
+export const TRACE_OPACITY_SCALE = 0.5;
 
 export const UNIT_KIND_CODE: Record<string, number> = {
   default: 0,
