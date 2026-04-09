@@ -6,6 +6,7 @@ import { type UnitVisual, normalizeKind, getRenderRadius, getFallbackRenderRadiu
 import { type ScannerConeVisual, createScannerConeMesh } from './scannerCone';
 import { createSelectionRing } from './selectionRing';
 import { createNavigationMarker } from './navigationMarker';
+import { createNavigationPointer } from './navigationPointer';
 import { createGrid, createGlowField } from './grid';
 
 export type WorldSceneSelection = {
@@ -19,6 +20,15 @@ export type WorldSceneSelection = {
 type WorldSceneNavigationTarget = {
   x: number;
   y: number;
+} | null;
+
+type WorldSceneNavigationPointer = {
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+  vectorX: number;
+  vectorY: number;
 } | null;
 
 type WorldSceneOptions = {
@@ -43,6 +53,7 @@ export class WorldScene {
   private bodyOpacityAttribute: THREE.InstancedBufferAttribute;
   private readonly selectedRing: THREE.LineLoop;
   private readonly navigationMarker: THREE.Group;
+  private readonly navigationPointer: THREE.LineSegments;
   private readonly unitBodyMaterial: UnitShaderMaterial;
   private readonly resizeObserver: ResizeObserver;
   private readonly unitVisuals: Map<string, UnitVisual>;
@@ -96,6 +107,7 @@ export class WorldScene {
     this.bodyOpacityAttribute = unitBodyMesh.opacityAttribute;
     this.selectedRing = createSelectionRing();
     this.navigationMarker = createNavigationMarker();
+    this.navigationPointer = createNavigationPointer();
     this.scannerCones = new Map();
     this.scene.add(this.grid);
     this.scene.add(this.bodyMesh);
@@ -103,6 +115,7 @@ export class WorldScene {
     this.scene.add(createGlowField());
     this.root.add(this.selectedRing);
     this.root.add(this.navigationMarker);
+    this.root.add(this.navigationPointer);
 
     this.snapshot = null;
     this.ownerOverlay = {};
@@ -392,6 +405,7 @@ export class WorldScene {
     this.bodyOpacityAttribute.needsUpdate = true;
     this.updateSelectionRing();
     this.updateNavigationMarker();
+    this.updateNavigationPointer();
     this.updateScannerCones(units);
   }
 
@@ -519,6 +533,48 @@ export class WorldScene {
     this.navigationMarker.visible = true;
     this.navigationMarker.position.set(this.selectedNavigationTarget.x, -this.selectedNavigationTarget.y, 0);
     this.navigationMarker.scale.set(markerScale, markerScale, 1);
+  }
+
+  private updateNavigationPointer() {
+    const navigationPointer = readNavigationPointer(this.ownerOverlay, this.selectedControllableId);
+    if (!navigationPointer) {
+      this.navigationPointer.visible = false;
+      return;
+    }
+
+    const vectorLength = Math.hypot(navigationPointer.vectorX, navigationPointer.vectorY);
+    if (vectorLength <= 0.0001) {
+      this.navigationPointer.visible = false;
+      return;
+    }
+
+    const selectedUnit = this.renderableUnits.find((unit) => unit.unitId === this.selectedControllableId);
+    const worldUnitsPerPixel = this.getWorldUnitsPerPixel();
+    const headSize = Math.max(10, worldUnitsPerPixel * 18);
+    const startOffset = Math.max(selectedUnit?.renderRadius ?? 0, worldUnitsPerPixel * 12);
+    const displayLength = Math.max(vectorLength, worldUnitsPerPixel * 56);
+    const unitX = navigationPointer.vectorX / vectorLength;
+    const unitY = navigationPointer.vectorY / vectorLength;
+    const normalX = -unitY;
+    const normalY = unitX;
+    const startX = navigationPointer.startX + unitX * startOffset;
+    const startY = navigationPointer.startY + unitY * startOffset;
+    const endX = navigationPointer.startX + unitX * (startOffset + displayLength);
+    const endY = navigationPointer.startY + unitY * (startOffset + displayLength);
+    const clampedHeadSize = Math.min(headSize, displayLength * 0.45);
+    const headBaseX = endX - unitX * clampedHeadSize;
+    const headBaseY = endY - unitY * clampedHeadSize;
+    const wingSize = clampedHeadSize * 0.55;
+
+    this.navigationPointer.geometry.setFromPoints([
+      new THREE.Vector3(startX, -startY, 4),
+      new THREE.Vector3(endX, -endY, 4),
+      new THREE.Vector3(headBaseX + normalX * wingSize, -headBaseY - normalY * wingSize, 4),
+      new THREE.Vector3(endX, -endY, 4),
+      new THREE.Vector3(headBaseX - normalX * wingSize, -headBaseY + normalY * wingSize, 4),
+      new THREE.Vector3(endX, -endY, 4),
+    ]);
+    this.navigationPointer.visible = true;
   }
 
   private updateScannerCones(units: NormalizedUnit[]) {
@@ -654,6 +710,8 @@ export class WorldScene {
         (child.material as THREE.Material).dispose();
       }
     }
+    this.navigationPointer.geometry.dispose();
+    (this.navigationPointer.material as THREE.Material).dispose();
   }
 
   private disposeBodyMesh() {
@@ -758,6 +816,65 @@ export function readNavigationTarget(ownerOverlay: Record<string, unknown>, cont
   return {
     x: numberValue(navigationState.targetX, 0),
     y: numberValue(navigationState.targetY, 0),
+  };
+}
+
+export function readNavigationPointer(ownerOverlay: Record<string, unknown>, controllableId: string): WorldSceneNavigationPointer {
+  const overlay = ownerOverlay[controllableId];
+  if (!overlay || typeof overlay !== 'object') {
+    return null;
+  }
+
+  const overlayState = overlay as Record<string, unknown>;
+  const navigation = overlayState.navigation;
+  if (!navigation || typeof navigation !== 'object') {
+    return null;
+  }
+
+  const navigationState = navigation as Record<string, unknown>;
+  if (navigationState.active !== true) {
+    return null;
+  }
+
+  const position = overlayState.position;
+  const positionState = position && typeof position === 'object'
+    ? position as Record<string, unknown>
+    : null;
+  const fallbackStartX = positionState ? numberValue(positionState.x, 0) : 0;
+  const fallbackStartY = positionState ? numberValue(positionState.y, 0) : 0;
+  let vectorX = numberValue(navigationState.vectorX, Number.NaN);
+  let vectorY = numberValue(navigationState.vectorY, Number.NaN);
+  let endX = numberValue(navigationState.pointerX, Number.NaN);
+  let endY = numberValue(navigationState.pointerY, Number.NaN);
+
+  if (!Number.isFinite(vectorX) || !Number.isFinite(vectorY)) {
+    const targetX = numberValue(navigationState.targetX, Number.NaN);
+    const targetY = numberValue(navigationState.targetY, Number.NaN);
+    if (Number.isFinite(targetX) && Number.isFinite(targetY)) {
+      vectorX = targetX - fallbackStartX;
+      vectorY = targetY - fallbackStartY;
+    }
+  }
+
+  if (!Number.isFinite(endX) || !Number.isFinite(endY)) {
+    if (!Number.isFinite(vectorX) || !Number.isFinite(vectorY)) {
+      return null;
+    }
+
+    endX = fallbackStartX + vectorX;
+    endY = fallbackStartY + vectorY;
+  }
+
+  const startX = positionState ? numberValue(positionState.x, endX - vectorX) : endX - vectorX;
+  const startY = positionState ? numberValue(positionState.y, endY - vectorY) : endY - vectorY;
+
+  return {
+    startX,
+    startY,
+    endX,
+    endY,
+    vectorX,
+    vectorY,
   };
 }
 

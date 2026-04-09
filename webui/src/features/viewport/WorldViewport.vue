@@ -49,7 +49,12 @@ function handleWorldSelect(selection: WorldSceneSelection) {
 
 function handleWorldNavigate(selection: WorldSceneSelection) {
   uiStore.setLastSelection(selection);
-  gateway.setNavigationTarget(selectedControllableId.value, selection.worldX, selection.worldY);
+  gateway.setNavigationTarget(
+    selectedControllableId.value,
+    selection.worldX,
+    selection.worldY,
+    uiStore.navigationThrustPercentage,
+  );
 }
 
 onMounted(() => {

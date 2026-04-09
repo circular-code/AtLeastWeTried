@@ -8,11 +8,16 @@ import type { ScannerMode, TacticalMode } from '../../types/client';
 const gateway = useGateway();
 const gameStore = useGameStore();
 const uiStore = useUiStore();
-
-const thrust = ref(0.25);
-const tacticalMode = ref<TacticalMode>('off');
-
 const activeControllableId = computed(() => uiStore.selectedControllableId || (gameStore.ownedControllables[0]?.controllableId ?? ''));
+
+const thrust = computed({
+  get: () => uiStore.navigationThrustPercentage,
+  set: (value: number) => {
+    uiStore.setNavigationThrustPercentage(value);
+    gateway.setEngine(activeControllableId.value, value);
+  },
+});
+const tacticalMode = ref<TacticalMode>('off');
 const scannerMode = computed<ScannerMode>(() => gameStore.scannerModeFor(activeControllableId.value));
 
 function setScanner(mode: ScannerMode) {
@@ -31,7 +36,6 @@ function setTactical(mode: TacticalMode) {
       <span class="dock-label">Thrust</span>
       <input v-model.number="thrust" class="dock-slider" type="range" min="0" max="1" step="0.05" />
       <span class="dock-value">{{ thrust.toFixed(2) }}</span>
-      <button class="dock-btn" type="button" @click="gateway.setEngine(activeControllableId, thrust)">Apply</button>
       <button class="dock-btn" type="button" @click="gateway.fireWeapon(activeControllableId)">Fire</button>
     </div>
 

@@ -131,7 +131,12 @@ export function buildSetEngineCommand(controllableId: string, engineId: string, 
   };
 }
 
-export function buildSetNavigationTargetCommand(controllableId: string, targetX: number, targetY: number): CommandEnvelope<SetNavigationTargetCommandMessage> {
+export function buildSetNavigationTargetCommand(
+  controllableId: string,
+  targetX: number,
+  targetY: number,
+  thrustPercentage?: number,
+): CommandEnvelope<SetNavigationTargetCommandMessage> {
   const commandId = createCommandId();
   return {
     commandId,
@@ -142,6 +147,7 @@ export function buildSetNavigationTargetCommand(controllableId: string, targetX:
         controllableId,
         targetX,
         targetY,
+        thrustPercentage,
       },
     },
   };

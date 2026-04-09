@@ -26,6 +26,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     private string _galaxyUrl;
     private readonly MappingService _mappingService;
     private readonly ScanningService _scanningService = new();
+    private readonly ManeuveringService _maneuveringService = new();
 
     public string Id => _id;
     public string DisplayName => _displayName;
@@ -34,6 +35,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     public Galaxy? Galaxy => _connectionManager?.Galaxy;
     public MappingService MappingService => _mappingService;
     public ScanningService ScanningService => _scanningService;
+    public ManeuveringService ManeuveringService => _maneuveringService;
 
     public PlayerSession(string id, string apiKey, string? teamName, string galaxyUrl, ILogger logger)
     {
@@ -67,7 +69,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             _connectionManager = new GalaxyConnectionManager(_galaxyUrl, _apiKey, _teamName, _logger);
             _connectionManager.ConnectionLost += OnConnectionLost;
 
-            var handlers = new List<IConnectorEventHandler> { _mappingService, _scanningService, this };
+            var handlers = new List<IConnectorEventHandler> { _mappingService, _scanningService, _maneuveringService, this };
             await _connectionManager.ConnectAsync(handlers);
 
             _connected = true;
@@ -210,6 +212,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
         if (controllable is ClassicShipControllable classic)
         {
+            _maneuveringService.TrackShip(classic);
             changes["ammo"] = (int)classic.ShotMagazine.CurrentShots;
             changes["position"] = new Dictionary<string, object>
             {
@@ -245,14 +248,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 { "current", controllable.EnergyBattery.Current },
                 { "maximum", controllable.EnergyBattery.Maximum }
             };
-            var cId = $"p{Galaxy!.Player.Id}-c{controllable.Id}";
-            var navTarget = GetNavigationTarget(cId);
-            changes["navigation"] = new Dictionary<string, object>
-            {
-                { "active", navTarget.HasValue },
-                { "targetX", navTarget?.x ?? 0f },
-                { "targetY", navTarget?.y ?? 0f }
-            };
+            changes["navigation"] = _maneuveringService.BuildOverlay(classic.Id);
         }
 
         return new OwnerOverlayDeltaDto
@@ -397,16 +393,21 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return Completed(commandId);
     }
 
-    // Navigation state per controllable (gateway-only, not in connector)
-    private readonly Dictionary<string, (float x, float y)> _navigationTargets = new();
-
     private CommandReplyMessage HandleSetNavigationTarget(string commandId, System.Text.Json.JsonElement? payload)
     {
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
+        var controllable = FindControllable(controllableId);
+        if (controllable is not ClassicShipControllable classic)
+            return Rejected(commandId, "invalid_controllable", "Controllable not found or not a classic ship.");
+
         var targetX = payload?.GetProperty("targetX").GetSingle() ?? 0f;
         var targetY = payload?.GetProperty("targetY").GetSingle() ?? 0f;
+        var thrustPercentage = payload?.TryGetProperty("thrustPercentage", out var thrustEl) == true
+            && thrustEl.ValueKind != System.Text.Json.JsonValueKind.Null
+            ? thrustEl.GetSingle()
+            : 1f;
 
-        _navigationTargets[controllableId] = (targetX, targetY);
+        _maneuveringService.SetNavigationTarget(classic, targetX, targetY, thrustPercentage);
 
         return Completed(commandId);
     }
@@ -414,13 +415,16 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     private CommandReplyMessage HandleClearNavigationTarget(string commandId, System.Text.Json.JsonElement? payload)
     {
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
-        _navigationTargets.Remove(controllableId);
-        return Completed(commandId);
-    }
+        if (FindControllable(controllableId) is ClassicShipControllable classic)
+        {
+            _maneuveringService.ClearNavigationTarget(classic.Id);
+            return Completed(commandId);
+        }
 
-    public (float x, float y)? GetNavigationTarget(string controllableId)
-    {
-        return _navigationTargets.TryGetValue(controllableId, out var target) ? target : null;
+        if (TryParseControllableLocalId(controllableId, out var localControllableId))
+            _maneuveringService.ClearNavigationTarget(localControllableId);
+
+        return Completed(commandId);
     }
 
     private async Task<CommandReplyMessage> HandleFireWeapon(string commandId, System.Text.Json.JsonElement? payload)
@@ -551,6 +555,16 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return null;
     }
 
+    private static bool TryParseControllableLocalId(string controllableId, out int localControllableId)
+    {
+        localControllableId = 0;
+        var markerIndex = controllableId.LastIndexOf("-c", StringComparison.Ordinal);
+        if (markerIndex < 0 || markerIndex + 2 >= controllableId.Length)
+            return false;
+
+        return int.TryParse(controllableId[(markerIndex + 2)..], out localControllableId);
+    }
+
     private MappingService.MappingScopeContext? BuildMappingScopeContext()
     {
         var galaxy = Galaxy;
@@ -678,6 +692,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                         if (c is ClassicShipControllable respawnedShip && c.Id == continued.ControllableInfo.Id)
                         {
                             _ = _scanningService.ReapplyModeAsync(respawnedShip);
+                            _maneuveringService.RebindShip(respawnedShip);
                             break;
                         }
                     }

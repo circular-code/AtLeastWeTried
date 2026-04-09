@@ -24,6 +24,7 @@ export function createNavigationMarker(): THREE.Group {
     crossMaterial,
   ));
 
+  marker.frustumCulled = false;
   marker.visible = false;
   return marker;
 }

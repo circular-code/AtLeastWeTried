@@ -23,6 +23,7 @@ export const useUiStore = defineStore('ui', {
 
     return ({
     selectedControllableId: '',
+    navigationThrustPercentage: 0.25,
     lastSelection: null as WorldSceneSelection | null,
     isManagerPopupOpen: false,
     isChatPopupOpen: false,
@@ -67,6 +68,14 @@ export const useUiStore = defineStore('ui', {
   actions: {
     setSelectedControllable(controllableId: string) {
       this.selectedControllableId = controllableId;
+    },
+    setNavigationThrustPercentage(value: number) {
+      if (!Number.isFinite(value)) {
+        this.navigationThrustPercentage = 0;
+        return;
+      }
+
+      this.navigationThrustPercentage = Math.min(Math.max(value, 0), 1);
     },
     setLastSelection(selection: WorldSceneSelection | null) {
       this.lastSelection = selection;

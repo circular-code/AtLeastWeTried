@@ -335,7 +335,7 @@ function createGatewayApi() {
     client.send(envelope.message);
   }
 
-  function setNavigationTarget(controllableId: string, worldX: number, worldY: number) {
+  function setNavigationTarget(controllableId: string, worldX: number, worldY: number, thrustPercentage: number) {
     if (!controllableId) {
       gameStore.recordActivity({
         tone: 'warn',
@@ -346,10 +346,10 @@ function createGatewayApi() {
       return;
     }
 
-    const envelope = buildSetNavigationTargetCommand(controllableId, worldX, -worldY);
+    const envelope = buildSetNavigationTargetCommand(controllableId, worldX, -worldY, thrustPercentage);
     gameStore.trackCommand(envelope.commandId, {
       label: 'Set navigation target',
-      subject: `${gameStore.getControllableLabel(controllableId)} -> ${truncateText(`${worldX.toFixed(1)}, ${(-worldY).toFixed(1)}`, 42)}`,
+      subject: `${gameStore.getControllableLabel(controllableId)} -> ${truncateText(`${worldX.toFixed(1)}, ${(-worldY).toFixed(1)}`, 42)} @ ${thrustPercentage.toFixed(2)}`,
     });
 
     client.send(envelope.message);
