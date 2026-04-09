@@ -34,6 +34,7 @@ type WorldSceneNavigationPointer = {
 type WorldSceneOptions = {
   onSelection?: (selection: WorldSceneSelection) => void;
   onNavigationTargetRequested?: (selection: WorldSceneSelection) => void;
+  onVisibleUnitsChanged?: (unitIds: string[]) => void;
 };
 
 type OwnerOverlayState = Record<string, unknown>;
@@ -42,6 +43,7 @@ export class WorldScene {
   private readonly container: HTMLElement;
   private readonly onSelection?: (selection: WorldSceneSelection) => void;
   private readonly onNavigationTargetRequested?: (selection: WorldSceneSelection) => void;
+  private readonly onVisibleUnitsChanged?: (unitIds: string[]) => void;
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene: THREE.Scene;
   private readonly camera: THREE.OrthographicCamera;
@@ -76,11 +78,13 @@ export class WorldScene {
   private totalDragDistance: number;
   private isPointerCaptured: boolean;
   private isDisposed: boolean;
+  private lastReportedVisibleUnitIds: string[];
 
   constructor(container: HTMLElement, options: WorldSceneOptions = {}) {
     this.container = container;
     this.onSelection = options.onSelection;
     this.onNavigationTargetRequested = options.onNavigationTargetRequested;
+    this.onVisibleUnitsChanged = options.onVisibleUnitsChanged;
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setClearColor(0x050811, 1);
@@ -136,6 +140,7 @@ export class WorldScene {
     this.totalDragDistance = 0;
     this.isPointerCaptured = false;
     this.isDisposed = false;
+    this.lastReportedVisibleUnitIds = [];
 
     this.renderer.domElement.classList.add('world-canvas');
     this.container.appendChild(this.renderer.domElement);
@@ -355,6 +360,7 @@ export class WorldScene {
       cone.mesh.material.uniforms.time.value = time;
     }
 
+    this.reportVisibleUnits();
     this.renderer.render(this.scene, this.camera);
     this.animationFrame = window.requestAnimationFrame(this.renderFrame);
   };
@@ -680,6 +686,40 @@ export class WorldScene {
     return Math.max(visibleWorldWidth / width, visibleWorldHeight / height);
   }
 
+  private reportVisibleUnits() {
+    if (!this.onVisibleUnitsChanged) {
+      return;
+    }
+
+    const visibleWorldWidth = (this.camera.right - this.camera.left) / this.camera.zoom;
+    const visibleWorldHeight = (this.camera.top - this.camera.bottom) / this.camera.zoom;
+    const minX = this.camera.position.x - visibleWorldWidth / 2;
+    const maxX = this.camera.position.x + visibleWorldWidth / 2;
+    const minY = -this.camera.position.y - visibleWorldHeight / 2;
+    const maxY = -this.camera.position.y + visibleWorldHeight / 2;
+
+    const visibleUnitIds = this.renderableUnits
+      .filter((unit) => {
+        const padding = unit.renderRadius;
+        return unit.x + padding >= minX
+          && unit.x - padding <= maxX
+          && unit.y + padding >= minY
+          && unit.y - padding <= maxY;
+      })
+      .map((unit) => unit.unitId)
+      .sort();
+
+    if (
+      visibleUnitIds.length === this.lastReportedVisibleUnitIds.length
+      && visibleUnitIds.every((unitId, index) => unitId === this.lastReportedVisibleUnitIds[index])
+    ) {
+      return;
+    }
+
+    this.lastReportedVisibleUnitIds = visibleUnitIds;
+    this.onVisibleUnitsChanged(visibleUnitIds);
+  }
+
   private clientToWorld(clientX: number, clientY: number) {
     const rect = this.container.getBoundingClientRect();
     const ndc = new THREE.Vector3(
@@ -748,6 +788,9 @@ export class WorldScene {
     unitId: string;
     clusterId: number;
     kind: string;
+    isStatic: boolean;
+    isSeen: boolean;
+    lastSeenTick: number;
     x: number;
     y: number;
     angle: number;

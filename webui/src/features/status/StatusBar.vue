@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { useGateway } from '../../composables/useGateway';
+import { formatMetric } from '../../lib/formatting';
 import { useGameStore } from '../../stores/game';
 import { useSessionStore } from '../../stores/session';
 import { useUiStore } from '../../stores/ui';
@@ -14,6 +15,69 @@ const latestChatEntry = computed(() => gameStore.latestChatEntry);
 const recentActivityEntries = computed(() => gameStore.recentActivity(8000).slice(0, 3));
 const olderActivityCount = computed(() => Math.max(0, gameStore.activityEntries.length - recentActivityEntries.value.length));
 const connectionIndicatorActionLabel = computed(() => sessionStore.showDisconnectAction ? 'Disconnect' : 'Connect');
+const activeControllableId = computed(() => uiStore.selectedControllableId || (gameStore.ownedControllables[0]?.controllableId ?? ''));
+const visibleUnitIds = computed(() => new Set(uiStore.visibleUnitIds));
+const isUnitsPopoverOpen = ref(false);
+const unitsInCurrentSystem = computed(() => {
+  if (!isUnitsPopoverOpen.value) {
+    return [];
+  }
+
+  const snapshot = gameStore.snapshot;
+  if (!snapshot) {
+    return [];
+  }
+
+  const activeId = activeControllableId.value;
+  const ownerOverlay = gameStore.ownerOverlay as Record<string, Record<string, unknown> | undefined>;
+  const activeOverlay = activeId ? ownerOverlay[activeId] : undefined;
+  const activeUnit = activeId ? snapshot.units.find((unit) => unit.unitId === activeId) : undefined;
+  const activePosition = readUnitPosition(activeUnit, activeOverlay);
+  const currentClusterId = activeUnit?.clusterId ?? readNumeric(activeOverlay?.clusterId);
+  if (currentClusterId === null) {
+    return [];
+  }
+
+  const currentClusterName = snapshot.clusters.find((cluster) => cluster.id === currentClusterId)?.name ?? `Cluster ${currentClusterId}`;
+  const controllablesById = new Map(snapshot.controllables.map((controllable) => [controllable.controllableId, controllable]));
+
+  return snapshot.units
+    .filter((unit) => unit.clusterId === currentClusterId)
+    .map((unit) => {
+      const controllable = controllablesById.get(unit.unitId);
+      const position = readUnitPosition(unit, ownerOverlay[unit.unitId]);
+      const isCurrent = unit.unitId === activeId;
+      const isSeen = isCurrent || unit.isSeen;
+
+      return {
+        unitId: unit.unitId,
+        displayName: controllable?.displayName ?? unit.unitId,
+        kind: unit.kind,
+        x: position.x,
+        y: position.y,
+        distance: activePosition ? Math.hypot(position.x - activePosition.x, position.y - activePosition.y) : null,
+        isCurrent,
+        isSeen,
+        isVisible: visibleUnitIds.value.has(unit.unitId),
+        clusterName: currentClusterName,
+      };
+    })
+    .sort((left, right) => {
+      const leftDistance = left.distance ?? -1;
+      const rightDistance = right.distance ?? -1;
+      if (leftDistance !== rightDistance) {
+        return leftDistance - rightDistance;
+      }
+
+      if (left.isSeen !== right.isSeen) {
+        return left.isSeen ? -1 : 1;
+      }
+
+      return left.displayName.localeCompare(right.displayName);
+    });
+});
+
+const currentSystemLabel = computed(() => unitsInCurrentSystem.value[0]?.clusterName ?? 'Unknown system');
 
 function onConnectionIndicatorClick(): void {
   if (sessionStore.showDisconnectAction) {
@@ -22,6 +86,63 @@ function onConnectionIndicatorClick(): void {
   }
 
   gateway.connect();
+}
+
+function openUnitsPopover(): void {
+  isUnitsPopoverOpen.value = true;
+}
+
+function closeUnitsPopover(): void {
+  isUnitsPopoverOpen.value = false;
+}
+
+function onTrackUnit(): void {
+  // Reserved for future behavior.
+}
+
+function onNavigateUnit(): void {
+  // Reserved for future behavior.
+}
+
+function readNumeric(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+}
+
+function readUnitPosition(
+  unit: { x: number; y: number } | undefined,
+  overlay: Record<string, unknown> | undefined,
+) {
+  const overlayPosition = overlay?.position;
+  const positionRecord = typeof overlayPosition === 'object' && overlayPosition !== null
+    ? overlayPosition as Record<string, unknown>
+    : undefined;
+
+  return {
+    x: typeof positionRecord?.x === 'number' && Number.isFinite(positionRecord.x) ? positionRecord.x : unit?.x ?? 0,
+    y: typeof positionRecord?.y === 'number' && Number.isFinite(positionRecord.y) ? positionRecord.y : unit?.y ?? 0,
+  };
+}
+
+function humanizeUnitKind(kind: string) {
+  const normalized = kind
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .trim();
+
+  if (!normalized) {
+    return 'Unknown unit';
+  }
+
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 </script>
 
@@ -102,7 +223,15 @@ function onConnectionIndicatorClick(): void {
         <strong>{{ gameStore.worldStats.clusters }}</strong>
       </div>
 
-      <div class="status-bar-item status-bar-item-metric" title="Units in snapshot">
+      <div
+        class="status-bar-item status-bar-item-metric status-bar-item-metric-popover"
+        title="Units in snapshot"
+        tabindex="0"
+        @mouseenter="openUnitsPopover"
+        @mouseleave="closeUnitsPopover"
+        @focusin="openUnitsPopover"
+        @focusout="closeUnitsPopover"
+      >
         <span class="status-bar-icon" aria-hidden="true">
           <svg viewBox="0 0 16 16" focusable="false">
             <path d="M8 2.2 13.3 5v6L8 13.8 2.7 11V5z" fill="none" stroke="currentColor" stroke-linejoin="round" stroke-width="1.3"></path>
@@ -111,6 +240,49 @@ function onConnectionIndicatorClick(): void {
         </span>
         <span class="status-bar-label">Units</span>
         <strong>{{ gameStore.worldStats.units }}</strong>
+
+        <section v-if="isUnitsPopoverOpen" class="status-bar-popover panel-glass" aria-label="Units by system">
+          <header class="status-bar-popover-head">
+            <div>
+              <h3>{{ currentSystemLabel }}</h3>
+              <p>{{ unitsInCurrentSystem.length }} units in the current system</p>
+            </div>
+          </header>
+
+          <div v-if="unitsInCurrentSystem.length > 0" class="status-bar-popover-body">
+            <ul class="status-bar-system-list">
+              <li
+                v-for="unit in unitsInCurrentSystem"
+                :key="unit.unitId"
+                class="status-bar-system-row"
+              >
+                <div
+                  class="status-bar-system-info"
+                  :class="{
+                    'is-visible': unit.isVisible,
+                    'is-seen': unit.isSeen,
+                  }"
+                >
+                  <div class="status-bar-system-copy">
+                    <strong>{{ unit.displayName }}</strong>
+                  </div>
+                  <div class="status-bar-system-metrics">
+                    <span>{{ humanizeUnitKind(unit.kind) }}</span>
+                    <span>{{ unit.distance === null ? 'Current' : `${formatMetric(unit.distance)} away` }}</span>
+                    <span>x {{ formatMetric(unit.x) }}</span>
+                    <span>y {{ formatMetric(unit.y) }}</span>
+                  </div>
+                </div>
+                <div class="status-bar-system-actions">
+                  <button type="button" class="status-bar-unit-action" @click.stop="onTrackUnit">Track</button>
+                  <button type="button" class="status-bar-unit-action" @click.stop="onNavigateUnit">Navigate</button>
+                </div>
+              </li>
+            </ul>
+          </div>
+
+          <p v-else class="status-bar-popover-empty">No current system is available for the active ship.</p>
+        </section>
       </div>
 
       <div class="status-bar-item status-bar-item-metric" title="Public controllables in snapshot">

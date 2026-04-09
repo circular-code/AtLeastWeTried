@@ -57,6 +57,10 @@ function handleWorldNavigate(selection: WorldSceneSelection) {
   );
 }
 
+function handleVisibleUnitsChanged(unitIds: string[]) {
+  uiStore.setVisibleUnitIds(unitIds);
+}
+
 onMounted(() => {
   if (!host.value) {
     return;
@@ -65,6 +69,7 @@ onMounted(() => {
   worldScene = new WorldScene(host.value, {
     onSelection: handleWorldSelect,
     onNavigationTargetRequested: handleWorldNavigate,
+    onVisibleUnitsChanged: handleVisibleUnitsChanged,
   });
 
   worldScene.setSnapshot(snapshot.value, ownerOverlay.value, selectedControllableId.value, navigationTarget.value);
@@ -79,6 +84,7 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  uiStore.setVisibleUnitIds([]);
   worldScene?.dispose();
   worldScene = null;
 });
