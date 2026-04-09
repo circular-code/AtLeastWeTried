@@ -134,7 +134,7 @@ export const useGameStore = defineStore('game', {
         return undefined;
       }
 
-      const overlayState = objectValue(state.overlayById.get(controllableId)) ?? {};
+      const overlayState = objectValue(resolveOverlayByControllableId(state.overlayBySessionId, controllableId)) ?? {};
       const scannerState = resolveScannerState(overlayState.scanner);
       return optionalStringValue(scannerState?.targetUnitId);
     },
@@ -404,16 +404,24 @@ function applyWorldDeltaToSnapshot(current: GalaxySnapshotDto, message: WorldDel
     }
 
     if (event.eventType === 'controllable.created' && event.changes) {
-      next.controllables = [
-        ...next.controllables,
-        {
-          controllableId: event.entityId,
-          displayName: stringValue(event.changes.displayName, 'Unnamed'),
-          teamName: stringValue(event.changes.teamName, 'Unknown'),
-          alive: booleanValue(event.changes.alive, true),
-          score: numberValue(event.changes.score, 0),
-        },
-      ];
+      const existing = next.controllables.find((item) => item.controllableId === event.entityId);
+      if (existing) {
+        existing.displayName = stringValue(event.changes.displayName, existing.displayName);
+        existing.teamName = stringValue(event.changes.teamName, existing.teamName);
+        existing.alive = booleanValue(event.changes.alive, existing.alive);
+        existing.score = numberValue(event.changes.score, existing.score);
+      } else {
+        next.controllables = [
+          ...next.controllables,
+          {
+            controllableId: event.entityId,
+            displayName: stringValue(event.changes.displayName, 'Unnamed'),
+            teamName: stringValue(event.changes.teamName, 'Unknown'),
+            alive: booleanValue(event.changes.alive, true),
+            score: numberValue(event.changes.score, 0),
+          },
+        ];
+      }
     }
   }
 

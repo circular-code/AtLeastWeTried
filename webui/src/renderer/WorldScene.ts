@@ -551,7 +551,7 @@ export class WorldScene {
 
       const overlay = this.ownerOverlay[controllable.controllableId];
       if (overlay) {
-        dynamicUnits.push({
+        const overlayUnit: RawRenderableUnit = {
           unitId: controllable.controllableId,
           clusterId: numberValue(overlay.clusterId, 0),
           kind: stringValue(overlay.kind, 'controllable_marker'),
@@ -563,7 +563,18 @@ export class WorldScene {
           angle: numberValue((overlay.position as OwnerOverlayState | undefined)?.angle, 0),
           radius: numberValue(overlay.radius, getFallbackRenderRadius(normalizeKind(stringValue(overlay.kind, 'controllable_marker')))),
           teamName: controllable.teamName,
-        });
+        };
+
+        const existingDynamicIndex = dynamicUnits.findIndex((unit) => unit.unitId === controllable.controllableId);
+        if (existingDynamicIndex >= 0) {
+          dynamicUnits[existingDynamicIndex] = {
+            ...dynamicUnits[existingDynamicIndex],
+            ...overlayUnit,
+          };
+        } else {
+          dynamicUnits.push(overlayUnit);
+        }
+
         liveUnitIds.add(controllable.controllableId);
         continue;
       }
