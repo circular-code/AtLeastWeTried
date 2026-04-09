@@ -202,7 +202,12 @@ h2 {
   flex: 1 1 auto;
 }
 
-.overlay-column,
+/* No selection: drop the third track so the empty right column does not reserve ~240px. */
+.overlay-top:not(.overlay-top--has-selection) {
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  grid-template-areas: 'left .';
+}
+
 .command-dock {
   pointer-events: auto;
 }
@@ -211,14 +216,17 @@ h2 {
   pointer-events: auto;
 }
 
+/* Column is a layout box only; clicks pass through to the canvas except on panels below.
+   Scrolling stays on inner panels (not this aside) so scrollbars remain usable with pointer-events: none here. */
 .overlay-column {
   display: grid;
   align-content: start;
   gap: 0.6rem;
   min-height: 0;
   max-height: 100%;
-  overflow: auto;
+  overflow: visible;
   padding-right: 0.2rem;
+  pointer-events: none;
 }
 
 .overlay-column-left {
@@ -252,6 +260,9 @@ h2 {
 
 .overlay-column-right > .panel {
   width: min(100%, 300px);
+  max-height: 84vh;
+  overflow-y: auto;
+  pointer-events: auto;
 }
 
 .owner-overlay-panel {
@@ -1539,19 +1550,25 @@ h2 {
     max-width: none;
   }
 
-  .overlay-top {
+  /* One row: ships left, selection right (stacked column was full-width and read as “not on the right”). */
+  .overlay-top.overlay-top--has-selection {
+    grid-template-columns: minmax(0, 1fr) clamp(150px, 40vw, 300px);
+    grid-template-areas: 'left right';
+    align-items: start;
+  }
+
+  .overlay-top:not(.overlay-top--has-selection) {
     grid-template-columns: 1fr;
-    grid-template-areas:
-      'left'
-      'right';
+    grid-template-areas: 'left';
   }
 
   .overlay-column-right {
-    justify-items: stretch;
+    justify-items: end;
   }
 
   .overlay-column-right > .panel {
     width: 100%;
+    max-width: 100%;
   }
 
   .owner-overlay-panel {

@@ -21,6 +21,8 @@ const uiStore = useUiStore();
 
 const activeControllableId = computed(() => uiStore.selectedControllableId || (gameStore.ownedControllables[0]?.controllableId ?? ''));
 
+const hasSelectionDetails = computed(() => !!gameStore.selectionEntry(uiStore.lastSelection));
+
 function handleWindowKeydown(event: KeyboardEvent) {
   if (isEditableTarget(event.target)) {
     return;
@@ -74,9 +76,9 @@ onBeforeUnmount(() => {
       <WorldViewport />
 
       <div :class="['overlay-shell', { 'is-debug-log-ingame-active': uiStore.isDebugLogOpen && uiStore.isDebugLogIngame }]">
-        <div class="overlay-top">
+        <div class="overlay-top" :class="{ 'overlay-top--has-selection': hasSelectionDetails }">
           <OverlayPanel />
-          <SelectionPanel />
+          <SelectionPanel v-if="hasSelectionDetails" />
         </div>
 
         <ActivityToasts />
