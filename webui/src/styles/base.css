@@ -944,6 +944,11 @@ h2 {
   pointer-events: auto;
 }
 
+.overlay-shell.is-debug-log-ingame-active .activity-tray {
+  right: calc(clamp(320px, 20vw, 420px) + 1.35rem);
+  width: min(360px, calc(100vw - clamp(320px, 20vw, 420px) - 2rem));
+}
+
 .panel-scroll {
   max-height: 22vh;
   overflow: auto;
