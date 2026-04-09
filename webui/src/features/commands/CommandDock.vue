@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, watch } from 'vue';
 import { useGateway } from '../../composables/useGateway';
 import { useGameStore } from '../../stores/game';
 import { useUiStore } from '../../stores/ui';
@@ -17,26 +17,32 @@ const thrust = computed({
     gateway.setEngine(activeControllableId.value, value);
   },
 });
-const tacticalMode = ref<TacticalMode>('off');
-const scannerMode = computed<ScannerMode>(() => gameStore.scannerModeFor(activeControllableId.value));
+const tacticalMode = computed(() => uiStore.tacticalMode);
+const scannerMode = computed<ScannerMode>(() => uiStore.scannerMode);
 const scannerWidthMin = computed(() => gameStore.scannerWidthMinimumFor(activeControllableId.value));
 const scannerWidthMax = computed(() => gameStore.scannerWidthMaximumFor(activeControllableId.value));
-const scannerWidth = ref(90);
+const scannerWidth = computed({
+  get: () => uiStore.scannerWidth,
+  set: (value: number) => uiStore.setScannerWidth(value),
+});
 
 watch(
   () => ({
-    controllableId: activeControllableId.value,
-    width: gameStore.scannerWidthFor(activeControllableId.value),
     min: scannerWidthMin.value,
     max: scannerWidthMax.value,
+    width: scannerWidth.value,
   }),
   ({ width, min, max }) => {
-    scannerWidth.value = Math.min(Math.max(width, min), max);
+    const clampedWidth = Math.min(Math.max(width, min), max);
+    if (clampedWidth !== width) {
+      uiStore.setScannerWidth(clampedWidth);
+    }
   },
   { immediate: true },
 );
 
 function setScanner(mode: ScannerMode) {
+  uiStore.setScannerMode(mode);
   gateway.setScannerMode(activeControllableId.value, mode);
 }
 
@@ -47,12 +53,12 @@ function setScannerWidth(value: number) {
   }
 
   const clampedWidth = Math.min(Math.max(value, scannerWidthMin.value), scannerWidthMax.value);
-  scannerWidth.value = clampedWidth;
+  uiStore.setScannerWidth(clampedWidth);
   gateway.setScannerWidth(controllableId, clampedWidth);
 }
 
 function setTactical(mode: TacticalMode) {
-  tacticalMode.value = mode;
+  uiStore.setTacticalMode(mode);
   gateway.setTacticalMode(activeControllableId.value, mode);
 }
 </script>

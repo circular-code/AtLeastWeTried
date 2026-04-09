@@ -1,12 +1,13 @@
 import { defineStore } from 'pinia';
 import type { WorldSceneSelection } from '../renderer/WorldScene';
 import type { ClientMessage, GatewayMessageDirection, ServerMessage } from '../types/generated';
-import type { DebugLogEntry } from '../types/client';
+import type { DebugLogEntry, ScannerMode, TacticalMode } from '../types/client';
 import { formatDebugPayload } from '../lib/formatting';
 
 const DEBUG_LOG_OPEN_STORAGE_KEY = 'flattiverse.debugLog.open';
 const DEBUG_LOG_INGAME_STORAGE_KEY = 'flattiverse.debugLog.ingame';
 const DEBUG_LOG_SETTINGS_STORAGE_KEY = 'flattiverse.debugLog.settings';
+const GAMEPLAY_DOCK_SETTINGS_STORAGE_KEY = 'flattiverse.gameplayDock.settings';
 
 type StoredDebugLogSettings = {
   limit?: number;
@@ -17,13 +18,24 @@ type StoredDebugLogSettings = {
   showServer?: boolean;
 };
 
+type StoredGameplayDockSettings = {
+  navigationThrustPercentage?: number;
+  scannerMode?: ScannerMode;
+  scannerWidth?: number;
+  tacticalMode?: TacticalMode;
+};
+
 export const useUiStore = defineStore('ui', {
   state: () => {
     const storedSettings = readStoredDebugLogSettings();
+    const storedDockSettings = readStoredGameplayDockSettings();
 
     return ({
     selectedControllableId: '',
-    navigationThrustPercentage: 0.25,
+    navigationThrustPercentage: readStoredNavigationThrustPercentage(storedDockSettings),
+    scannerMode: readStoredScannerMode(storedDockSettings),
+    scannerWidth: readStoredScannerWidth(storedDockSettings),
+    tacticalMode: readStoredTacticalMode(storedDockSettings),
     lastSelection: null as WorldSceneSelection | null,
     visibleUnitIds: [] as string[],
     isManagerPopupOpen: false,
@@ -73,10 +85,30 @@ export const useUiStore = defineStore('ui', {
     setNavigationThrustPercentage(value: number) {
       if (!Number.isFinite(value)) {
         this.navigationThrustPercentage = 0;
+        this.persistGameplayDockPreferences();
         return;
       }
 
       this.navigationThrustPercentage = Math.min(Math.max(value, 0), 1);
+      this.persistGameplayDockPreferences();
+    },
+    setScannerMode(mode: ScannerMode) {
+      this.scannerMode = mode;
+      this.persistGameplayDockPreferences();
+    },
+    setScannerWidth(value: number) {
+      if (!Number.isFinite(value)) {
+        this.scannerWidth = 90;
+        this.persistGameplayDockPreferences();
+        return;
+      }
+
+      this.scannerWidth = Math.max(1, Math.floor(value));
+      this.persistGameplayDockPreferences();
+    },
+    setTacticalMode(mode: TacticalMode) {
+      this.tacticalMode = mode;
+      this.persistGameplayDockPreferences();
     },
     setLastSelection(selection: WorldSceneSelection | null) {
       this.lastSelection = selection;
@@ -173,6 +205,14 @@ export const useUiStore = defineStore('ui', {
         showServer: this.showServerDebugMessages,
       });
     },
+    persistGameplayDockPreferences() {
+      persistGameplayDockSettings({
+        navigationThrustPercentage: this.navigationThrustPercentage,
+        scannerMode: this.scannerMode,
+        scannerWidth: this.scannerWidth,
+        tacticalMode: this.tacticalMode,
+      });
+    },
   },
 });
 
@@ -224,6 +264,71 @@ function readStoredDebugLogLimit(settings: StoredDebugLogSettings) {
   }
 
   return Math.max(1, Math.floor(settings.limit ?? 200));
+}
+
+function readStoredGameplayDockSettings(): StoredGameplayDockSettings {
+  try {
+    const storedValue = globalThis.localStorage?.getItem(GAMEPLAY_DOCK_SETTINGS_STORAGE_KEY);
+    if (!storedValue) {
+      return {};
+    }
+
+    const parsed = JSON.parse(storedValue);
+    if (!parsed || typeof parsed !== 'object') {
+      return {};
+    }
+
+    return parsed as StoredGameplayDockSettings;
+  } catch {
+    return {};
+  }
+}
+
+function persistGameplayDockSettings(settings: StoredGameplayDockSettings) {
+  try {
+    globalThis.localStorage?.setItem(GAMEPLAY_DOCK_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  } catch {
+    // Ignore browser storage failures.
+  }
+}
+
+function readStoredNavigationThrustPercentage(settings: StoredGameplayDockSettings) {
+  if (!Number.isFinite(settings.navigationThrustPercentage)) {
+    return 0.25;
+  }
+
+  return Math.min(Math.max(settings.navigationThrustPercentage ?? 0.25, 0), 1);
+}
+
+function readStoredScannerWidth(settings: StoredGameplayDockSettings) {
+  if (!Number.isFinite(settings.scannerWidth)) {
+    return 90;
+  }
+
+  return Math.max(1, Math.floor(settings.scannerWidth ?? 90));
+}
+
+function readStoredScannerMode(settings: StoredGameplayDockSettings): ScannerMode {
+  switch (settings.scannerMode) {
+    case '360':
+    case 'forward':
+    case 'sweep':
+    case 'off':
+      return settings.scannerMode;
+    default:
+      return 'off';
+  }
+}
+
+function readStoredTacticalMode(settings: StoredGameplayDockSettings): TacticalMode {
+  switch (settings.tacticalMode) {
+    case 'enemy':
+    case 'target':
+    case 'off':
+      return settings.tacticalMode;
+    default:
+      return 'off';
+  }
 }
 
 function buildDebugSearchableText(messageType: string, payload: string) {
