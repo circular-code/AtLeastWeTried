@@ -23,15 +23,15 @@ public sealed class MappingService : IConnectorEventHandler
     {
         switch (@event)
         {
-            case NewUnitFlattiverseEvent newUnit:
+            case AppearedUnitEvent newUnit:
                 HandleUnitCreated(newUnit.Unit, newUnit.Unit.Cluster?.Id ?? 0);
                 break;
 
-            case UpdatedUnitFlattiverseEvent updatedUnit:
+            case UpdatedUnitEvent updatedUnit:
                 HandleUnitUpdated(updatedUnit.Unit, updatedUnit.Unit.Cluster?.Id ?? 0);
                 break;
 
-            case RemovedUnitFlattiverseEvent removedUnit:
+            case RemovedUnitEvent removedUnit:
                 HandleUnitRemoved(removedUnit.Unit);
                 break;
         }

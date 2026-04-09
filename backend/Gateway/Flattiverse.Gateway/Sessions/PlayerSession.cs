@@ -564,11 +564,11 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         switch (@event)
         {
 
-            case ChatPlayerEvent chatEvent:
-                var scope = chatEvent.Kind switch
+            case ChatEvent chatEvent:
+                var scope = chatEvent switch
                 {
-                    EventKind.ChatTeam => "team",
-                    EventKind.ChatPlayer => "private",
+                    TeamChatEvent => "team",
+                    PlayerChatEvent => "private",
                     _ => "galaxy"
                 };
                 var chatMsg = new ChatReceivedMessage
@@ -587,7 +587,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                     conn.EnqueueMessage(chatMsg);
                 break;
 
-            case RegisteredControllableInfoPlayerEvent registered:
+            case RegisteredControllableInfoEvent registered:
                 var regDelta = new WorldDeltaDto
                 {
                     EventType = "controllable.created",
@@ -604,7 +604,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 BroadcastWorldDelta(connections, new List<WorldDeltaDto> { regDelta });
                 break;
 
-            case ContinuedControllableInfoPlayerEvent continued:
+            case ContinuedControllableInfoEvent continued:
             {
                 var cDelta = new WorldDeltaDto
                 {
@@ -636,15 +636,15 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 break;
             }
 
-            case DestroyedControllableInfoPlayerEvent:
-            case ClosedControllableInfoPlayerEvent:
-            case ControllableInfoScoreUpdatedEvent:
+            case DestroyedControllableInfoEvent:
+            case ClosedControllableInfoEvent:
+            case UpdatedControllableInfoScoreEvent:
                 // Re-broadcast full controllable state on these events; the tick overlay will handle owner side
-                if (@event is ControllableInfoPlayerEvent ciEvent)
+                if (@event is ControllableInfoEvent ciEvent)
                 {
                     var evtType = @event switch
                     {
-                        ClosedControllableInfoPlayerEvent => "unit.removed",
+                        ClosedControllableInfoEvent => "unit.removed",
                         _ => "controllable.created"
                     };
                     var cDelta2 = new WorldDeltaDto

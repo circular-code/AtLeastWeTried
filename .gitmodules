@@ -1,0 +1,3 @@
+[submodule "backend/Connector"]
+	path = backend/Connector
+	url = https://github.com/flattiverse/connector-csharp.git
