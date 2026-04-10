@@ -1578,7 +1578,37 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 break;
             }
 
-            case DestroyedControllableInfoEvent:
+            case DestroyedControllableInfoEvent destroyedEvent:
+            {
+                var destroyedDelta = new WorldDeltaDto
+                {
+                    EventType = "controllable.created",
+                    EntityId = $"p{destroyedEvent.Player.Id}-c{destroyedEvent.ControllableInfo.Id}",
+                    Changes = new Dictionary<string, object?>
+                    {
+                        { "controllableId", $"p{destroyedEvent.Player.Id}-c{destroyedEvent.ControllableInfo.Id}" },
+                        { "displayName", destroyedEvent.ControllableInfo.Name },
+                        { "teamName", destroyedEvent.Player.Team?.Name ?? "" },
+                        { "alive", destroyedEvent.ControllableInfo.Alive },
+                        { "score", destroyedEvent.ControllableInfo.Score.Mission }
+                    }
+                };
+                BroadcastWorldDelta(connections, new List<WorldDeltaDto> { destroyedDelta });
+
+                // Auto-continue own controllables when they die
+                if (destroyedEvent.Player.Id == Galaxy?.Player?.Id)
+                {
+                    foreach (var c in Galaxy!.Controllables)
+                    {
+                        if (c is null || c.Id != destroyedEvent.ControllableInfo.Id)
+                            continue;
+                        ObserveBackgroundTask(c.Continue());
+                        break;
+                    }
+                }
+                break;
+            }
+
             case ClosedControllableInfoEvent:
             case UpdatedControllableInfoScoreEvent:
                 // Re-broadcast full controllable state on these events; the tick overlay will handle owner side
