@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import type { WorldSceneSelection } from '../renderer/WorldScene';
 import type { ClientMessage, GatewayMessageDirection, ServerMessage } from '../types/generated';
-import type { ClearTacticalTargetCommandMessage, SetTacticalModeCommandMessage, SetTacticalTargetCommandMessage } from '../transport/commands';
+import type { ClearTacticalTargetCommandMessage, SetTacticalModeCommandMessage, SetTacticalTargetCommandMessage, UpgradeSubsystemCommandMessage } from '../transport/commands';
 import type { DebugLogEntry, ScannerMode, TacticalMode } from '../types/client';
 import { formatDebugPayload } from '../lib/formatting';
 
@@ -28,7 +28,7 @@ type StoredDebugLogSettings = {
   showServer?: boolean;
 };
 
-type DebugGatewayMessage = ClientMessage | ServerMessage | SetTacticalModeCommandMessage | SetTacticalTargetCommandMessage | ClearTacticalTargetCommandMessage;
+type DebugGatewayMessage = ClientMessage | ServerMessage | SetTacticalModeCommandMessage | SetTacticalTargetCommandMessage | ClearTacticalTargetCommandMessage | UpgradeSubsystemCommandMessage;
 
 export const useUiStore = defineStore('ui', {
   state: () => {

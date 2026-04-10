@@ -48,6 +48,15 @@ export type ClearTacticalTargetCommandMessage = {
   };
 };
 
+export type UpgradeSubsystemCommandMessage = {
+  type: 'command.upgrade_subsystem';
+  commandId: string;
+  payload: {
+    controllableId: string;
+    subsystemId: string;
+  };
+};
+
 export function buildAttachConnectionMessage(apiKey: string, teamName?: string): AttachConnectionMessage {
   return {
     type: 'connection.attach',
@@ -238,6 +247,21 @@ export function buildSetSubsystemModeCommand(controllableId: string, subsystemId
         mode,
         value,
         targetId,
+      },
+    },
+  };
+}
+
+export function buildUpgradeSubsystemCommand(controllableId: string, subsystemId: string): CommandEnvelope<UpgradeSubsystemCommandMessage> {
+  const commandId = createCommandId();
+  return {
+    commandId,
+    message: {
+      type: 'command.upgrade_subsystem',
+      commandId,
+      payload: {
+        controllableId,
+        subsystemId,
       },
     },
   };

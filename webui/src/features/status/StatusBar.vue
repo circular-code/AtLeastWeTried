@@ -18,6 +18,51 @@ type RepresentedShip = {
   overlay: Record<string, unknown> | undefined;
 };
 
+type ShipSubsystemStat = {
+  label: string;
+  value: string;
+};
+
+type ShipSubsystemCostEntry = {
+  label: string;
+  value: string;
+  enough: boolean;
+  isNeutral?: boolean;
+};
+
+type ShipSubsystemCost = {
+  ticks: number;
+  energy: number;
+  metal: number;
+  carbon: number;
+  hydrogen: number;
+  silicon: number;
+  ions: number;
+  neutrinos: number;
+};
+
+type ShipSubsystemEntry = {
+  id: string;
+  name: string;
+  slot: string;
+  kind: string;
+  exists: boolean;
+  tier: number;
+  targetTier: number;
+  remainingTicks: number;
+  status: string;
+  installStateLabel: string;
+  tierLabel: string;
+  progressLabel: string;
+  subtitleLabel: string;
+  stats: ShipSubsystemStat[];
+  nextTier: number;
+  canUpgrade: boolean;
+  nextTierCosts: ShipSubsystemCost | null;
+  nextTierPreview: ShipSubsystemStat[];
+  upgradeTitle: string;
+};
+
 const gateway = useGateway();
 const gameStore = useGameStore();
 const sessionStore = useSessionStore();
@@ -81,8 +126,10 @@ const representedShips = computed((): RepresentedShip[] => {
 });
 const isUnitsPopoverOpen = ref(false);
 const isShipsPopoverOpen = ref(false);
+const isSubsystemsPopoverOpen = ref(false);
 const isTeamsPopoverOpen = ref(false);
 const isClustersPopoverOpen = ref(false);
+const hideUninstalledSubsystems = ref(false);
 const unitsSearchQuery = ref('');
 const shipsSearchQuery = ref('');
 const currentSystem = computed(() => {
@@ -216,6 +263,33 @@ const shipEntries = computed(() => {
 });
 const filteredUnitsInCurrentSystem = computed(() => filterSystemEntries(unitsInCurrentSystem.value, unitsSearchQuery.value));
 const filteredShipEntries = computed(() => filterSystemEntries(shipEntries.value, shipsSearchQuery.value));
+const activeShip = computed(() => {
+  const activeId = activeControllableId.value;
+  if (!activeId) {
+    return null;
+  }
+
+  return representedShips.value.find((ship) => ship.unitId === activeId) ?? null;
+});
+const activeShipSubsystems = computed(() => {
+  const overlay = activeShip.value?.overlay;
+  return readSubsystemEntries(overlay?.subsystems ?? overlay?.modules);
+});
+const activeShipUpgradeResources = computed(() => ({
+  energy: readSubsystemResourceValue(activeShipSubsystems.value, 'Energy Battery', 'Charge'),
+  metal: readSubsystemResourceValue(activeShipSubsystems.value, 'Cargo', 'Metal'),
+  carbon: readSubsystemResourceValue(activeShipSubsystems.value, 'Cargo', 'Carbon'),
+  hydrogen: readSubsystemResourceValue(activeShipSubsystems.value, 'Cargo', 'Hydrogen'),
+  silicon: readSubsystemResourceValue(activeShipSubsystems.value, 'Cargo', 'Silicon'),
+  ions: readSubsystemResourceValue(activeShipSubsystems.value, 'Ion Battery', 'Charge'),
+  neutrinos: readSubsystemResourceValue(activeShipSubsystems.value, 'Neutrino Battery', 'Charge'),
+}));
+const visibleShipSubsystems = computed(() => (
+  hideUninstalledSubsystems.value
+    ? activeShipSubsystems.value.filter((subsystem) => subsystem.exists)
+    : activeShipSubsystems.value
+));
+const installedShipSubsystemCount = computed(() => activeShipSubsystems.value.filter((subsystem) => subsystem.exists).length);
 const representedShipCount = computed(() => {
   if (!currentSystem.value) {
     return 0;
@@ -299,6 +373,7 @@ function onConnectionIndicatorClick(): void {
 function openUnitsPopover(): void {
   isUnitsPopoverOpen.value = true;
   isShipsPopoverOpen.value = false;
+  isSubsystemsPopoverOpen.value = false;
   isTeamsPopoverOpen.value = false;
   isClustersPopoverOpen.value = false;
 }
@@ -311,6 +386,7 @@ function closeUnitsPopover(): void {
 function openShipsPopover(): void {
   isShipsPopoverOpen.value = true;
   isUnitsPopoverOpen.value = false;
+  isSubsystemsPopoverOpen.value = false;
   isTeamsPopoverOpen.value = false;
   isClustersPopoverOpen.value = false;
 }
@@ -320,10 +396,23 @@ function closeShipsPopover(): void {
   shipsSearchQuery.value = '';
 }
 
+function openSubsystemsPopover(): void {
+  isSubsystemsPopoverOpen.value = true;
+  isUnitsPopoverOpen.value = false;
+  isShipsPopoverOpen.value = false;
+  isTeamsPopoverOpen.value = false;
+  isClustersPopoverOpen.value = false;
+}
+
+function closeSubsystemsPopover(): void {
+  isSubsystemsPopoverOpen.value = false;
+}
+
 function openTeamsPopover(): void {
   isTeamsPopoverOpen.value = true;
   isUnitsPopoverOpen.value = false;
   isShipsPopoverOpen.value = false;
+  isSubsystemsPopoverOpen.value = false;
   isClustersPopoverOpen.value = false;
 }
 
@@ -335,6 +424,7 @@ function openClustersPopover(): void {
   isClustersPopoverOpen.value = true;
   isUnitsPopoverOpen.value = false;
   isShipsPopoverOpen.value = false;
+  isSubsystemsPopoverOpen.value = false;
   isTeamsPopoverOpen.value = false;
 }
 
@@ -358,6 +448,15 @@ function onNavigateUnit(worldX: number | null, worldY: number | null): void {
     worldY,
     uiStore.navigationThrustPercentage,
   );
+}
+
+function onUpgradeSubsystem(subsystemId: string): void {
+  const controllableId = activeControllableId.value;
+  if (!controllableId || !subsystemId) {
+    return;
+  }
+
+  gateway.upgradeSubsystem(controllableId, subsystemId);
 }
 
 function readNumeric(value: unknown): number | null {
@@ -415,6 +514,279 @@ function readUnitClusterId(
   overlay: Record<string, unknown> | undefined,
 ) {
   return unit?.clusterId ?? readNumeric(overlay?.clusterId);
+}
+
+function readText(value: unknown, fallback = '') {
+  return typeof value === 'string' ? value : fallback;
+}
+
+function readBoolean(value: unknown, fallback = false) {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+function readRecord(value: unknown) {
+  return typeof value === 'object' && value !== null
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function readSubsystemCost(value: unknown): ShipSubsystemCost | null {
+  const record = readRecord(value);
+  if (!record) {
+    return null;
+  }
+
+  return {
+    ticks: readNumeric(record.ticks) ?? 0,
+    energy: readNumeric(record.energy) ?? 0,
+    metal: readNumeric(record.metal) ?? 0,
+    carbon: readNumeric(record.carbon) ?? 0,
+    hydrogen: readNumeric(record.hydrogen) ?? 0,
+    silicon: readNumeric(record.silicon) ?? 0,
+    ions: readNumeric(record.ions) ?? 0,
+    neutrinos: readNumeric(record.neutrinos) ?? 0,
+  };
+}
+
+function readSubsystemEntries(value: unknown): ShipSubsystemEntry[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => readRecord(entry))
+    .filter((entry): entry is Record<string, unknown> => !!entry)
+    .map((entry) => {
+      const tier = readNumeric(entry.tier) ?? 0;
+      const targetTier = readNumeric(entry.targetTier) ?? tier;
+      const remainingTicks = readNumeric(entry.remainingTicks) ?? 0;
+      const exists = readBoolean(entry.exists, tier > 0);
+      const status = readText(entry.status, 'Off');
+      const isChangingTier = remainingTicks > 0 && targetTier !== tier;
+      const installStateLabel = !exists
+        ? 'Missing'
+        : isChangingTier
+          ? (targetTier > tier ? 'Upgrading' : 'Downgrading')
+          : 'Installed';
+      const progressLabel = isChangingTier
+        ? `${targetTier > tier ? 'To' : 'Back to'} T${targetTier} in ${remainingTicks} ticks`
+        : humanizeSubsystemStatus(status);
+      const nextTier = readNumeric(entry.nextTier) ?? tier;
+      const canUpgrade = readBoolean(entry.canUpgrade, false);
+      const nextTierCosts = readSubsystemCost(entry.nextTierCosts);
+      const nextTierPreview = readSubsystemStats(entry.nextTierPreview);
+
+      return {
+        id: readText(entry.id, readText(entry.slot, readText(entry.name, 'subsystem'))),
+        name: humanizeSubsystemName(readText(entry.name, readText(entry.slot, 'Subsystem'))),
+        slot: readText(entry.slot, 'UnknownSlot'),
+        kind: readText(entry.kind, 'Unknown'),
+        exists,
+        tier,
+        targetTier,
+        remainingTicks,
+        status,
+        installStateLabel,
+        tierLabel: `Tier ${tier}`,
+        progressLabel,
+        subtitleLabel: `${installStateLabel} · Tier ${tier}`,
+        stats: readSubsystemStats(entry.stats),
+        nextTier,
+        canUpgrade,
+        nextTierCosts,
+        nextTierPreview,
+        upgradeTitle: buildSubsystemUpgradeTitle(
+          humanizeSubsystemName(readText(entry.name, readText(entry.slot, 'Subsystem'))),
+          tier,
+          nextTier,
+          canUpgrade,
+          isChangingTier,
+          nextTierCosts,
+          nextTierPreview,
+        ),
+      };
+    })
+    .sort((left, right) => {
+      if (left.exists !== right.exists) {
+        return left.exists ? -1 : 1;
+      }
+
+      if (left.remainingTicks !== right.remainingTicks) {
+        return right.remainingTicks - left.remainingTicks;
+      }
+
+      return left.name.localeCompare(right.name);
+    });
+}
+
+function readSubsystemStats(value: unknown): ShipSubsystemStat[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => readRecord(entry))
+    .filter((entry): entry is Record<string, unknown> => !!entry)
+    .map((entry) => ({
+      label: readText(entry.label, 'Stat'),
+      value: readText(entry.value),
+    }))
+    .filter((entry) => entry.value.trim().length > 0);
+}
+
+function buildSubsystemUpgradeTitle(
+  subsystemName: string,
+  currentTier: number,
+  nextTier: number,
+  canUpgrade: boolean,
+  isChangingTier: boolean,
+  nextTierCosts: ShipSubsystemCost | null,
+  nextTierPreview: ShipSubsystemStat[],
+) {
+  if (isChangingTier) {
+    return `${subsystemName} is already changing tier.`;
+  }
+
+  if (!canUpgrade || nextTier <= currentTier) {
+    return `${subsystemName} is already at its maximum tier.`;
+  }
+
+  const verb = subsystemActionVerb(currentTier, nextTier);
+  const lines = [`${verb} ${subsystemName} to Tier ${nextTier}`];
+  const costs = formatSubsystemCosts(nextTierCosts);
+  if (costs.length > 0) {
+    lines.push('Cost:');
+    lines.push(...costs.map((cost) => `- ${cost}`));
+  }
+
+  if (nextTierPreview.length > 0) {
+    lines.push(`Tier ${nextTier} preview:`);
+    lines.push(...nextTierPreview.map((stat) => `- ${stat.label} ${stat.value}`));
+  }
+
+  return lines.join('\n');
+}
+
+function subsystemActionVerb(currentTier: number, nextTier: number) {
+  return currentTier === 0 && nextTier === 1 ? 'Install' : 'Upgrade';
+}
+
+function formatSubsystemCosts(costs: ShipSubsystemCost | null) {
+  if (!costs) {
+    return [];
+  }
+
+  const entries = [
+    costs.ticks > 0 ? `${costs.ticks} ticks` : '',
+    costs.energy > 0 ? `${formatMetric(costs.energy)} energy` : '',
+    costs.metal > 0 ? `${formatMetric(costs.metal)} metal` : '',
+    costs.carbon > 0 ? `${formatMetric(costs.carbon)} carbon` : '',
+    costs.hydrogen > 0 ? `${formatMetric(costs.hydrogen)} hydrogen` : '',
+    costs.silicon > 0 ? `${formatMetric(costs.silicon)} silicon` : '',
+    costs.ions > 0 ? `${formatMetric(costs.ions)} ions` : '',
+    costs.neutrinos > 0 ? `${formatMetric(costs.neutrinos)} neutrinos` : '',
+  ];
+
+  return entries.filter((entry) => entry.length > 0);
+}
+
+function buildSubsystemCostEntries(subsystem: ShipSubsystemEntry): ShipSubsystemCostEntry[] {
+  const costs = subsystem.nextTierCosts;
+  if (!costs) {
+    return [];
+  }
+
+  const resources = activeShipUpgradeResources.value;
+  const entries: ShipSubsystemCostEntry[] = [];
+
+  if (costs.ticks > 0) {
+    entries.push({
+      label: 'Time',
+      value: `${costs.ticks} ticks`,
+      enough: true,
+      isNeutral: true,
+    });
+  }
+
+  addSubsystemCostEntry(entries, 'Energy', costs.energy, resources.energy);
+  addSubsystemCostEntry(entries, 'Metal', costs.metal, resources.metal);
+  addSubsystemCostEntry(entries, 'Carbon', costs.carbon, resources.carbon);
+  addSubsystemCostEntry(entries, 'Hydrogen', costs.hydrogen, resources.hydrogen);
+  addSubsystemCostEntry(entries, 'Silicon', costs.silicon, resources.silicon);
+  addSubsystemCostEntry(entries, 'Ions', costs.ions, resources.ions);
+  addSubsystemCostEntry(entries, 'Neutrinos', costs.neutrinos, resources.neutrinos);
+
+  return entries;
+}
+
+function getSubsystemTimeCostEntry(subsystem: ShipSubsystemEntry) {
+  return buildSubsystemCostEntries(subsystem).find((entry) => entry.isNeutral) ?? null;
+}
+
+function getSubsystemResourceCostEntries(subsystem: ShipSubsystemEntry) {
+  return buildSubsystemCostEntries(subsystem).filter((entry) => !entry.isNeutral);
+}
+
+function addSubsystemCostEntry(entries: ShipSubsystemCostEntry[], label: string, required: number, available: number | null) {
+  if (required <= 0) {
+    return;
+  }
+
+  const enough = available !== null && available >= required;
+  entries.push({
+    label,
+    value: `${formatMetric(available ?? 0)} / ${formatMetric(required)}`,
+    enough,
+  });
+}
+
+function readSubsystemResourceValue(subsystems: ShipSubsystemEntry[], subsystemName: string, statLabel: string) {
+  const subsystem = subsystems.find((entry) => entry.name === subsystemName);
+  const stat = subsystem?.stats.find((entry) => entry.label === statLabel);
+  if (!stat) {
+    return null;
+  }
+
+  return readLeadingMetric(stat.value);
+}
+
+function readLeadingMetric(value: string) {
+  const match = value.match(/-?\d+(?:[.,]\d+)?/);
+  if (!match) {
+    return null;
+  }
+
+  const normalized = match[0].replace(',', '.');
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isSubsystemUpgradeReady(subsystem: ShipSubsystemEntry) {
+  const costEntries = buildSubsystemCostEntries(subsystem).filter((entry) => !entry.isNeutral);
+  if (costEntries.length === 0) {
+    return false;
+  }
+
+  return costEntries.every((entry) => entry.enough);
+}
+
+function humanizeSubsystemStatus(status: string) {
+  const normalized = status.trim();
+  return normalized ? humanizeSubsystemName(normalized) : 'Idle';
+}
+
+function humanizeSubsystemName(value: string) {
+  const normalized = value
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .trim();
+
+  if (!normalized) {
+    return 'Unknown subsystem';
+  }
+
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
 function humanizeUnitKind(kind: string) {
@@ -851,6 +1223,111 @@ function formatPlayerSessionOptionLabel(player: PlayerSessionSummaryDto): string
         </section>
       </div>
 
+      <div
+        class="status-bar-item status-bar-item-metric status-bar-item-metric-popover"
+        :title="activeShip ? `Subsystems for ${activeShip.controllable?.displayName ?? activeShip.unitId}` : 'Subsystems for the active ship'"
+        tabindex="0"
+        @mouseenter="openSubsystemsPopover"
+        @mouseleave="closeSubsystemsPopover"
+        @focusin="openSubsystemsPopover"
+        @focusout="closeSubsystemsPopover"
+      >
+        <span class="status-bar-icon" aria-hidden="true">
+          <svg viewBox="0 0 16 16" focusable="false">
+            <path d="M8 2.1 10.95 5.55 9.55 9.15 8 13.9 6.45 9.15 5.05 5.55Z" fill="none" stroke="currentColor" stroke-linejoin="round" stroke-width="1.2"></path>
+            <path d="M6 8.05 3.35 9.35 5.3 6.7M10 8.05l2.65 1.3L10.7 6.7" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.1"></path>
+            <path d="M7 5.55h2M7.15 10.15h1.7" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.1"></path>
+          </svg>
+        </span>
+        <span class="status-bar-label">Subsystems</span>
+        <strong>{{ installedShipSubsystemCount }}</strong>
+
+        <section v-if="isSubsystemsPopoverOpen" class="status-bar-popover panel-glass" aria-label="Ship subsystems">
+          <header class="status-bar-popover-head">
+            <div>
+              <h3>{{ activeShip?.controllable?.displayName ?? activeShip?.unitId ?? 'Active ship' }}</h3>
+              <p>{{ installedShipSubsystemCount }} / {{ activeShipSubsystems.length }} subsystems installed</p>
+            </div>
+            <label class="status-bar-subsystem-filter">
+              <input v-model="hideUninstalledSubsystems" type="checkbox" />
+              <span>Hide uninstalled</span>
+            </label>
+          </header>
+
+          <div v-if="visibleShipSubsystems.length > 0" class="status-bar-popover-body">
+            <ul class="status-bar-system-list">
+              <li
+                v-for="(subsystem, subsystemIndex) in visibleShipSubsystems"
+                :key="subsystem.id"
+                class="status-bar-system-row"
+              >
+                <div class="status-bar-system-info status-bar-system-info--subsystem">
+                  <div class="status-bar-subsystem-headline">
+                    <strong>{{ subsystem.name }}</strong>
+                    <span class="status-bar-system-copy-label">{{ subsystem.subtitleLabel }}</span>
+                  </div>
+                  <div class="status-bar-system-metrics">
+                    <span
+                      v-for="stat in subsystem.stats"
+                      :key="`${subsystem.id}-${stat.label}`"
+                    >
+                      {{ stat.label }} {{ stat.value }}
+                    </span>
+                    <span v-if="subsystem.stats.length === 0">No stats yet</span>
+                  </div>
+                  <div
+                    v-if="buildSubsystemCostEntries(subsystem).length > 0"
+                    class="status-bar-subsystem-costs"
+                  >
+                    <div class="status-bar-subsystem-costs-row">
+                      <span class="status-bar-subsystem-costs-label">{{ subsystemActionVerb(subsystem.tier, subsystem.nextTier) }} costs</span>
+                      <div class="status-bar-subsystem-costs-list">
+                        <span
+                          v-for="cost in getSubsystemResourceCostEntries(subsystem)"
+                          :key="`${subsystem.id}-${cost.label}`"
+                          :class="[
+                            'status-bar-subsystem-cost',
+                            cost.enough ? 'is-ready' : 'is-missing',
+                          ]"
+                        >
+                          {{ cost.label }} {{ cost.value }}
+                        </span>
+                      </div>
+                      <span
+                        v-if="getSubsystemTimeCostEntry(subsystem)"
+                        class="status-bar-subsystem-cost is-neutral"
+                      >
+                        {{ getSubsystemTimeCostEntry(subsystem)?.value }}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div class="status-bar-system-actions">
+                  <button
+                    type="button"
+                    class="status-bar-unit-action"
+                    :class="{ 'is-ready': isSubsystemUpgradeReady(subsystem) }"
+                    :disabled="!subsystem.canUpgrade"
+                    :title="subsystem.upgradeTitle"
+                    @click.stop="onUpgradeSubsystem(subsystem.id)"
+                  >
+                    {{ subsystemActionVerb(subsystem.tier, subsystem.nextTier) }}
+                  </button>
+                </div>
+              </li>
+            </ul>
+          </div>
+
+          <p v-else class="status-bar-popover-empty">
+            {{
+              activeShip
+                ? (hideUninstalledSubsystems ? 'No installed subsystems match the current filter.' : 'No subsystem details are available for the active ship yet.')
+                : 'Select a ship to inspect its subsystems.'
+            }}
+          </p>
+        </section>
+      </div>
+
     </div>
 
     <div class="status-bar-group status-bar-group-right">
@@ -914,3 +1391,102 @@ function formatPlayerSessionOptionLabel(player: PlayerSessionSummaryDto): string
     </div>
   </footer>
 </template>
+
+<style scoped>
+.status-bar-system-info--subsystem {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  align-items: flex-start;
+  text-align: left;
+}
+
+.status-bar-subsystem-headline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.45rem 0.75rem;
+  justify-content: flex-start;
+  width: 100%;
+  text-align: left;
+}
+
+.status-bar-system-info--subsystem .status-bar-system-metrics {
+  justify-content: flex-start;
+  width: 100%;
+  text-align: left;
+}
+
+.status-bar-system-info--subsystem .status-bar-system-metrics span {
+  text-align: left;
+}
+
+.status-bar-subsystem-costs {
+  border-top: 1px solid rgba(235, 242, 255, 0.2);
+  padding-top: 0.45rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  width: 100%;
+}
+
+.status-bar-subsystem-costs-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.status-bar-subsystem-costs-label {
+  color: rgba(235, 242, 255, 0.72);
+  font-size: 0.66rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.status-bar-subsystem-costs-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.45rem;
+  justify-content: flex-start;
+  flex: 1 1 auto;
+}
+
+.status-bar-subsystem-cost {
+  text-align: left;
+}
+
+.status-bar-subsystem-cost.is-ready {
+  color: #7dffb2;
+}
+
+.status-bar-subsystem-cost.is-missing {
+  color: #ff8e8e;
+}
+
+.status-bar-subsystem-cost.is-neutral {
+  color: rgba(235, 242, 255, 0.72);
+}
+
+.status-bar-unit-action.is-ready {
+  border-color: rgba(125, 255, 178, 0.9);
+  color: #dfffe8;
+  background: rgba(52, 138, 92, 0.28);
+}
+
+.status-bar-subsystem-filter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.status-bar-subsystem-filter input {
+  margin: 0;
+}
+</style>

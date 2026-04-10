@@ -1,5 +1,5 @@
 import type { ClientMessage, PongMessage, ServerMessage } from '../types/generated';
-import type { ClearTacticalTargetCommandMessage, SetTacticalModeCommandMessage, SetTacticalTargetCommandMessage } from './commands';
+import type { ClearTacticalTargetCommandMessage, SetTacticalModeCommandMessage, SetTacticalTargetCommandMessage, UpgradeSubsystemCommandMessage } from './commands';
 
 export type ClientConnectionState = 'idle' | 'connecting' | 'open' | 'closed' | 'error';
 
@@ -9,7 +9,7 @@ type Handlers = {
   onSend?: (message: OutgoingMessage) => void;
 };
 
-export type OutgoingMessage = ClientMessage | SetTacticalModeCommandMessage | SetTacticalTargetCommandMessage | ClearTacticalTargetCommandMessage;
+export type OutgoingMessage = ClientMessage | SetTacticalModeCommandMessage | SetTacticalTargetCommandMessage | ClearTacticalTargetCommandMessage | UpgradeSubsystemCommandMessage;
 
 export function createGatewayClient(url: string, handlers: Handlers) {
   let socket: WebSocket | null = null;
