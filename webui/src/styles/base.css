@@ -142,6 +142,29 @@ h2 {
   inset: 0;
 }
 
+.damage-flash {
+  --damage-flash-strength: 0.5;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      circle at center,
+      rgba(255, 70, 70, 0) 52%,
+      rgba(255, 70, 70, calc(0.18 * var(--damage-flash-strength))) 70%,
+      rgba(255, 52, 52, calc(0.52 * var(--damage-flash-strength))) 100%
+    ),
+    radial-gradient(
+      circle at 50% 50%,
+      rgba(255, 110, 110, 0) 62%,
+      rgba(255, 88, 88, calc(0.26 * var(--damage-flash-strength))) 82%,
+      rgba(255, 48, 48, calc(0.6 * var(--damage-flash-strength))) 100%
+    );
+  mix-blend-mode: screen;
+  animation: damage-flash 1440ms ease-out forwards;
+}
+
 .world-canvas {
   display: block;
   width: 100% !important;
@@ -152,13 +175,30 @@ h2 {
   position: absolute;
   left: 50%;
   top: 1rem;
-  z-index: 1;
+  z-index: 2;
   display: flex;
   gap: 0.65rem;
   flex-wrap: wrap;
   justify-content: center;
   transform: translateX(-50%);
   pointer-events: none;
+}
+
+@keyframes damage-flash {
+  0% {
+    opacity: 0;
+    transform: scale(1.01);
+  }
+
+  14% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(0.996);
+  }
 }
 
 .viewport-chip {
