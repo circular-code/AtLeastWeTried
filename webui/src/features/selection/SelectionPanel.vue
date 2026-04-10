@@ -93,6 +93,7 @@ function setAsTarget() {
           <button class="button-secondary button-compact" type="button" :disabled="!canInitiateTargetedScan" @click="initiateTargetedScan">
             Initiate Scan
           </button>
+          <!--
           <button
             class="button-secondary button-compact"
             :class="{ 'is-active': isUnitTracked(selectionEntry.id) }"
@@ -102,6 +103,7 @@ function setAsTarget() {
           >
             {{ isUnitTracked(selectionEntry.id) ? 'Tracked' : 'Track' }}
           </button>
+          -->
           <button
             v-if="tacticalMode === 'target'"
             class="button-secondary button-compact"
