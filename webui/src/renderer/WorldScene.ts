@@ -457,7 +457,7 @@ export class WorldScene {
   private readonly handleWheel = (event: WheelEvent) => {
     event.preventDefault();
     const worldBeforeZoom = this.clientToWorld(event.clientX, event.clientY);
-    const zoomFactor = Math.exp(event.deltaY * 0.0012);
+    const zoomFactor = Math.exp(-event.deltaY * 0.0012);
     this.camera.zoom = THREE.MathUtils.clamp(this.camera.zoom * zoomFactor, 0.12, 8);
     this.camera.updateProjectionMatrix();
 
