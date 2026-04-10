@@ -1001,28 +1001,35 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             case "main_weapon":
                 if (targetX.HasValue && targetY.HasValue)
                 {
-                    if (!_tacticalService.TryBuildPointShotRequest(controllableId, classic, targetX.Value, targetY.Value, _latestGalaxyTick, out var request))
-                        return Rejected(commandId, "no_ballistic_solution", "No valid ballistic trajectory for the selected target point.");
+                    const float ultraMegaCuteSparkleRelativeSpeed = 2f;
+                    const ushort ultraMegaCuteSparkleTicks = 80;
+                    const float ultraMegaCuteSparkleLoad = 12f;
+                    const float ultraMegaCuteSparkleDamage = 8f;
 
-                    await classic.ShotLauncher.Shoot(request.RelativeMovement, request.Ticks, request.Load, request.Damage);
-                    _tacticalService.RegisterSuccessfulFire(controllableId, request.Tick);
+                    float deltaX = targetX.Value - classic.Position.X;
+                    float deltaY = targetY.Value - classic.Position.Y;
+                    Vector ultraMegaCuteSparkleMovement = MathF.Abs(deltaX) < 0.0001f && MathF.Abs(deltaY) < 0.0001f
+                        ? Vector.FromAngleLength(classic.Angle, ultraMegaCuteSparkleRelativeSpeed)
+                        : Vector.FromAngleLength(MathF.Atan2(deltaY, deltaX), ultraMegaCuteSparkleRelativeSpeed);
+
+                    await classic.ShotLauncher.Shoot(ultraMegaCuteSparkleMovement, ultraMegaCuteSparkleTicks, ultraMegaCuteSparkleLoad, ultraMegaCuteSparkleDamage);
+                    _tacticalService.RegisterSuccessfulFire(controllableId, _latestGalaxyTick);
                     result = new Dictionary<string, object?>
                     {
-                        { "mode", "point" },
+                        { "mode", "direct" },
                         { "targetX", targetX.Value },
                         { "targetY", targetY.Value },
-                        { "predictedMissDistance", request.PredictedMissDistance },
-                        { "ticks", request.Ticks },
+                        { "ticks", ultraMegaCuteSparkleTicks },
                         {
                             "relativeMovement", new Dictionary<string, object?>
                             {
-                                { "x", request.RelativeMovement.X },
-                                { "y", request.RelativeMovement.Y },
-                                { "length", request.RelativeMovement.Length }
+                                { "x", ultraMegaCuteSparkleMovement.X },
+                                { "y", ultraMegaCuteSparkleMovement.Y },
+                                { "length", ultraMegaCuteSparkleMovement.Length }
                             }
                         },
-                        { "load", request.Load },
-                        { "damage", request.Damage }
+                        { "load", ultraMegaCuteSparkleLoad },
+                        { "damage", ultraMegaCuteSparkleDamage }
                     };
                     break;
                 }

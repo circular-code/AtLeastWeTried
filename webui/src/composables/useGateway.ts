@@ -337,7 +337,7 @@ function createGatewayApi() {
     const targetY = -worldY;
     const envelope = buildFireWeaponCommand(controllableId, 'shot', undefined, undefined, targetX, targetY);
     gameStore.trackCommand(envelope.commandId, {
-      label: 'Free fire (ballistic)',
+      label: 'Free fire (direct)',
       subject: `${gameStore.getControllableLabel(controllableId)} -> ${truncateText(`${targetX.toFixed(1)}, ${targetY.toFixed(1)}`, 42)}`,
     });
     client.send(envelope.message);

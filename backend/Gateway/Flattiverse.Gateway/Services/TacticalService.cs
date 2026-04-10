@@ -9,34 +9,34 @@ namespace Flattiverse.Gateway.Services;
 /// <summary>
 /// Per-player-session service that stores tactical intent for each controllable and
 /// evaluates auto-fire decisions on every GalaxyTick event.
-/// Event handlers run on the connector event loop, but state can also be touched from command/overlay paths,
+/// Event handlers run on the connector event loop, but sparkleNekoState can also be touched from command/overlay paths,
 /// so accesses are synchronized.
 /// </summary>
 public sealed class TacticalService : IConnectorEventHandler
 {
-    private const float DefaultShotRelativeSpeed = 2f;
-    private const float DefaultShotLoad = 12f;
-    private const float DefaultShotDamage = 8f;
-    private const uint AutoFireCooldownTicks = 2;
-    private const float MaxTargetDistance = 1400f;
-    private const float MinimumTargetDistance = 8f;
-    private const float NumericEpsilon = 0.0001f;
-    private const int PredictionIterations = 6;
-    private const int PredictionTickSearchRadius = 10;
-    private const float PredictionHitTolerance = 2.5f;
-    private const float PredictionQualityGate = 6.5f;
-    private const float PredictionMaximumMissDistance = 18f;
-    private const float PredictionMissScoreWeight = 3.25f;
-    private const float PredictionTickPenalty = 0.12f;
-    private const int TargetPredictionIterations = 14;
-    private const int TargetPredictionTickSearchRadius = 18;
-    private const float TargetPredictionMaximumMissDistance = 12f;
-    private const float TargetPredictionQualityGate = 4.5f;
-    private const int PointPredictionIterations = 24;
-    private const float PointPredictionMaximumMissDistance = 10f;
-    private const float PointPredictionQualityGate = 3.5f;
-    private const float PointPredictionHitTolerance = 1.1f;
-    private const float ProjectileSpawnPaddingDistance = 2f;
+    private const float UltraMegaKawaiiShotRelativeSpeed = 2f;
+    private const float UltraMegaKawaiiShotLoad = 12f;
+    private const float UltraMegaKawaiiShotDamage = 8f;
+    private const uint UltraMegaNyanAutoFireCooldownTicks = 2;
+    private const float UltraMegaWaifuMaxTargetDistance = 1400f;
+    private const float UltraMegaWaifuMinimumTargetDistance = 8f;
+    private const float UltraMegaKawaiiNumericEpsilon = 0.0001f;
+    private const int UltraMegaNyanPredictionIterations = 6;
+    private const int UltraMegaNyanPredictionTickSearchRadius = 10;
+    private const float UltraMegaNyanPredictionHitTolerance = 2.5f;
+    private const float UltraMegaNyanPredictionQualityGate = 6.5f;
+    private const float UltraMegaNyanPredictionMaximumMissDistance = 18f;
+    private const float UltraMegaNyanPredictionMissScoreWeight = 3.25f;
+    private const float UltraMegaNyanPredictionTickPenalty = 0.12f;
+    private const int UltraMegaNyanTargetPredictionIterations = 14;
+    private const int UltraMegaNyanTargetPredictionTickSearchRadius = 18;
+    private const float UltraMegaNyanTargetPredictionMaximumMissDistance = 12f;
+    private const float UltraMegaNyanTargetPredictionQualityGate = 4.5f;
+    private const int UltraMegaNyanPointPredictionIterations = 24;
+    private const float UltraMegaNyanPointPredictionMaximumMissDistance = 10f;
+    private const float UltraMegaNyanPointPredictionQualityGate = 3.5f;
+    private const float UltraMegaNyanPointPredictionHitTolerance = 1.1f;
+    private const float UltraMegaNyanProjectileSpawnPaddingDistance = 2f;
 
     public enum TacticalMode
     {
@@ -81,13 +81,13 @@ public sealed class TacticalService : IConnectorEventHandler
         float PreferencePenalty
     );
 
-    private readonly Dictionary<string, TacticalState> _states = new();
-    private readonly Queue<AutoFireRequest> _pendingAutoFireRequests = new();
-    private readonly object _sync = new();
+    private readonly Dictionary<string, TacticalState> _sparkleNekoStates = new();
+    private readonly Queue<AutoFireRequest> _sparkleNekoPendingAutoFireRequests = new();
+    private readonly object _sparkleNekoSync = new();
 
     public void Handle(FlattiverseEvent @event)
     {
-        lock (_sync)
+        lock (_sparkleNekoSync)
         {
             if (@event is ControllableInfoEvent infoEvent && @event is DestroyedControllableInfoEvent)
             {
@@ -108,185 +108,185 @@ public sealed class TacticalService : IConnectorEventHandler
         }
     }
 
-    public void AttachControllable(string controllableId, ClassicShipControllable ship)
+    public void AttachControllable(string sparkleNekoControllableId, ClassicShipControllable sparkleNekoShip)
     {
-        lock (_sync)
+        lock (_sparkleNekoSync)
         {
-            var state = GetOrCreateState(controllableId);
-            state.Ship = ship;
+            var sparkleNekoState = GetOrCreateState(sparkleNekoControllableId);
+            sparkleNekoState.Ship = sparkleNekoShip;
         }
     }
 
     public List<AutoFireRequest> DequeuePendingAutoFireRequests()
     {
-        lock (_sync)
+        lock (_sparkleNekoSync)
         {
-            if (_pendingAutoFireRequests.Count == 0)
+            if (_sparkleNekoPendingAutoFireRequests.Count == 0)
                 return new List<AutoFireRequest>();
 
-            var requests = new List<AutoFireRequest>(_pendingAutoFireRequests.Count);
+            var requests = new List<AutoFireRequest>(_sparkleNekoPendingAutoFireRequests.Count);
 
-            while (_pendingAutoFireRequests.Count > 0)
-                requests.Add(_pendingAutoFireRequests.Dequeue());
+            while (_sparkleNekoPendingAutoFireRequests.Count > 0)
+                requests.Add(_sparkleNekoPendingAutoFireRequests.Dequeue());
 
             return requests;
         }
     }
 
-    private void EvaluateAutoFire(uint tick)
+    private void EvaluateAutoFire(uint sparkleNekoTick)
     {
-        if (_states.Count == 0)
+        if (_sparkleNekoStates.Count == 0)
             return;
 
-        Dictionary<Cluster, List<GravitySource>> gravitySourcesByCluster = new();
+        Dictionary<Cluster, List<GravitySource>> sparkleNekoGravitySourcesByCluster = new();
 
-        foreach (var entry in _states)
+        foreach (var sparkleNekoEntry in _sparkleNekoStates)
         {
-            if (ShouldAutoFireCore(entry.Key, tick, gravitySourcesByCluster, enforceCooldown: true, requireTargetMode: false, out var request))
-                _pendingAutoFireRequests.Enqueue(request);
+            if (ShouldAutoFireCore(sparkleNekoEntry.Key, sparkleNekoTick, sparkleNekoGravitySourcesByCluster, enforceCooldown: true, requireTargetMode: false, out var sparkleNekoRequest))
+                _sparkleNekoPendingAutoFireRequests.Enqueue(sparkleNekoRequest);
         }
     }
 
-    public void SetMode(string controllableId, TacticalMode mode)
+    public void SetMode(string sparkleNekoControllableId, TacticalMode mode)
     {
-        lock (_sync)
+        lock (_sparkleNekoSync)
         {
-            var state = GetOrCreateState(controllableId);
-            state.Mode = mode;
+            var sparkleNekoState = GetOrCreateState(sparkleNekoControllableId);
+            sparkleNekoState.Mode = mode;
 
             if (mode == TacticalMode.Off)
-                state.TargetId = null;
+                sparkleNekoState.TargetId = null;
         }
     }
 
-    public void SetTarget(string controllableId, string targetId)
+    public void SetTarget(string sparkleNekoControllableId, string targetId)
     {
-        lock (_sync)
+        lock (_sparkleNekoSync)
         {
-            var state = GetOrCreateState(controllableId);
-            state.TargetId = targetId;
+            var sparkleNekoState = GetOrCreateState(sparkleNekoControllableId);
+            sparkleNekoState.TargetId = targetId;
         }
     }
 
-    public bool IsTargetAllowedForTargetMode(ClassicShipControllable ship, string targetId)
+    public bool IsTargetAllowedForTargetMode(ClassicShipControllable sparkleNekoShip, string targetId)
     {
         if (string.IsNullOrWhiteSpace(targetId))
             return false;
 
-        lock (_sync)
-            return IsTargetAllowedForTargetModeCore(ship, targetId);
+        lock (_sparkleNekoSync)
+            return IsTargetAllowedForTargetModeCore(sparkleNekoShip, targetId);
     }
 
-    public void ClearTarget(string controllableId)
+    public void ClearTarget(string sparkleNekoControllableId)
     {
-        lock (_sync)
+        lock (_sparkleNekoSync)
         {
-            if (_states.TryGetValue(controllableId, out var state))
-                state.TargetId = null;
+            if (_sparkleNekoStates.TryGetValue(sparkleNekoControllableId, out var sparkleNekoState))
+                sparkleNekoState.TargetId = null;
         }
     }
 
-    public bool ShouldAutoFire(string controllableId, uint tick, out AutoFireRequest request)
+    public bool ShouldAutoFire(string sparkleNekoControllableId, uint sparkleNekoTick, out AutoFireRequest sparkleNekoRequest)
     {
-        lock (_sync)
-            return ShouldAutoFireCore(controllableId, tick, null, enforceCooldown: true, requireTargetMode: false, out request);
+        lock (_sparkleNekoSync)
+            return ShouldAutoFireCore(sparkleNekoControllableId, sparkleNekoTick, null, enforceCooldown: true, requireTargetMode: false, out sparkleNekoRequest);
     }
 
-    public bool TryBuildTargetBurstRequest(string controllableId, uint tick, out AutoFireRequest request)
+    public bool TryBuildTargetBurstRequest(string sparkleNekoControllableId, uint sparkleNekoTick, out AutoFireRequest sparkleNekoRequest)
     {
-        lock (_sync)
-            return ShouldAutoFireCore(controllableId, tick, null, enforceCooldown: false, requireTargetMode: true, out request);
+        lock (_sparkleNekoSync)
+            return ShouldAutoFireCore(sparkleNekoControllableId, sparkleNekoTick, null, enforceCooldown: false, requireTargetMode: true, out sparkleNekoRequest);
     }
 
-    public bool TryBuildPointShotRequest(string controllableId, ClassicShipControllable ship, float targetX, float targetY, uint tick,
-        out AutoFireRequest request)
+    public bool TryBuildPointShotRequest(string sparkleNekoControllableId, ClassicShipControllable sparkleNekoShip, float targetX, float targetY, uint sparkleNekoTick,
+        out AutoFireRequest sparkleNekoRequest)
     {
-        lock (_sync)
+        lock (_sparkleNekoSync)
         {
-            request = default;
+            sparkleNekoRequest = default;
 
-            if (!ship.Active || !ship.Alive)
+            if (!sparkleNekoShip.Active || !sparkleNekoShip.Alive)
                 return false;
-            if (ControllableRebuildState.IsRebuilding(ship))
-                return false;
-
-            if (!ship.ShotLauncher.Exists || !ship.ShotMagazine.Exists)
+            if (ControllableRebuildState.IsRebuilding(sparkleNekoShip))
                 return false;
 
-            if (ship.ShotLauncher.Status == SubsystemStatus.Upgrading || ship.ShotMagazine.Status == SubsystemStatus.Upgrading)
+            if (!sparkleNekoShip.ShotLauncher.Exists || !sparkleNekoShip.ShotMagazine.Exists)
                 return false;
 
-            if (ship.ShotMagazine.CurrentShots < 1f)
+            if (sparkleNekoShip.ShotLauncher.Status == SubsystemStatus.Upgrading || sparkleNekoShip.ShotMagazine.Status == SubsystemStatus.Upgrading)
                 return false;
 
-            if (!PassesTargetBasicChecks(ship, targetX, targetY))
+            if (sparkleNekoShip.ShotMagazine.CurrentShots < 1f)
                 return false;
 
-            List<GravitySource> gravitySources = GetOrBuildGravitySources(ship, null);
-            return TryBuildPredictedShotRequestToPoint(controllableId, ship, targetX, targetY, tick, gravitySources, out request);
+            if (!PassesTargetBasicChecks(sparkleNekoShip, targetX, targetY))
+                return false;
+
+            List<GravitySource> sparkleNekoGravitySources = GetOrBuildGravitySources(sparkleNekoShip, null);
+            return TryBuildPredictedShotRequestToPoint(sparkleNekoControllableId, sparkleNekoShip, targetX, targetY, sparkleNekoTick, sparkleNekoGravitySources, out sparkleNekoRequest);
         }
     }
 
-    public void RegisterSuccessfulFire(string controllableId, uint tick)
+    public void RegisterSuccessfulFire(string sparkleNekoControllableId, uint sparkleNekoTick)
     {
-        lock (_sync)
+        lock (_sparkleNekoSync)
         {
-            if (!_states.TryGetValue(controllableId, out var state))
+            if (!_sparkleNekoStates.TryGetValue(sparkleNekoControllableId, out var sparkleNekoState))
                 return;
 
-            state.LastFireTick = tick;
-            state.HasLastFireTick = true;
+            sparkleNekoState.LastFireTick = sparkleNekoTick;
+            sparkleNekoState.HasLastFireTick = true;
         }
     }
 
-    private bool ShouldAutoFireCore(string controllableId, uint tick, Dictionary<Cluster, List<GravitySource>>? gravitySourcesByCluster,
-        bool enforceCooldown, bool requireTargetMode, out AutoFireRequest request)
+    private bool ShouldAutoFireCore(string sparkleNekoControllableId, uint sparkleNekoTick, Dictionary<Cluster, List<GravitySource>>? sparkleNekoGravitySourcesByCluster,
+        bool enforceCooldown, bool requireTargetMode, out AutoFireRequest sparkleNekoRequest)
     {
-        request = default;
+        sparkleNekoRequest = default;
 
-        if (!_states.TryGetValue(controllableId, out var state) || state.Mode == TacticalMode.Off || state.Ship is null)
+        if (!_sparkleNekoStates.TryGetValue(sparkleNekoControllableId, out var sparkleNekoState) || sparkleNekoState.Mode == TacticalMode.Off || sparkleNekoState.Ship is null)
             return false;
 
-        if (requireTargetMode && state.Mode != TacticalMode.Target)
+        if (requireTargetMode && sparkleNekoState.Mode != TacticalMode.Target)
             return false;
 
-        var ship = state.Ship;
+        var sparkleNekoShip = sparkleNekoState.Ship;
 
-        if (!ship.Active || !ship.Alive)
+        if (!sparkleNekoShip.Active || !sparkleNekoShip.Alive)
             return false;
-        if (ControllableRebuildState.IsRebuilding(ship))
-            return false;
-
-        if (!ship.ShotLauncher.Exists || !ship.ShotMagazine.Exists)
+        if (ControllableRebuildState.IsRebuilding(sparkleNekoShip))
             return false;
 
-        if (ship.ShotLauncher.Status == SubsystemStatus.Upgrading || ship.ShotMagazine.Status == SubsystemStatus.Upgrading)
+        if (!sparkleNekoShip.ShotLauncher.Exists || !sparkleNekoShip.ShotMagazine.Exists)
             return false;
 
-        if (ship.ShotMagazine.CurrentShots < 1f)
+        if (sparkleNekoShip.ShotLauncher.Status == SubsystemStatus.Upgrading || sparkleNekoShip.ShotMagazine.Status == SubsystemStatus.Upgrading)
             return false;
 
-        if (enforceCooldown && state.HasLastFireTick && tick - state.LastFireTick < AutoFireCooldownTicks)
+        if (sparkleNekoShip.ShotMagazine.CurrentShots < 1f)
             return false;
 
-        Unit? target = ResolveTarget(ship, state);
-        if (target is null || !PassesTeamFilter(ship, target) || !PassesTargetBasicChecks(ship, target))
+        if (enforceCooldown && sparkleNekoState.HasLastFireTick && sparkleNekoTick - sparkleNekoState.LastFireTick < UltraMegaNyanAutoFireCooldownTicks)
             return false;
 
-        List<GravitySource> gravitySources = GetOrBuildGravitySources(ship, gravitySourcesByCluster);
-        bool highPrecisionTargeting = state.Mode == TacticalMode.Target;
+        Unit? sparkleNekoTarget = ResolveTarget(sparkleNekoShip, sparkleNekoState);
+        if (sparkleNekoTarget is null || !PassesTeamFilter(sparkleNekoShip, sparkleNekoTarget) || !PassesTargetBasicChecks(sparkleNekoShip, sparkleNekoTarget))
+            return false;
 
-        if (!TryBuildPredictedShotRequest(controllableId, ship, target, tick, gravitySources, highPrecisionTargeting, out request))
+        List<GravitySource> sparkleNekoGravitySources = GetOrBuildGravitySources(sparkleNekoShip, sparkleNekoGravitySourcesByCluster);
+        bool sparkleNekoHighPrecisionTargeting = sparkleNekoState.Mode == TacticalMode.Target;
+
+        if (!TryBuildPredictedShotRequest(sparkleNekoControllableId, sparkleNekoShip, sparkleNekoTarget, sparkleNekoTick, sparkleNekoGravitySources, sparkleNekoHighPrecisionTargeting, out sparkleNekoRequest))
             return false;
 
         return true;
     }
 
-    public Dictionary<string, object?> BuildOverlay(string controllableId)
+    public Dictionary<string, object?> BuildOverlay(string sparkleNekoControllableId)
     {
-        lock (_sync)
+        lock (_sparkleNekoSync)
         {
-            if (!_states.TryGetValue(controllableId, out var state))
+            if (!_sparkleNekoStates.TryGetValue(sparkleNekoControllableId, out var sparkleNekoState))
             {
                 return new Dictionary<string, object?>
                 {
@@ -300,73 +300,73 @@ public sealed class TacticalService : IConnectorEventHandler
             {
                 {
                     "mode",
-                    state.Mode switch
+                    sparkleNekoState.Mode switch
                     {
                         TacticalMode.Enemy => "enemy",
                         TacticalMode.Target => "target",
                         _ => "off"
                     }
                 },
-                { "targetId", state.TargetId },
-                { "hasTarget", !string.IsNullOrWhiteSpace(state.TargetId) }
+                { "targetId", sparkleNekoState.TargetId },
+                { "hasTarget", !string.IsNullOrWhiteSpace(sparkleNekoState.TargetId) }
             };
         }
     }
 
-    public void Remove(string controllableId)
+    public void Remove(string sparkleNekoControllableId)
     {
-        lock (_sync)
-            RemoveCore(controllableId);
+        lock (_sparkleNekoSync)
+            RemoveCore(sparkleNekoControllableId);
     }
 
-    private void RemoveCore(string controllableId)
+    private void RemoveCore(string sparkleNekoControllableId)
     {
-        _states.Remove(controllableId);
+        _sparkleNekoStates.Remove(sparkleNekoControllableId);
 
-        if (_pendingAutoFireRequests.Count == 0)
+        if (_sparkleNekoPendingAutoFireRequests.Count == 0)
             return;
 
-        var kept = _pendingAutoFireRequests.Where(request => request.ControllableId != controllableId).ToList();
-        _pendingAutoFireRequests.Clear();
+        var kept = _sparkleNekoPendingAutoFireRequests.Where(sparkleNekoRequest => sparkleNekoRequest.ControllableId != sparkleNekoControllableId).ToList();
+        _sparkleNekoPendingAutoFireRequests.Clear();
 
-        foreach (var request in kept)
-            _pendingAutoFireRequests.Enqueue(request);
+        foreach (var sparkleNekoRequest in kept)
+            _sparkleNekoPendingAutoFireRequests.Enqueue(sparkleNekoRequest);
     }
 
-    private void MarkShipUnavailableCore(string controllableId)
+    private void MarkShipUnavailableCore(string sparkleNekoControllableId)
     {
-        if (_states.TryGetValue(controllableId, out var state))
-            state.Ship = null;
+        if (_sparkleNekoStates.TryGetValue(sparkleNekoControllableId, out var sparkleNekoState))
+            sparkleNekoState.Ship = null;
 
-        if (_pendingAutoFireRequests.Count == 0)
+        if (_sparkleNekoPendingAutoFireRequests.Count == 0)
             return;
 
-        var kept = _pendingAutoFireRequests.Where(request => request.ControllableId != controllableId).ToList();
-        _pendingAutoFireRequests.Clear();
+        var kept = _sparkleNekoPendingAutoFireRequests.Where(sparkleNekoRequest => sparkleNekoRequest.ControllableId != sparkleNekoControllableId).ToList();
+        _sparkleNekoPendingAutoFireRequests.Clear();
 
-        foreach (var request in kept)
-            _pendingAutoFireRequests.Enqueue(request);
+        foreach (var sparkleNekoRequest in kept)
+            _sparkleNekoPendingAutoFireRequests.Enqueue(sparkleNekoRequest);
     }
 
-    private TacticalState GetOrCreateState(string controllableId)
+    private TacticalState GetOrCreateState(string sparkleNekoControllableId)
     {
-        if (_states.TryGetValue(controllableId, out var state))
-            return state;
+        if (_sparkleNekoStates.TryGetValue(sparkleNekoControllableId, out var sparkleNekoState))
+            return sparkleNekoState;
 
-        state = new TacticalState();
-        _states[controllableId] = state;
-        return state;
+        sparkleNekoState = new TacticalState();
+        _sparkleNekoStates[sparkleNekoControllableId] = sparkleNekoState;
+        return sparkleNekoState;
     }
 
-    private static string BuildControllableId(int playerId, int controllableId)
+    private static string BuildControllableId(int playerId, int sparkleNekoControllableId)
     {
-        return $"p{playerId}-c{controllableId}";
+        return $"p{playerId}-c{sparkleNekoControllableId}";
     }
 
-    private static bool TryParseControllableId(string value, out byte playerId, out byte controllableId)
+    private static bool TryParseControllableId(string value, out byte playerId, out byte sparkleNekoControllableId)
     {
         playerId = 0;
-        controllableId = 0;
+        sparkleNekoControllableId = 0;
 
         if (string.IsNullOrWhiteSpace(value))
             return false;
@@ -381,7 +381,7 @@ public sealed class TacticalService : IConnectorEventHandler
         if (!byte.TryParse(value.AsSpan(1, separatorIndex - 1), out playerId))
             return false;
 
-        return byte.TryParse(value.AsSpan(separatorIndex + 2), out controllableId);
+        return byte.TryParse(value.AsSpan(separatorIndex + 2), out sparkleNekoControllableId);
     }
 
     private static float Dot(Vector left, Vector right)
@@ -389,24 +389,24 @@ public sealed class TacticalService : IConnectorEventHandler
         return (left.X * right.X) + (left.Y * right.Y);
     }
 
-    private static Unit? ResolveTarget(ClassicShipControllable ship, TacticalState state)
+    private static Unit? ResolveTarget(ClassicShipControllable sparkleNekoShip, TacticalState sparkleNekoState)
     {
-        return state.Mode switch
+        return sparkleNekoState.Mode switch
         {
-            TacticalMode.Target => ResolvePinnedTarget(ship, state.TargetId),
-            TacticalMode.Enemy => FindNearestEnemyTarget(ship),
+            TacticalMode.Target => ResolvePinnedTarget(sparkleNekoShip, sparkleNekoState.TargetId),
+            TacticalMode.Enemy => FindNearestEnemyTarget(sparkleNekoShip),
             _ => null
         };
     }
 
-    private static Unit? ResolvePinnedTarget(ClassicShipControllable ship, string? targetId)
+    private static Unit? ResolvePinnedTarget(ClassicShipControllable sparkleNekoShip, string? targetId)
     {
         if (string.IsNullOrWhiteSpace(targetId))
             return null;
 
         if (TryParseControllableId(targetId, out byte targetPlayerId, out byte targetControllableId))
         {
-            foreach (Unit unit in ship.Cluster.Units)
+            foreach (Unit unit in sparkleNekoShip.Cluster.Units)
             {
                 if (unit is PlayerUnit playerUnit &&
                     playerUnit.Player.Id == targetPlayerId &&
@@ -419,7 +419,7 @@ public sealed class TacticalService : IConnectorEventHandler
             return null;
         }
 
-        foreach (Unit unit in ship.Cluster.Units)
+        foreach (Unit unit in sparkleNekoShip.Cluster.Units)
         {
             if (unit.Name == targetId)
                 return unit;
@@ -428,34 +428,34 @@ public sealed class TacticalService : IConnectorEventHandler
         return null;
     }
 
-    private static bool IsTargetAllowedForTargetModeCore(ClassicShipControllable ship, string targetId)
+    private static bool IsTargetAllowedForTargetModeCore(ClassicShipControllable sparkleNekoShip, string targetId)
     {
         if (TryParseControllableId(targetId, out byte targetPlayerId, out _))
         {
-            if (ship.Cluster.Galaxy.Players.TryGet(targetPlayerId, out Player? targetPlayer) &&
+            if (sparkleNekoShip.Cluster.Galaxy.Players.TryGet(targetPlayerId, out Player? targetPlayer) &&
                 targetPlayer is not null &&
-                targetPlayer.Team.Id == ship.Cluster.Galaxy.Player.Team.Id)
+                targetPlayer.Team.Id == sparkleNekoShip.Cluster.Galaxy.Player.Team.Id)
             {
                 return false;
             }
         }
 
-        Unit? resolved = ResolvePinnedTarget(ship, targetId);
+        Unit? resolved = ResolvePinnedTarget(sparkleNekoShip, targetId);
         if (resolved is null)
             return true;
 
-        return PassesTeamFilter(ship, resolved);
+        return PassesTeamFilter(sparkleNekoShip, resolved);
     }
 
-    private static Unit? FindNearestEnemyTarget(ClassicShipControllable ship)
+    private static Unit? FindNearestEnemyTarget(ClassicShipControllable sparkleNekoShip)
     {
         Unit? bestTarget = null;
         float bestDistanceSquared = float.MaxValue;
-        byte ownPlayerId = ship.Cluster.Galaxy.Player.Id;
-        byte ownTeamId = ship.Cluster.Galaxy.Player.Team.Id;
-        Vector ownPosition = ship.Position;
+        byte ownPlayerId = sparkleNekoShip.Cluster.Galaxy.Player.Id;
+        byte ownTeamId = sparkleNekoShip.Cluster.Galaxy.Player.Team.Id;
+        Vector ownPosition = sparkleNekoShip.Position;
 
-        foreach (Unit unit in ship.Cluster.Units)
+        foreach (Unit unit in sparkleNekoShip.Cluster.Units)
         {
             if (unit is not PlayerUnit candidate)
                 continue;
@@ -482,69 +482,69 @@ public sealed class TacticalService : IConnectorEventHandler
         return bestTarget;
     }
 
-    private static bool PassesTeamFilter(ClassicShipControllable ship, Unit target)
+    private static bool PassesTeamFilter(ClassicShipControllable sparkleNekoShip, Unit sparkleNekoTarget)
     {
-        if (target is not PlayerUnit targetPlayerUnit)
+        if (sparkleNekoTarget is not PlayerUnit targetPlayerUnit)
             return true;
 
-        return targetPlayerUnit.Player.Team.Id != ship.Cluster.Galaxy.Player.Team.Id;
+        return targetPlayerUnit.Player.Team.Id != sparkleNekoShip.Cluster.Galaxy.Player.Team.Id;
     }
 
-    private static bool PassesTargetBasicChecks(ClassicShipControllable ship, Unit target)
+    private static bool PassesTargetBasicChecks(ClassicShipControllable sparkleNekoShip, Unit sparkleNekoTarget)
     {
-        if (!target.Cluster.Active || target.Cluster != ship.Cluster)
+        if (!sparkleNekoTarget.Cluster.Active || sparkleNekoTarget.Cluster != sparkleNekoShip.Cluster)
             return false;
 
-        if (target is PlayerUnit targetPlayerUnit)
+        if (sparkleNekoTarget is PlayerUnit targetPlayerUnit)
         {
             if (!targetPlayerUnit.ControllableInfo.Alive)
                 return false;
         }
 
-        Vector toTarget = target.Position - ship.Position;
+        Vector toTarget = sparkleNekoTarget.Position - sparkleNekoShip.Position;
         float distance = toTarget.Length;
 
-        if (distance < MinimumTargetDistance)
+        if (distance < UltraMegaWaifuMinimumTargetDistance)
             return false;
 
-        if (distance > MaxTargetDistance)
+        if (distance > UltraMegaWaifuMaxTargetDistance)
             return false;
 
         return true;
     }
 
-    private static bool PassesTargetBasicChecks(ClassicShipControllable ship, float targetX, float targetY)
+    private static bool PassesTargetBasicChecks(ClassicShipControllable sparkleNekoShip, float targetX, float targetY)
     {
-        if (!ship.Cluster.Active)
+        if (!sparkleNekoShip.Cluster.Active)
             return false;
 
-        float deltaX = targetX - ship.Position.X;
-        float deltaY = targetY - ship.Position.Y;
+        float deltaX = targetX - sparkleNekoShip.Position.X;
+        float deltaY = targetY - sparkleNekoShip.Position.Y;
         float distance = MathF.Sqrt(deltaX * deltaX + deltaY * deltaY);
 
-        if (distance < MinimumTargetDistance)
+        if (distance < UltraMegaWaifuMinimumTargetDistance)
             return false;
 
-        if (distance > MaxTargetDistance)
+        if (distance > UltraMegaWaifuMaxTargetDistance)
             return false;
 
         return true;
     }
 
-    private static bool TryBuildPredictedShotRequest(string controllableId, ClassicShipControllable ship, Unit target, uint tick,
-        IReadOnlyList<GravitySource> gravitySources, bool highPrecisionTargeting, out AutoFireRequest request)
+    private static bool TryBuildPredictedShotRequest(string sparkleNekoControllableId, ClassicShipControllable sparkleNekoShip, Unit sparkleNekoTarget, uint sparkleNekoTick,
+        IReadOnlyList<GravitySource> sparkleNekoGravitySources, bool sparkleNekoHighPrecisionTargeting, out AutoFireRequest sparkleNekoRequest)
     {
-        request = default;
+        sparkleNekoRequest = default;
 
-        float shotSpeed = Math.Clamp(DefaultShotRelativeSpeed, ship.ShotLauncher.MinimumRelativeMovement, ship.ShotLauncher.MaximumRelativeMovement);
-        List<ShotProfile> shotProfiles = BuildShotProfiles(ship, highPrecisionTargeting);
-        ushort minimumTicks = ship.ShotLauncher.MinimumTicks;
-        ushort maximumTicks = ship.ShotLauncher.MaximumTicks;
+        float shotSpeed = Math.Clamp(UltraMegaKawaiiShotRelativeSpeed, sparkleNekoShip.ShotLauncher.MinimumRelativeMovement, sparkleNekoShip.ShotLauncher.MaximumRelativeMovement);
+        List<ShotProfile> shotProfiles = BuildShotProfiles(sparkleNekoShip, sparkleNekoHighPrecisionTargeting);
+        ushort minimumTicks = sparkleNekoShip.ShotLauncher.MinimumTicks;
+        ushort maximumTicks = sparkleNekoShip.ShotLauncher.MaximumTicks;
         if (minimumTicks > maximumTicks)
             return false;
 
-        int tickSearchRadius = highPrecisionTargeting ? TargetPredictionTickSearchRadius : PredictionTickSearchRadius;
-        int baselineTicksRaw = EstimateBaselineTicks(ship.Position, ship.Movement, target.Position, target.Movement, shotSpeed);
+        int tickSearchRadius = sparkleNekoHighPrecisionTargeting ? UltraMegaNyanTargetPredictionTickSearchRadius : UltraMegaNyanPredictionTickSearchRadius;
+        int baselineTicksRaw = EstimateBaselineTicks(sparkleNekoShip.Position, sparkleNekoShip.Movement, sparkleNekoTarget.Position, sparkleNekoTarget.Movement, shotSpeed);
         int baselineTicks = Math.Clamp(baselineTicksRaw, minimumTicks, maximumTicks);
         int startTicks = Math.Max(minimumTicks, baselineTicks - tickSearchRadius);
         int endTicks = Math.Min(maximumTicks, baselineTicks + tickSearchRadius);
@@ -562,51 +562,51 @@ public sealed class TacticalService : IConnectorEventHandler
 
         for (int ticks = startTicks; ticks <= endTicks; ticks++)
         {
-            if (!TryPredictRelativeMovementWithGravity(ship, target, gravitySources, ticks, highPrecisionTargeting, out Vector relativeMovement,
-                    out float missDistance))
+            if (!TryPredictRelativeMovementWithGravity(sparkleNekoShip, sparkleNekoTarget, sparkleNekoGravitySources, ticks, sparkleNekoHighPrecisionTargeting, out Vector sparkleNekoRelativeMovement,
+                    out float sparkleNekoMissDistance))
             {
                 continue;
             }
 
-            foreach (ShotProfile profile in shotProfiles)
+            foreach (ShotProfile sparkleNekoProfile in shotProfiles)
             {
-                if (!ship.ShotLauncher.CalculateCost(relativeMovement, (ushort)ticks, profile.Load, profile.Damage, out float energyCost,
+                if (!sparkleNekoShip.ShotLauncher.CalculateCost(sparkleNekoRelativeMovement, (ushort)ticks, sparkleNekoProfile.Load, sparkleNekoProfile.Damage, out float energyCost,
                         out float ionCost, out float neutrinoCost))
                 {
                     continue;
                 }
 
-                if (energyCost > ship.EnergyBattery.Current + NumericEpsilon)
+                if (energyCost > sparkleNekoShip.EnergyBattery.Current + UltraMegaKawaiiNumericEpsilon)
                     continue;
 
-                if (ionCost > ship.IonBattery.Current + NumericEpsilon)
+                if (ionCost > sparkleNekoShip.IonBattery.Current + UltraMegaKawaiiNumericEpsilon)
                     continue;
 
-                if (neutrinoCost > ship.NeutrinoBattery.Current + NumericEpsilon)
+                if (neutrinoCost > sparkleNekoShip.NeutrinoBattery.Current + UltraMegaKawaiiNumericEpsilon)
                     continue;
 
-                float score = missDistance * PredictionMissScoreWeight + ticks * PredictionTickPenalty + profile.PreferencePenalty;
-                bool scoreTie = MathF.Abs(score - bestScore) <= NumericEpsilon;
-                if (score > bestScore + NumericEpsilon)
+                float score = sparkleNekoMissDistance * UltraMegaNyanPredictionMissScoreWeight + ticks * UltraMegaNyanPredictionTickPenalty + sparkleNekoProfile.PreferencePenalty;
+                bool scoreTie = MathF.Abs(score - bestScore) <= UltraMegaKawaiiNumericEpsilon;
+                if (score > bestScore + UltraMegaKawaiiNumericEpsilon)
                     continue;
 
                 if (scoreTie)
                 {
-                    bool worseMissDistance = missDistance > bestMissDistance + NumericEpsilon;
-                    bool sameMissDistance = MathF.Abs(missDistance - bestMissDistance) <= NumericEpsilon;
+                    bool worseMissDistance = sparkleNekoMissDistance > bestMissDistance + UltraMegaKawaiiNumericEpsilon;
+                    bool sameMissDistance = MathF.Abs(sparkleNekoMissDistance - bestMissDistance) <= UltraMegaKawaiiNumericEpsilon;
                     bool worseOrEqualTicks = ticks >= bestTicks;
-                    bool lowerOrEqualDamage = profile.Damage <= bestDamage + NumericEpsilon;
+                    bool lowerOrEqualDamage = sparkleNekoProfile.Damage <= bestDamage + UltraMegaKawaiiNumericEpsilon;
 
                     if (worseMissDistance || (sameMissDistance && worseOrEqualTicks && lowerOrEqualDamage))
                         continue;
                 }
 
-                bestMissDistance = missDistance;
+                bestMissDistance = sparkleNekoMissDistance;
                 bestScore = score;
-                bestRelativeMovement = relativeMovement;
+                bestRelativeMovement = sparkleNekoRelativeMovement;
                 bestTicks = (ushort)ticks;
-                bestLoad = profile.Load;
-                bestDamage = profile.Damage;
+                bestLoad = sparkleNekoProfile.Load;
+                bestDamage = sparkleNekoProfile.Damage;
                 bestEnergyCost = energyCost;
                 bestIonCost = ionCost;
                 bestNeutrinoCost = neutrinoCost;
@@ -614,8 +614,8 @@ public sealed class TacticalService : IConnectorEventHandler
             }
         }
 
-        float maximumMissDistance = highPrecisionTargeting ? TargetPredictionMaximumMissDistance : PredictionMaximumMissDistance;
-        float qualityGate = highPrecisionTargeting ? TargetPredictionQualityGate : PredictionQualityGate;
+        float maximumMissDistance = sparkleNekoHighPrecisionTargeting ? UltraMegaNyanTargetPredictionMaximumMissDistance : UltraMegaNyanPredictionMaximumMissDistance;
+        float qualityGate = sparkleNekoHighPrecisionTargeting ? UltraMegaNyanTargetPredictionQualityGate : UltraMegaNyanPredictionQualityGate;
 
         if (!bestFound || bestMissDistance > maximumMissDistance)
             return false;
@@ -623,29 +623,29 @@ public sealed class TacticalService : IConnectorEventHandler
         if (bestMissDistance > qualityGate)
             return false;
 
-        if (bestEnergyCost > ship.EnergyBattery.Current + NumericEpsilon)
+        if (bestEnergyCost > sparkleNekoShip.EnergyBattery.Current + UltraMegaKawaiiNumericEpsilon)
             return false;
 
-        if (bestIonCost > ship.IonBattery.Current + NumericEpsilon)
+        if (bestIonCost > sparkleNekoShip.IonBattery.Current + UltraMegaKawaiiNumericEpsilon)
             return false;
 
-        if (bestNeutrinoCost > ship.NeutrinoBattery.Current + NumericEpsilon)
+        if (bestNeutrinoCost > sparkleNekoShip.NeutrinoBattery.Current + UltraMegaKawaiiNumericEpsilon)
             return false;
 
-        request = new AutoFireRequest(controllableId, ship, bestRelativeMovement, bestTicks, bestLoad, bestDamage, tick, target.Name,
+        sparkleNekoRequest = new AutoFireRequest(sparkleNekoControllableId, sparkleNekoShip, bestRelativeMovement, bestTicks, bestLoad, bestDamage, sparkleNekoTick, sparkleNekoTarget.Name,
             bestMissDistance);
         return true;
     }
 
-    private static bool TryBuildPredictedShotRequestToPoint(string controllableId, ClassicShipControllable ship, float targetX, float targetY, uint tick,
-        IReadOnlyList<GravitySource> gravitySources, out AutoFireRequest request)
+    private static bool TryBuildPredictedShotRequestToPoint(string sparkleNekoControllableId, ClassicShipControllable sparkleNekoShip, float targetX, float targetY, uint sparkleNekoTick,
+        IReadOnlyList<GravitySource> sparkleNekoGravitySources, out AutoFireRequest sparkleNekoRequest)
     {
-        request = default;
+        sparkleNekoRequest = default;
 
-        float shotSpeed = Math.Clamp(DefaultShotRelativeSpeed, ship.ShotLauncher.MinimumRelativeMovement, ship.ShotLauncher.MaximumRelativeMovement);
-        List<ShotProfile> shotProfiles = BuildShotProfiles(ship, adaptive: true);
-        ushort minimumTicks = ship.ShotLauncher.MinimumTicks;
-        ushort maximumTicks = ship.ShotLauncher.MaximumTicks;
+        float shotSpeed = Math.Clamp(UltraMegaKawaiiShotRelativeSpeed, sparkleNekoShip.ShotLauncher.MinimumRelativeMovement, sparkleNekoShip.ShotLauncher.MaximumRelativeMovement);
+        List<ShotProfile> shotProfiles = BuildShotProfiles(sparkleNekoShip, adaptive: true);
+        ushort minimumTicks = sparkleNekoShip.ShotLauncher.MinimumTicks;
+        ushort maximumTicks = sparkleNekoShip.ShotLauncher.MaximumTicks;
         if (minimumTicks > maximumTicks)
             return false;
 
@@ -665,51 +665,51 @@ public sealed class TacticalService : IConnectorEventHandler
 
         for (int ticks = startTicks; ticks <= endTicks; ticks++)
         {
-            if (!TryPredictRelativeMovementToPointWithGravity(ship, targetX, targetY, gravitySources, ticks, out Vector relativeMovement,
-                    out float missDistance))
+            if (!TryPredictRelativeMovementToPointWithGravity(sparkleNekoShip, targetX, targetY, sparkleNekoGravitySources, ticks, out Vector sparkleNekoRelativeMovement,
+                    out float sparkleNekoMissDistance))
             {
                 continue;
             }
 
-            foreach (ShotProfile profile in shotProfiles)
+            foreach (ShotProfile sparkleNekoProfile in shotProfiles)
             {
-                if (!ship.ShotLauncher.CalculateCost(relativeMovement, (ushort)ticks, profile.Load, profile.Damage, out float energyCost,
+                if (!sparkleNekoShip.ShotLauncher.CalculateCost(sparkleNekoRelativeMovement, (ushort)ticks, sparkleNekoProfile.Load, sparkleNekoProfile.Damage, out float energyCost,
                         out float ionCost, out float neutrinoCost))
                 {
                     continue;
                 }
 
-                if (energyCost > ship.EnergyBattery.Current + NumericEpsilon)
+                if (energyCost > sparkleNekoShip.EnergyBattery.Current + UltraMegaKawaiiNumericEpsilon)
                     continue;
 
-                if (ionCost > ship.IonBattery.Current + NumericEpsilon)
+                if (ionCost > sparkleNekoShip.IonBattery.Current + UltraMegaKawaiiNumericEpsilon)
                     continue;
 
-                if (neutrinoCost > ship.NeutrinoBattery.Current + NumericEpsilon)
+                if (neutrinoCost > sparkleNekoShip.NeutrinoBattery.Current + UltraMegaKawaiiNumericEpsilon)
                     continue;
 
-                float score = missDistance * PredictionMissScoreWeight + ticks * PredictionTickPenalty + profile.PreferencePenalty;
-                bool scoreTie = MathF.Abs(score - bestScore) <= NumericEpsilon;
-                if (score > bestScore + NumericEpsilon)
+                float score = sparkleNekoMissDistance * UltraMegaNyanPredictionMissScoreWeight + ticks * UltraMegaNyanPredictionTickPenalty + sparkleNekoProfile.PreferencePenalty;
+                bool scoreTie = MathF.Abs(score - bestScore) <= UltraMegaKawaiiNumericEpsilon;
+                if (score > bestScore + UltraMegaKawaiiNumericEpsilon)
                     continue;
 
                 if (scoreTie)
                 {
-                    bool worseMissDistance = missDistance > bestMissDistance + NumericEpsilon;
-                    bool sameMissDistance = MathF.Abs(missDistance - bestMissDistance) <= NumericEpsilon;
+                    bool worseMissDistance = sparkleNekoMissDistance > bestMissDistance + UltraMegaKawaiiNumericEpsilon;
+                    bool sameMissDistance = MathF.Abs(sparkleNekoMissDistance - bestMissDistance) <= UltraMegaKawaiiNumericEpsilon;
                     bool worseOrEqualTicks = ticks >= bestTicks;
-                    bool lowerOrEqualDamage = profile.Damage <= bestDamage + NumericEpsilon;
+                    bool lowerOrEqualDamage = sparkleNekoProfile.Damage <= bestDamage + UltraMegaKawaiiNumericEpsilon;
 
                     if (worseMissDistance || (sameMissDistance && worseOrEqualTicks && lowerOrEqualDamage))
                         continue;
                 }
 
-                bestMissDistance = missDistance;
+                bestMissDistance = sparkleNekoMissDistance;
                 bestScore = score;
-                bestRelativeMovement = relativeMovement;
+                bestRelativeMovement = sparkleNekoRelativeMovement;
                 bestTicks = (ushort)ticks;
-                bestLoad = profile.Load;
-                bestDamage = profile.Damage;
+                bestLoad = sparkleNekoProfile.Load;
+                bestDamage = sparkleNekoProfile.Damage;
                 bestEnergyCost = energyCost;
                 bestIonCost = ionCost;
                 bestNeutrinoCost = neutrinoCost;
@@ -717,23 +717,23 @@ public sealed class TacticalService : IConnectorEventHandler
             }
         }
 
-        if (!bestFound || bestMissDistance > PointPredictionMaximumMissDistance)
+        if (!bestFound || bestMissDistance > UltraMegaNyanPointPredictionMaximumMissDistance)
             return false;
 
-        if (bestMissDistance > PointPredictionQualityGate)
+        if (bestMissDistance > UltraMegaNyanPointPredictionQualityGate)
             return false;
 
-        if (bestEnergyCost > ship.EnergyBattery.Current + NumericEpsilon)
+        if (bestEnergyCost > sparkleNekoShip.EnergyBattery.Current + UltraMegaKawaiiNumericEpsilon)
             return false;
 
-        if (bestIonCost > ship.IonBattery.Current + NumericEpsilon)
+        if (bestIonCost > sparkleNekoShip.IonBattery.Current + UltraMegaKawaiiNumericEpsilon)
             return false;
 
-        if (bestNeutrinoCost > ship.NeutrinoBattery.Current + NumericEpsilon)
+        if (bestNeutrinoCost > sparkleNekoShip.NeutrinoBattery.Current + UltraMegaKawaiiNumericEpsilon)
             return false;
 
         string targetLabel = $"point:{targetX:0.###},{targetY:0.###}";
-        request = new AutoFireRequest(controllableId, ship, bestRelativeMovement, bestTicks, bestLoad, bestDamage, tick, targetLabel,
+        sparkleNekoRequest = new AutoFireRequest(sparkleNekoControllableId, sparkleNekoShip, bestRelativeMovement, bestTicks, bestLoad, bestDamage, sparkleNekoTick, targetLabel,
             bestMissDistance);
         return true;
     }
@@ -741,7 +741,7 @@ public sealed class TacticalService : IConnectorEventHandler
     private static int EstimateBaselineTicks(Vector sourcePosition, Vector sourceMovement, Vector targetPosition, Vector targetMovement,
         float projectileSpeed)
     {
-        float straightFlightTicks = projectileSpeed > NumericEpsilon
+        float straightFlightTicks = projectileSpeed > UltraMegaKawaiiNumericEpsilon
             ? Vector.Distance(sourcePosition, targetPosition) / projectileSpeed
             : 0f;
 
@@ -753,36 +753,36 @@ public sealed class TacticalService : IConnectorEventHandler
         return (int)MathF.Ceiling(predictedFlightTicks + 2f);
     }
 
-    private static bool TryPredictRelativeMovementWithGravity(ClassicShipControllable ship, Unit target, IReadOnlyList<GravitySource> gravitySources,
-        int ticks, bool highPrecisionTargeting, out Vector relativeMovement, out float missDistance)
+    private static bool TryPredictRelativeMovementWithGravity(ClassicShipControllable sparkleNekoShip, Unit sparkleNekoTarget, IReadOnlyList<GravitySource> sparkleNekoGravitySources,
+        int ticks, bool sparkleNekoHighPrecisionTargeting, out Vector sparkleNekoRelativeMovement, out float sparkleNekoMissDistance)
     {
-        relativeMovement = new Vector();
-        missDistance = float.MaxValue;
+        sparkleNekoRelativeMovement = new Vector();
+        sparkleNekoMissDistance = float.MaxValue;
 
         if (ticks <= 0)
             return false;
 
-        SimulateBodyWithGravity(target.Position.X, target.Position.Y, target.Movement.X, target.Movement.Y, ticks, gravitySources, target, out float targetX,
+        SimulateBodyWithGravity(sparkleNekoTarget.Position.X, sparkleNekoTarget.Position.Y, sparkleNekoTarget.Movement.X, sparkleNekoTarget.Movement.Y, ticks, sparkleNekoGravitySources, sparkleNekoTarget, out float targetX,
             out float targetY);
 
-        ComputeProjectedLaunchOrigin(ship, targetX - ship.Position.X, targetY - ship.Position.Y, out float projectedStartX, out float projectedStartY);
-        float baseRelativeX = (targetX - projectedStartX) / ticks - ship.Movement.X;
-        float baseRelativeY = (targetY - projectedStartY) / ticks - ship.Movement.Y;
+        ComputeProjectedLaunchOrigin(sparkleNekoShip, targetX - sparkleNekoShip.Position.X, targetY - sparkleNekoShip.Position.Y, out float projectedStartX, out float projectedStartY);
+        float baseRelativeX = (targetX - projectedStartX) / ticks - sparkleNekoShip.Movement.X;
+        float baseRelativeY = (targetY - projectedStartY) / ticks - sparkleNekoShip.Movement.Y;
 
-        if (!highPrecisionTargeting)
+        if (!sparkleNekoHighPrecisionTargeting)
         {
             float relativeX = baseRelativeX;
             float relativeY = baseRelativeY;
 
-            for (int iteration = 0; iteration < PredictionIterations; iteration++)
+            for (int iteration = 0; iteration < UltraMegaNyanPredictionIterations; iteration++)
             {
-                SimulateShotWithGravity(ship, relativeX, relativeY, ticks, gravitySources, out float projectileX, out float projectileY);
+                SimulateShotWithGravity(sparkleNekoShip, relativeX, relativeY, ticks, sparkleNekoGravitySources, out float projectileX, out float projectileY);
 
                 float errorX = targetX - projectileX;
                 float errorY = targetY - projectileY;
-                missDistance = MathF.Sqrt(errorX * errorX + errorY * errorY);
+                sparkleNekoMissDistance = MathF.Sqrt(errorX * errorX + errorY * errorY);
 
-                if (missDistance <= PredictionHitTolerance)
+                if (sparkleNekoMissDistance <= UltraMegaNyanPredictionHitTolerance)
                     break;
 
                 float correctionScale = 1f / ticks;
@@ -793,7 +793,7 @@ public sealed class TacticalService : IConnectorEventHandler
                     return false;
             }
 
-            relativeMovement = new Vector(relativeX, relativeY);
+            sparkleNekoRelativeMovement = new Vector(relativeX, relativeY);
             return true;
         }
 
@@ -815,9 +815,9 @@ public sealed class TacticalService : IConnectorEventHandler
             float relativeX = seed.X;
             float relativeY = seed.Y;
 
-            for (int iteration = 0; iteration < TargetPredictionIterations; iteration++)
+            for (int iteration = 0; iteration < UltraMegaNyanTargetPredictionIterations; iteration++)
             {
-                if (!TryComputeMissDistance(ship, relativeX, relativeY, ticks, gravitySources, targetX, targetY, out float errorX, out float errorY,
+                if (!TryComputeMissDistance(sparkleNekoShip, relativeX, relativeY, ticks, sparkleNekoGravitySources, targetX, targetY, out float errorX, out float errorY,
                         out float currentMiss))
                 {
                     break;
@@ -830,11 +830,11 @@ public sealed class TacticalService : IConnectorEventHandler
                     converged = true;
                 }
 
-                if (currentMiss <= PredictionHitTolerance)
+                if (currentMiss <= UltraMegaNyanPredictionHitTolerance)
                     break;
 
-                if (!TryApplyCorrectionStep(ship, gravitySources, ticks, targetX, targetY, relativeX, relativeY, errorX, errorY, currentMiss,
-                        highPrecisionMode: highPrecisionTargeting,
+                if (!TryApplyCorrectionStep(sparkleNekoShip, sparkleNekoGravitySources, ticks, targetX, targetY, relativeX, relativeY, errorX, errorY, currentMiss,
+                        highPrecisionMode: sparkleNekoHighPrecisionTargeting,
                         out float nextRelativeX, out float nextRelativeY, out float nextMiss))
                 {
                     break;
@@ -855,23 +855,23 @@ public sealed class TacticalService : IConnectorEventHandler
         if (!converged)
             return false;
 
-        relativeMovement = bestMovement;
-        missDistance = bestMiss;
+        sparkleNekoRelativeMovement = bestMovement;
+        sparkleNekoMissDistance = bestMiss;
         return true;
     }
 
-    private static bool TryPredictRelativeMovementToPointWithGravity(ClassicShipControllable ship, float targetX, float targetY,
-        IReadOnlyList<GravitySource> gravitySources, int ticks, out Vector relativeMovement, out float missDistance)
+    private static bool TryPredictRelativeMovementToPointWithGravity(ClassicShipControllable sparkleNekoShip, float targetX, float targetY,
+        IReadOnlyList<GravitySource> sparkleNekoGravitySources, int ticks, out Vector sparkleNekoRelativeMovement, out float sparkleNekoMissDistance)
     {
-        relativeMovement = new Vector();
-        missDistance = float.MaxValue;
+        sparkleNekoRelativeMovement = new Vector();
+        sparkleNekoMissDistance = float.MaxValue;
 
         if (ticks <= 0)
             return false;
 
-        ComputeProjectedLaunchOrigin(ship, targetX - ship.Position.X, targetY - ship.Position.Y, out float projectedStartX, out float projectedStartY);
-        float baseRelativeX = (targetX - projectedStartX) / ticks - ship.Movement.X;
-        float baseRelativeY = (targetY - projectedStartY) / ticks - ship.Movement.Y;
+        ComputeProjectedLaunchOrigin(sparkleNekoShip, targetX - sparkleNekoShip.Position.X, targetY - sparkleNekoShip.Position.Y, out float projectedStartX, out float projectedStartY);
+        float baseRelativeX = (targetX - projectedStartX) / ticks - sparkleNekoShip.Movement.X;
+        float baseRelativeY = (targetY - projectedStartY) / ticks - sparkleNekoShip.Movement.Y;
 
         var candidateSeeds = new (float X, float Y)[]
         {
@@ -891,9 +891,9 @@ public sealed class TacticalService : IConnectorEventHandler
             float relativeX = seed.X;
             float relativeY = seed.Y;
 
-            for (int iteration = 0; iteration < PointPredictionIterations; iteration++)
+            for (int iteration = 0; iteration < UltraMegaNyanPointPredictionIterations; iteration++)
             {
-                if (!TryComputeMissDistance(ship, relativeX, relativeY, ticks, gravitySources, targetX, targetY, out float errorX, out float errorY,
+                if (!TryComputeMissDistance(sparkleNekoShip, relativeX, relativeY, ticks, sparkleNekoGravitySources, targetX, targetY, out float errorX, out float errorY,
                         out float currentMiss))
                 {
                     break;
@@ -906,10 +906,10 @@ public sealed class TacticalService : IConnectorEventHandler
                     converged = true;
                 }
 
-                if (currentMiss <= PointPredictionHitTolerance)
+                if (currentMiss <= UltraMegaNyanPointPredictionHitTolerance)
                     break;
 
-                if (!TryApplyCorrectionStep(ship, gravitySources, ticks, targetX, targetY, relativeX, relativeY, errorX, errorY, currentMiss,
+                if (!TryApplyCorrectionStep(sparkleNekoShip, sparkleNekoGravitySources, ticks, targetX, targetY, relativeX, relativeY, errorX, errorY, currentMiss,
                         highPrecisionMode: true,
                         out float nextRelativeX, out float nextRelativeY, out float nextMiss))
                 {
@@ -931,8 +931,8 @@ public sealed class TacticalService : IConnectorEventHandler
         if (!converged)
             return false;
 
-        relativeMovement = bestMovement;
-        missDistance = bestMiss;
+        sparkleNekoRelativeMovement = bestMovement;
+        sparkleNekoMissDistance = bestMiss;
         return true;
     }
 
@@ -944,10 +944,10 @@ public sealed class TacticalService : IConnectorEventHandler
         return (x * cos - y * sin, x * sin + y * cos);
     }
 
-    private static List<ShotProfile> BuildShotProfiles(ClassicShipControllable ship, bool adaptive)
+    private static List<ShotProfile> BuildShotProfiles(ClassicShipControllable sparkleNekoShip, bool adaptive)
     {
-        float baseLoad = Math.Clamp(DefaultShotLoad, ship.ShotLauncher.MinimumLoad, ship.ShotLauncher.MaximumLoad);
-        float baseDamage = Math.Clamp(DefaultShotDamage, ship.ShotLauncher.MinimumDamage, ship.ShotLauncher.MaximumDamage);
+        float baseLoad = Math.Clamp(UltraMegaKawaiiShotLoad, sparkleNekoShip.ShotLauncher.MinimumLoad, sparkleNekoShip.ShotLauncher.MaximumLoad);
+        float baseDamage = Math.Clamp(UltraMegaKawaiiShotDamage, sparkleNekoShip.ShotLauncher.MinimumDamage, sparkleNekoShip.ShotLauncher.MaximumDamage);
         var profiles = new List<ShotProfile>();
         AddOrUpdateShotProfile(profiles, baseLoad, baseDamage, 0f);
 
@@ -957,8 +957,8 @@ public sealed class TacticalService : IConnectorEventHandler
         float[] scales = { 0.95f, 0.9f, 0.82f, 0.74f, 0.66f, 0.58f };
         foreach (float scale in scales)
         {
-            float load = Math.Clamp(baseLoad * scale, ship.ShotLauncher.MinimumLoad, ship.ShotLauncher.MaximumLoad);
-            float damage = Math.Clamp(baseDamage * scale, ship.ShotLauncher.MinimumDamage, ship.ShotLauncher.MaximumDamage);
+            float load = Math.Clamp(baseLoad * scale, sparkleNekoShip.ShotLauncher.MinimumLoad, sparkleNekoShip.ShotLauncher.MaximumLoad);
+            float damage = Math.Clamp(baseDamage * scale, sparkleNekoShip.ShotLauncher.MinimumDamage, sparkleNekoShip.ShotLauncher.MaximumDamage);
             float preferencePenalty = (1f - scale) * 1.35f;
             AddOrUpdateShotProfile(profiles, load, damage, preferencePenalty);
         }
@@ -984,25 +984,25 @@ public sealed class TacticalService : IConnectorEventHandler
         profiles.Add(new ShotProfile(load, damage, preferencePenalty));
     }
 
-    private static bool TryComputeMissDistance(ClassicShipControllable ship, float relativeX, float relativeY, int ticks,
-        IReadOnlyList<GravitySource> gravitySources, float targetX, float targetY, out float errorX, out float errorY, out float missDistance)
+    private static bool TryComputeMissDistance(ClassicShipControllable sparkleNekoShip, float relativeX, float relativeY, int ticks,
+        IReadOnlyList<GravitySource> sparkleNekoGravitySources, float targetX, float targetY, out float errorX, out float errorY, out float sparkleNekoMissDistance)
     {
         errorX = 0f;
         errorY = 0f;
-        missDistance = float.MaxValue;
+        sparkleNekoMissDistance = float.MaxValue;
 
-        SimulateShotWithGravity(ship, relativeX, relativeY, ticks, gravitySources, out float projectileX, out float projectileY);
+        SimulateShotWithGravity(sparkleNekoShip, relativeX, relativeY, ticks, sparkleNekoGravitySources, out float projectileX, out float projectileY);
 
         errorX = targetX - projectileX;
         errorY = targetY - projectileY;
-        missDistance = MathF.Sqrt(errorX * errorX + errorY * errorY);
-        if (float.IsNaN(missDistance) || float.IsInfinity(missDistance))
+        sparkleNekoMissDistance = MathF.Sqrt(errorX * errorX + errorY * errorY);
+        if (float.IsNaN(sparkleNekoMissDistance) || float.IsInfinity(sparkleNekoMissDistance))
             return false;
 
         return true;
     }
 
-    private static bool TryApplyCorrectionStep(ClassicShipControllable ship, IReadOnlyList<GravitySource> gravitySources, int ticks, float targetX,
+    private static bool TryApplyCorrectionStep(ClassicShipControllable sparkleNekoShip, IReadOnlyList<GravitySource> sparkleNekoGravitySources, int ticks, float targetX,
         float targetY, float currentRelativeX, float currentRelativeY, float errorX, float errorY, float currentMissDistance, bool highPrecisionMode,
         out float nextRelativeX, out float nextRelativeY, out float nextMissDistance)
     {
@@ -1012,7 +1012,7 @@ public sealed class TacticalService : IConnectorEventHandler
 
         var correctionCandidates = new List<(float DeltaX, float DeltaY)>(capacity: 3);
 
-        if (TryBuildJacobianCorrection(ship, gravitySources, ticks, targetX, targetY, currentRelativeX, currentRelativeY, errorX, errorY, currentMissDistance,
+        if (TryBuildJacobianCorrection(sparkleNekoShip, sparkleNekoGravitySources, ticks, targetX, targetY, currentRelativeX, currentRelativeY, errorX, errorY, currentMissDistance,
                 highPrecisionMode,
                 out float jacobianDeltaX, out float jacobianDeltaY))
         {
@@ -1042,13 +1042,13 @@ public sealed class TacticalService : IConnectorEventHandler
                     continue;
                 }
 
-                if (!TryComputeMissDistance(ship, candidateRelativeX, candidateRelativeY, ticks, gravitySources, targetX, targetY, out _, out _,
+                if (!TryComputeMissDistance(sparkleNekoShip, candidateRelativeX, candidateRelativeY, ticks, sparkleNekoGravitySources, targetX, targetY, out _, out _,
                         out float candidateMissDistance))
                 {
                     continue;
                 }
 
-                if (candidateMissDistance + NumericEpsilon >= nextMissDistance)
+                if (candidateMissDistance + UltraMegaKawaiiNumericEpsilon >= nextMissDistance)
                     continue;
 
                 nextRelativeX = candidateRelativeX;
@@ -1057,10 +1057,10 @@ public sealed class TacticalService : IConnectorEventHandler
             }
         }
 
-        return nextMissDistance + NumericEpsilon < currentMissDistance;
+        return nextMissDistance + UltraMegaKawaiiNumericEpsilon < currentMissDistance;
     }
 
-    private static bool TryBuildJacobianCorrection(ClassicShipControllable ship, IReadOnlyList<GravitySource> gravitySources, int ticks, float targetX,
+    private static bool TryBuildJacobianCorrection(ClassicShipControllable sparkleNekoShip, IReadOnlyList<GravitySource> sparkleNekoGravitySources, int ticks, float targetX,
         float targetY, float currentRelativeX, float currentRelativeY, float errorX, float errorY, float currentMissDistance, bool highPrecisionMode,
         out float deltaX, out float deltaY)
     {
@@ -1072,13 +1072,13 @@ public sealed class TacticalService : IConnectorEventHandler
         float maxProbeStep = highPrecisionMode ? 0.4f : 0.2f;
         float probeStep = MathF.Max(minProbeStep, MathF.Min(maxProbeStep, (currentMissDistance / MathF.Max(1, ticks)) * probeScale));
 
-        if (!TryComputeMissDistance(ship, currentRelativeX + probeStep, currentRelativeY, ticks, gravitySources, targetX, targetY, out float errorXdx,
+        if (!TryComputeMissDistance(sparkleNekoShip, currentRelativeX + probeStep, currentRelativeY, ticks, sparkleNekoGravitySources, targetX, targetY, out float errorXdx,
                 out float errorYdx, out _))
         {
             return false;
         }
 
-        if (!TryComputeMissDistance(ship, currentRelativeX, currentRelativeY + probeStep, ticks, gravitySources, targetX, targetY, out float errorXdy,
+        if (!TryComputeMissDistance(sparkleNekoShip, currentRelativeX, currentRelativeY + probeStep, ticks, sparkleNekoGravitySources, targetX, targetY, out float errorXdy,
                 out float errorYdy, out _))
         {
             return false;
@@ -1105,7 +1105,7 @@ public sealed class TacticalService : IConnectorEventHandler
         float minCorrectionMagnitude = highPrecisionMode ? 0.35f : 0.2f;
         float maxCorrectionMagnitude = MathF.Max(minCorrectionMagnitude, (currentMissDistance / MathF.Max(1, ticks)) * maxCorrectionScale);
         float correctionMagnitude = MathF.Sqrt(deltaX * deltaX + deltaY * deltaY);
-        if (correctionMagnitude <= NumericEpsilon)
+        if (correctionMagnitude <= UltraMegaKawaiiNumericEpsilon)
             return false;
 
         if (correctionMagnitude > maxCorrectionMagnitude)
@@ -1118,59 +1118,59 @@ public sealed class TacticalService : IConnectorEventHandler
         return true;
     }
 
-    private static void SimulateShotWithGravity(ClassicShipControllable ship, float relativeMovementX, float relativeMovementY, int ticks,
-        IReadOnlyList<GravitySource> gravitySources, out float positionX, out float positionY)
+    private static void SimulateShotWithGravity(ClassicShipControllable sparkleNekoShip, float relativeMovementX, float relativeMovementY, int ticks,
+        IReadOnlyList<GravitySource> sparkleNekoGravitySources, out float positionX, out float positionY)
     {
-        ComputeShotLaunchState(ship, relativeMovementX, relativeMovementY, out float startX, out float startY, out float movementX, out float movementY);
-        SimulateBodyWithGravity(startX, startY, movementX, movementY, ticks, gravitySources, null, out positionX, out positionY);
+        ComputeShotLaunchState(sparkleNekoShip, relativeMovementX, relativeMovementY, out float startX, out float startY, out float movementX, out float movementY);
+        SimulateBodyWithGravity(startX, startY, movementX, movementY, ticks, sparkleNekoGravitySources, null, out positionX, out positionY);
     }
 
-    private static void ComputeShotLaunchState(ClassicShipControllable ship, float relativeMovementX, float relativeMovementY, out float startX,
+    private static void ComputeShotLaunchState(ClassicShipControllable sparkleNekoShip, float relativeMovementX, float relativeMovementY, out float startX,
         out float startY, out float movementX, out float movementY)
     {
-        movementX = ship.Movement.X + relativeMovementX;
-        movementY = ship.Movement.Y + relativeMovementY;
-        startX = ship.Position.X;
-        startY = ship.Position.Y;
-        ComputeProjectedLaunchOrigin(ship, movementX, movementY, out startX, out startY);
+        movementX = sparkleNekoShip.Movement.X + relativeMovementX;
+        movementY = sparkleNekoShip.Movement.Y + relativeMovementY;
+        startX = sparkleNekoShip.Position.X;
+        startY = sparkleNekoShip.Position.Y;
+        ComputeProjectedLaunchOrigin(sparkleNekoShip, movementX, movementY, out startX, out startY);
     }
 
-    private static void ComputeProjectedLaunchOrigin(ClassicShipControllable ship, float directionX, float directionY, out float startX, out float startY)
+    private static void ComputeProjectedLaunchOrigin(ClassicShipControllable sparkleNekoShip, float directionX, float directionY, out float startX, out float startY)
     {
-        startX = ship.Position.X;
-        startY = ship.Position.Y;
+        startX = sparkleNekoShip.Position.X;
+        startY = sparkleNekoShip.Position.Y;
 
         float directionSquared = directionX * directionX + directionY * directionY;
-        if (directionSquared <= NumericEpsilon)
+        if (directionSquared <= UltraMegaKawaiiNumericEpsilon)
             return;
 
         float directionLength = MathF.Sqrt(directionSquared);
-        float launchDistance = MathF.Max(0f, ship.Size + ProjectileSpawnPaddingDistance);
+        float launchDistance = MathF.Max(0f, sparkleNekoShip.Size + UltraMegaNyanProjectileSpawnPaddingDistance);
         float inverseDirection = 1f / directionLength;
         startX += directionX * inverseDirection * launchDistance;
         startY += directionY * inverseDirection * launchDistance;
     }
 
     private static void SimulateBodyWithGravity(float startX, float startY, float startMovementX, float startMovementY, int ticks,
-        IReadOnlyList<GravitySource> gravitySources, Unit? excludedSourceUnit, out float positionX, out float positionY)
+        IReadOnlyList<GravitySource> sparkleNekoGravitySources, Unit? excludedSourceUnit, out float positionX, out float positionY)
     {
         float currentX = startX;
         float currentY = startY;
         float currentMovementX = startMovementX;
         float currentMovementY = startMovementY;
-        var simulatorSources = new List<GravitySimulator.GravitySource>(gravitySources.Count);
+        var simulatorSources = new List<GravitySimulator.GravitySource>(sparkleNekoGravitySources.Count);
 
-        for (int tick = 0; tick < ticks; tick++)
+        for (int sparkleNekoTick = 0; sparkleNekoTick < ticks; sparkleNekoTick++)
         {
             simulatorSources.Clear();
-            foreach (GravitySource source in gravitySources)
+            foreach (GravitySource source in sparkleNekoGravitySources)
             {
                 if (excludedSourceUnit is not null && ReferenceEquals(source.Unit, excludedSourceUnit))
                     continue;
 
                 simulatorSources.Add(new GravitySimulator.GravitySource(
-                    source.PositionX + source.MovementX * tick,
-                    source.PositionY + source.MovementY * tick,
+                    source.PositionX + source.MovementX * sparkleNekoTick,
+                    source.PositionY + source.MovementY * sparkleNekoTick,
                     source.Gravity
                 ));
             }
@@ -1188,30 +1188,30 @@ public sealed class TacticalService : IConnectorEventHandler
         positionY = currentY;
     }
 
-    private static List<GravitySource> GetOrBuildGravitySources(ClassicShipControllable ship, Dictionary<Cluster, List<GravitySource>>? cache)
+    private static List<GravitySource> GetOrBuildGravitySources(ClassicShipControllable sparkleNekoShip, Dictionary<Cluster, List<GravitySource>>? sparkleNekoCache)
     {
-        if (cache is not null && cache.TryGetValue(ship.Cluster, out List<GravitySource>? cached))
-            return cached;
+        if (sparkleNekoCache is not null && sparkleNekoCache.TryGetValue(sparkleNekoShip.Cluster, out List<GravitySource>? sparkleNekoCached))
+            return sparkleNekoCached;
 
-        List<GravitySource> gravitySources = BuildGravitySources(ship.Cluster);
+        List<GravitySource> sparkleNekoGravitySources = BuildGravitySources(sparkleNekoShip.Cluster);
 
-        if (cache is not null)
-            cache[ship.Cluster] = gravitySources;
+        if (sparkleNekoCache is not null)
+            sparkleNekoCache[sparkleNekoShip.Cluster] = sparkleNekoGravitySources;
 
-        return gravitySources;
+        return sparkleNekoGravitySources;
     }
 
     private static List<GravitySource> BuildGravitySources(Cluster cluster)
     {
-        List<GravitySource> gravitySources = new();
+        List<GravitySource> sparkleNekoGravitySources = new();
 
         foreach (Unit unit in cluster.Units)
         {
             float gravity = unit.Gravity;
-            if (gravity <= NumericEpsilon)
+            if (gravity <= UltraMegaKawaiiNumericEpsilon)
                 continue;
 
-            gravitySources.Add(new GravitySource(
+            sparkleNekoGravitySources.Add(new GravitySource(
                 unit,
                 unit.Position.X,
                 unit.Position.Y,
@@ -1221,16 +1221,16 @@ public sealed class TacticalService : IConnectorEventHandler
             ));
         }
 
-        return gravitySources;
+        return sparkleNekoGravitySources;
     }
 
     private static bool TryPredictRelativeMovement(Vector sourcePosition, Vector sourceMovement, Vector targetPosition, Vector targetMovement,
-        float projectileSpeed, out Vector relativeMovement, out float predictedFlightTicks)
+        float projectileSpeed, out Vector sparkleNekoRelativeMovement, out float predictedFlightTicks)
     {
-        relativeMovement = new Vector();
+        sparkleNekoRelativeMovement = new Vector();
         predictedFlightTicks = 0f;
 
-        if (projectileSpeed <= NumericEpsilon)
+        if (projectileSpeed <= UltraMegaKawaiiNumericEpsilon)
             return false;
 
         Vector relativePosition = targetPosition - sourcePosition;
@@ -1241,13 +1241,13 @@ public sealed class TacticalService : IConnectorEventHandler
         float c = Dot(relativePosition, relativePosition);
 
         float time;
-        if (MathF.Abs(a) <= NumericEpsilon)
+        if (MathF.Abs(a) <= UltraMegaKawaiiNumericEpsilon)
         {
-            if (MathF.Abs(b) <= NumericEpsilon)
+            if (MathF.Abs(b) <= UltraMegaKawaiiNumericEpsilon)
                 return false;
 
             time = -c / b;
-            if (time <= NumericEpsilon)
+            if (time <= UltraMegaKawaiiNumericEpsilon)
                 return false;
         }
         else
@@ -1261,9 +1261,9 @@ public sealed class TacticalService : IConnectorEventHandler
             float timeB = (-b + sqrtDiscriminant) / (2f * a);
 
             time = float.MaxValue;
-            if (timeA > NumericEpsilon)
+            if (timeA > UltraMegaKawaiiNumericEpsilon)
                 time = timeA;
-            if (timeB > NumericEpsilon && timeB < time)
+            if (timeB > UltraMegaKawaiiNumericEpsilon && timeB < time)
                 time = timeB;
 
             if (time == float.MaxValue)
@@ -1271,10 +1271,10 @@ public sealed class TacticalService : IConnectorEventHandler
         }
 
         Vector interceptDelta = relativePosition + (relativeVelocity * time);
-        if (interceptDelta.Length <= NumericEpsilon)
+        if (interceptDelta.Length <= UltraMegaKawaiiNumericEpsilon)
             return false;
 
-        relativeMovement = interceptDelta / time;
+        sparkleNekoRelativeMovement = interceptDelta / time;
         predictedFlightTicks = time;
         return true;
     }

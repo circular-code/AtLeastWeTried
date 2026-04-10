@@ -483,7 +483,7 @@ export class WorldScene {
       return;
     }
 
-    if (pointerButton === 0 && event.shiftKey) {
+    if (pointerButton === 0 && event.shiftKey && event.ctrlKey) {
       const unit = this.findNearestUnit(worldPosition.x, worldPosition.y);
       this.onFreeFireRequested?.({
         worldX: worldPosition.x,
