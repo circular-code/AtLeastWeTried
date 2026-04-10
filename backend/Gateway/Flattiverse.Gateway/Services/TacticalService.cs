@@ -55,7 +55,8 @@ public sealed class TacticalService : IConnectorEventHandler
         float Load,
         float Damage,
         uint Tick,
-        string TargetUnitName
+        string TargetUnitName,
+        float PredictedMissDistance
     );
 
     private sealed class TacticalState
@@ -167,6 +168,15 @@ public sealed class TacticalService : IConnectorEventHandler
         }
     }
 
+    public bool IsTargetAllowedForTargetMode(ClassicShipControllable ship, string targetId)
+    {
+        if (string.IsNullOrWhiteSpace(targetId))
+            return false;
+
+        lock (_sync)
+            return IsTargetAllowedForTargetModeCore(ship, targetId);
+    }
+
     public void ClearTarget(string controllableId)
     {
         lock (_sync)
@@ -256,7 +266,7 @@ public sealed class TacticalService : IConnectorEventHandler
             return false;
 
         Unit? target = ResolveTarget(ship, state);
-        if (target is null || !PassesTargetBasicChecks(ship, target))
+        if (target is null || !PassesTeamFilter(ship, target) || !PassesTargetBasicChecks(ship, target))
             return false;
 
         List<GravitySource> gravitySources = GetOrBuildGravitySources(ship, gravitySourcesByCluster);
@@ -399,11 +409,31 @@ public sealed class TacticalService : IConnectorEventHandler
         return null;
     }
 
+    private static bool IsTargetAllowedForTargetModeCore(ClassicShipControllable ship, string targetId)
+    {
+        if (TryParseControllableId(targetId, out byte targetPlayerId, out _))
+        {
+            if (ship.Cluster.Galaxy.Players.TryGet(targetPlayerId, out Player? targetPlayer) &&
+                targetPlayer is not null &&
+                targetPlayer.Team.Id == ship.Cluster.Galaxy.Player.Team.Id)
+            {
+                return false;
+            }
+        }
+
+        Unit? resolved = ResolvePinnedTarget(ship, targetId);
+        if (resolved is null)
+            return true;
+
+        return PassesTeamFilter(ship, resolved);
+    }
+
     private static Unit? FindNearestEnemyTarget(ClassicShipControllable ship)
     {
         Unit? bestTarget = null;
         float bestDistanceSquared = float.MaxValue;
         byte ownPlayerId = ship.Cluster.Galaxy.Player.Id;
+        byte ownTeamId = ship.Cluster.Galaxy.Player.Team.Id;
         Vector ownPosition = ship.Position;
 
         foreach (Unit unit in ship.Cluster.Units)
@@ -412,6 +442,9 @@ public sealed class TacticalService : IConnectorEventHandler
                 continue;
 
             if (candidate.Player.Id == ownPlayerId)
+                continue;
+
+            if (candidate.Player.Team.Id == ownTeamId)
                 continue;
 
             if (!candidate.ControllableInfo.Alive)
@@ -428,6 +461,14 @@ public sealed class TacticalService : IConnectorEventHandler
         }
 
         return bestTarget;
+    }
+
+    private static bool PassesTeamFilter(ClassicShipControllable ship, Unit target)
+    {
+        if (target is not PlayerUnit targetPlayerUnit)
+            return true;
+
+        return targetPlayerUnit.Player.Team.Id != ship.Cluster.Galaxy.Player.Team.Id;
     }
 
     private static bool PassesTargetBasicChecks(ClassicShipControllable ship, Unit target)
@@ -572,7 +613,8 @@ public sealed class TacticalService : IConnectorEventHandler
         if (bestNeutrinoCost > ship.NeutrinoBattery.Current + NumericEpsilon)
             return false;
 
-        request = new AutoFireRequest(controllableId, ship, bestRelativeMovement, bestTicks, bestLoad, bestDamage, tick, target.Name);
+        request = new AutoFireRequest(controllableId, ship, bestRelativeMovement, bestTicks, bestLoad, bestDamage, tick, target.Name,
+            bestMissDistance);
         return true;
     }
 
@@ -672,7 +714,8 @@ public sealed class TacticalService : IConnectorEventHandler
             return false;
 
         string targetLabel = $"point:{targetX:0.###},{targetY:0.###}";
-        request = new AutoFireRequest(controllableId, ship, bestRelativeMovement, bestTicks, bestLoad, bestDamage, tick, targetLabel);
+        request = new AutoFireRequest(controllableId, ship, bestRelativeMovement, bestTicks, bestLoad, bestDamage, tick, targetLabel,
+            bestMissDistance);
         return true;
     }
 
