@@ -306,6 +306,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 { "currentY", classic.Engine.Current.Y }
             };
             changes["scanner"] = _scanningService.BuildOverlay(classic.Id);
+            changes["tactical"] = _tacticalService.BuildOverlay($"p{Galaxy!.Player.Id}-c{controllable.Id}");
             changes["shield"] = new Dictionary<string, object>
             {
                 { "active", controllable.Shield.Active },
@@ -709,9 +710,13 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         var overlay = _maneuveringService.BuildOverlay(controllableId)
             .ToDictionary(entry => entry.Key, entry => (object?)entry.Value, StringComparer.Ordinal);
 
-        foreach (var (key, value) in _pathfindingService.BuildOverlay(controllableId))
+        var pathfindingOverlay = _pathfindingService.BuildOverlay(controllableId);
+        if (pathfindingOverlay.TryGetValue("active", out var pathActive) && pathActive is true)
         {
-            overlay[key] = value;
+            foreach (var (key, value) in pathfindingOverlay)
+            {
+                overlay[key] = value;
+            }
         }
 
         return overlay;
@@ -835,6 +840,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         _maneuveringService.ClearNavigationTarget(classic.Id);
 
         var thrust = payload?.GetProperty("thrust").GetSingle() ?? 0f;
+        _maneuveringService.SetThrustPercentage(classic.Id, thrust);
 
         if (payload?.TryGetProperty("x", out var xEl) == true && payload?.TryGetProperty("y", out var yEl) == true &&
             xEl.ValueKind != System.Text.Json.JsonValueKind.Null && yEl.ValueKind != System.Text.Json.JsonValueKind.Null)
@@ -876,8 +882,18 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             && thrustEl.ValueKind != System.Text.Json.JsonValueKind.Null
             ? thrustEl.GetSingle()
             : 1f;
+        var direct = payload?.TryGetProperty("direct", out var directEl) == true
+            && directEl.ValueKind == System.Text.Json.JsonValueKind.True;
 
-        _pathfindingService.SetNavigationGoal(classic, targetX, targetY, thrustPercentage);
+        if (direct)
+        {
+            _pathfindingService.ClearNavigationGoal(classic.Id);
+            _maneuveringService.SetNavigationTarget(classic, targetX, targetY, thrustPercentage, true, isDirect: true);
+        }
+        else
+        {
+            _pathfindingService.SetNavigationGoal(classic, targetX, targetY, thrustPercentage);
+        }
 
         return Completed(commandId);
     }

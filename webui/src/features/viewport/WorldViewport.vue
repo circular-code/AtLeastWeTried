@@ -197,6 +197,7 @@ function handleWorldNavigate(selection: WorldSceneSelection) {
     selection.worldX,
     selection.worldY,
     uiStore.navigationThrustPercentage,
+    selection.direct,
   );
 }
 

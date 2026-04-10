@@ -244,6 +244,7 @@ export interface SetNavigationTargetCommandPayloadDto {
   targetX: number;
   targetY: number;
   thrustPercentage?: number | null;
+  direct?: boolean | null;
 }
 
 export interface SetSubsystemModeCommandMessage {

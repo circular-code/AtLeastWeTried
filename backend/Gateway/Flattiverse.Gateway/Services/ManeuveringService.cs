@@ -22,6 +22,7 @@ public sealed class ManeuveringService : IConnectorEventHandler
     {
         public ClassicShipControllable? Ship { get; set; }
         public bool HasTarget { get; set; }
+        public bool IsDirect { get; set; }
         public float TargetX { get; set; }
         public float TargetY { get; set; }
         public float ThrustPercentage { get; set; } = 1f;
@@ -70,11 +71,13 @@ public sealed class ManeuveringService : IConnectorEventHandler
         float targetY,
         float thrustPercentage,
         bool resetController,
-        IReadOnlyList<(double X, double Y)>? remainingPath = null)
+        IReadOnlyList<(double X, double Y)>? remainingPath = null,
+        bool isDirect = false)
     {
         TrackShip(ship);
         var state = _states[ship.Id];
         state.HasTarget = true;
+        state.IsDirect = isDirect;
         state.TargetX = targetX;
         state.TargetY = targetY;
         state.ThrustPercentage = thrustPercentage;
@@ -101,9 +104,19 @@ public sealed class ManeuveringService : IConnectorEventHandler
         }
 
         state.HasTarget = false;
+        state.IsDirect = false;
         state.LastEngineX = 0d;
         state.LastEngineY = 0d;
         state.CachedTrajectory = null;
+    }
+
+    public void SetThrustPercentage(int controllableId, float thrustPercentage)
+    {
+        if (!_states.TryGetValue(controllableId, out var state))
+            return;
+
+        if (float.IsFinite(thrustPercentage))
+            state.ThrustPercentage = Math.Clamp(thrustPercentage, 0f, 1f);
     }
 
     public Dictionary<string, object?> BuildOverlay(int controllableId)
@@ -115,6 +128,21 @@ public sealed class ManeuveringService : IConnectorEventHandler
 
         var result = new Dictionary<string, object?>();
         var ship = state.Ship;
+
+        result["thrustPercentage"] = (double)state.ThrustPercentage;
+
+        if (state.HasTarget && state.IsDirect)
+        {
+            result["active"] = true;
+            result["targetX"] = state.TargetX;
+            result["targetY"] = state.TargetY;
+            result["pathStatus"] = "direct";
+            result["path"] = new[]
+            {
+                new Dictionary<string, object?> { { "x", (double)ship.Position.X }, { "y", (double)ship.Position.Y } },
+                new Dictionary<string, object?> { { "x", (double)state.TargetX }, { "y", (double)state.TargetY } },
+            };
+        }
 
         if (state.HasTarget)
         {

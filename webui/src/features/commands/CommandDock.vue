@@ -4,6 +4,7 @@ import { useGateway } from '../../composables/useGateway';
 import { useGameStore } from '../../stores/game';
 import { useUiStore } from '../../stores/ui';
 import type { ScannerMode, TacticalMode } from '../../types/client';
+import { readNavigationTarget } from '../../renderer/WorldScene';
 
 const gateway = useGateway();
 const gameStore = useGameStore();
@@ -14,7 +15,13 @@ const thrust = computed({
   get: () => uiStore.navigationThrustPercentage,
   set: (value: number) => {
     uiStore.setNavigationThrustPercentage(value);
-    gateway.setEngine(activeControllableId.value, value);
+    const controllableId = activeControllableId.value;
+    const navigationTarget = readNavigationTarget(gameStore.ownerOverlay, controllableId);
+    if (navigationTarget) {
+      gateway.setNavigationTarget(controllableId, navigationTarget.x, -navigationTarget.y, value);
+    } else {
+      gateway.setEngine(controllableId, value);
+    }
   },
 });
 const tacticalMode = computed(() => uiStore.tacticalMode);
@@ -35,6 +42,27 @@ const scannerWidth = computed({
   get: () => uiStore.scannerWidth,
   set: (value: number) => uiStore.setScannerWidth(value),
 });
+
+watch(
+  activeControllableId,
+  (newId) => {
+    if (!newId) {
+      return;
+    }
+
+    const scannerModeFromOverlay = gameStore.scannerRequestedModeFor(newId);
+    uiStore.setScannerMode(scannerModeFromOverlay);
+
+    const scannerWidthFromOverlay = gameStore.scannerWidthFor(newId);
+    uiStore.setScannerWidth(scannerWidthFromOverlay);
+
+    const tacticalModeFromOverlay = gameStore.tacticalModeFor(newId);
+    uiStore.setTacticalMode(tacticalModeFromOverlay);
+
+    const thrustFromOverlay = gameStore.thrustPercentageFor(newId);
+    uiStore.setNavigationThrustPercentage(thrustFromOverlay);
+  },
+);
 
 watch(
   () => ({

@@ -46,8 +46,10 @@ import type {
   OwnedControllableSummary,
   PendingCommandDescriptor,
   ScannerMode,
+  TacticalMode,
 } from '../types/client';
 import { useSessionStore } from './session';
+import { useUiStore } from './ui';
 
 type GameState = {
   galaxy: GalaxySnapshotDto | null;
@@ -128,7 +130,8 @@ export const useGameStore = defineStore('game', {
         return null;
       }
 
-      return buildOverlayEntry(controllableId, state.galaxy, new Map(Object.entries(overlayById) as Array<[string, ControllableOverlayState]>), controllableId);
+      const uiStore = useUiStore();
+      return buildOverlayEntry(controllableId, state.galaxy, new Map(Object.entries(overlayById) as Array<[string, ControllableOverlayState]>), uiStore.selectedControllableId);
     },
     selectionEntry: (state) => (selection: WorldSceneSelection | null): ClickedUnitEntry | null => {
       return buildClickedUnitEntry(selection, state.galaxy, new Map(Object.entries(aggregateOverlayState(state.overlayBySessionId)) as Array<[string, ControllableOverlayState]>));
@@ -173,6 +176,53 @@ export const useGameStore = defineStore('game', {
 
       const overlayState = objectValue(resolveOverlayByControllableId(state.overlayBySessionId, controllableId)) ?? {};
       return deriveScannerMaximumWidth(resolveScannerState(overlayState.scanner));
+    },
+    scannerRequestedModeFor: (state) => (controllableId: string): ScannerMode => {
+      if (!controllableId) {
+        return 'off';
+      }
+
+      const overlayState = objectValue(resolveOverlayByControllableId(state.overlayBySessionId, controllableId)) ?? {};
+      const scannerState = resolveScannerState(overlayState.scanner);
+      if (!scannerState) {
+        return 'off';
+      }
+
+      const mode = stringValue(scannerState.mode, 'off').toLowerCase();
+      if (mode === '360' || mode === 'full') return '360';
+      if (mode === 'forward') return 'forward';
+      if (mode === 'sweep') return 'sweep';
+      if (mode === 'targeted' || mode === 'target') return 'targeted';
+      return 'off';
+    },
+    tacticalModeFor: (state) => (controllableId: string): TacticalMode => {
+      if (!controllableId) {
+        return 'off';
+      }
+
+      const overlayState = objectValue(resolveOverlayByControllableId(state.overlayBySessionId, controllableId)) ?? {};
+      const tacticalState = objectValue(overlayState.tactical);
+      if (!tacticalState) {
+        return 'off';
+      }
+
+      const mode = stringValue(tacticalState.mode, 'off').toLowerCase();
+      if (mode === 'enemy') return 'enemy';
+      if (mode === 'target') return 'target';
+      return 'off';
+    },
+    thrustPercentageFor: (state) => (controllableId: string): number => {
+      if (!controllableId) {
+        return 1;
+      }
+
+      const overlayState = objectValue(resolveOverlayByControllableId(state.overlayBySessionId, controllableId)) ?? {};
+      const navigationState = objectValue(overlayState.navigation);
+      if (!navigationState) {
+        return 1;
+      }
+
+      return numberValue(navigationState.thrustPercentage, 1);
     },
     recentActivity: (state) => (lifetimeMs: number) => {
       const now = Date.now();
