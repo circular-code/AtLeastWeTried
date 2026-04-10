@@ -178,7 +178,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 Id = team.Id,
                 Name = team.Name,
                 Score = team.Score.Mission,
-                ColorHex = $"#{team.Red:X2}{team.Green:X2}{team.Blue:X2}"
+                ColorHex = $"#{team.Red:X2}{team.Green:X2}{team.Blue:X2}",
+                Playable = team.Playable,
             });
         }
 
@@ -1584,7 +1585,59 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                     BroadcastWorldDelta(connections, new List<WorldDeltaDto> { cDelta2 });
                 }
                 break;
+
+            case CreatedTeamEvent createdTeam:
+                BroadcastWorldDelta(connections, new List<WorldDeltaDto> { BuildTeamDelta("team.created", createdTeam.Team) });
+                break;
+
+            case UpdatedTeamEvent updatedTeam:
+                BroadcastWorldDelta(connections, new List<WorldDeltaDto> { BuildTeamDelta("team.updated", updatedTeam.New) });
+                break;
+
+            case UpdatedTeamScoreEvent updatedTeamScore:
+                BroadcastWorldDelta(connections, new List<WorldDeltaDto> { BuildTeamDelta("team.updated", updatedTeamScore.Team) });
+                break;
+
+            case RemovedTeamEvent removedTeam:
+                BroadcastWorldDelta(connections, new List<WorldDeltaDto> { BuildTeamDelta("team.removed", removedTeam.Team) });
+                break;
         }
+    }
+
+    private WorldDeltaDto BuildTeamDelta(string eventType, Team team)
+    {
+        return new WorldDeltaDto
+        {
+            EventType = eventType,
+            EntityId = team.Id.ToString(),
+            Changes = new Dictionary<string, object?>
+            {
+                { "id", team.Id },
+                { "name", team.Name },
+                { "score", team.Score.Mission },
+                { "colorHex", $"#{team.Red:X2}{team.Green:X2}{team.Blue:X2}" },
+                { "playable", team.Playable }
+            }
+        };
+    }
+
+    private WorldDeltaDto BuildTeamDelta(string eventType, TeamSnapshot team)
+    {
+        var liveScore = Galaxy?.Teams.FirstOrDefault(candidate => candidate.Id == team.Id)?.Score.Mission ?? 0;
+
+        return new WorldDeltaDto
+        {
+            EventType = eventType,
+            EntityId = team.Id.ToString(),
+            Changes = new Dictionary<string, object?>
+            {
+                { "id", team.Id },
+                { "name", team.Name },
+                { "score", liveScore },
+                { "colorHex", $"#{team.Red:X2}{team.Green:X2}{team.Blue:X2}" },
+                { "playable", team.Playable }
+            }
+        };
     }
 
     private void DispatchPendingAutoFireRequests()

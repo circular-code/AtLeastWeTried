@@ -85,6 +85,17 @@ export const useGameStore = defineStore('game', {
       controllables: state.galaxy?.controllables.length ?? 0,
     }),
     latestChatEntry: (state) => state.chatEntries[0] ?? null,
+    teamScores: (state): TeamSnapshotDto[] => {
+      return [...(state.galaxy?.teams ?? [])]
+        .filter((team) => team.playable !== false)
+        .sort((left, right) => {
+        if (right.score !== left.score) {
+          return right.score - left.score;
+        }
+
+        return left.name.localeCompare(right.name);
+        });
+    },
     ownedControllables: (state): OwnedControllableSummary[] => {
       const sessionStore = useSessionStore();
       const selectedSessionId = sessionStore.selectedPlayerSession?.playerSessionId ?? '';
@@ -323,7 +334,10 @@ function rebuildIndexes(store: GameState) {
 function cloneSnapshot(source: GalaxySnapshotDto): GalaxySnapshotDto {
   return {
     ...source,
-    teams: source.teams.map((team) => ({ ...team })),
+    teams: source.teams.map((team) => ({
+      ...team,
+      playable: booleanValue(team.playable, true),
+    })),
     clusters: source.clusters.map((cluster) => ({ ...cluster })),
     units: dedupeUnitsById(source.units.map((unit) => ({
       ...unit,
@@ -342,6 +356,35 @@ function applyWorldDeltaToSnapshot(current: GalaxySnapshotDto, message: WorldDel
   const next = cloneSnapshot(current);
 
   for (const event of message.events) {
+    if (event.eventType === 'team.removed') {
+      const teamId = numberValue(event.changes?.id, Number(event.entityId));
+      next.teams = next.teams.filter((team) => team.id !== teamId);
+      continue;
+    }
+
+    if ((event.eventType === 'team.created' || event.eventType === 'team.updated') && event.changes) {
+      const teamId = numberValue(event.changes.id, Number(event.entityId));
+      const existing = next.teams.find((team) => team.id === teamId);
+      if (existing) {
+        existing.name = stringValue(event.changes.name, existing.name);
+        existing.score = numberValue(event.changes.score, existing.score);
+        existing.colorHex = stringValue(event.changes.colorHex, existing.colorHex);
+        existing.playable = booleanValue(event.changes.playable, existing.playable);
+      } else {
+        next.teams = [
+          ...next.teams,
+          {
+            id: teamId,
+            name: stringValue(event.changes.name, `Team ${teamId}`),
+            score: numberValue(event.changes.score, 0),
+            colorHex: stringValue(event.changes.colorHex, '#808080'),
+            playable: booleanValue(event.changes.playable, true),
+          },
+        ];
+      }
+      continue;
+    }
+
     if (event.eventType === 'unit.updated') {
       if (!event.changes) {
         continue;

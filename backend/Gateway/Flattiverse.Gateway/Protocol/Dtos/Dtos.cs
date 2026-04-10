@@ -6,6 +6,7 @@ public sealed class TeamSnapshotDto
     public string Name { get; set; } = "";
     public int Score { get; set; }
     public string ColorHex { get; set; } = "#808080";
+    public bool Playable { get; set; }
 }
 
 public sealed class ClusterSnapshotDto

@@ -270,6 +270,7 @@ export interface TeamSnapshotDto {
   name: string;
   score: number;
   colorHex: string;
+  playable: boolean;
 }
 
 export interface UnitSnapshotDto {

@@ -6,6 +6,7 @@ import { numberValue, objectValue } from '../../lib/validation';
 import { readNavigationTarget, type WorldSceneSelection, WorldScene } from '../../renderer/WorldScene';
 import { useGameStore } from '../../stores/game';
 import { useUiStore } from '../../stores/ui';
+import ScoreStrip from './ScoreStrip.vue';
 
 type EnergyTelemetrySnapshot = {
   collection: string;
@@ -346,6 +347,7 @@ onBeforeUnmount(() => {
       class="damage-flash"
       :style="{ '--damage-flash-strength': damageFlashStrength.toFixed(3) }"
     ></div>
+    <ScoreStrip />
     <header class="viewport-command-bar panel-glass">
       <div class="viewport-command-group viewport-command-group--bars">
         <div class="viewport-status-bar-block">
