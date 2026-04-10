@@ -86,6 +86,14 @@ public sealed class MappingService : IConnectorEventHandler
 
                 HandleUnitRemoved(removedUnit.Unit, removedUnit.Unit.Cluster?.Id ?? 0);
                 break;
+
+            case DestroyedControllableInfoEvent destroyedControllable:
+                HandleControllableRemoved(destroyedControllable);
+                break;
+
+            case ClosedControllableInfoEvent closedControllable:
+                HandleControllableRemoved(closedControllable);
+                break;
         }
     }
 
@@ -315,6 +323,11 @@ public sealed class MappingService : IConnectorEventHandler
 
             if (existing is null)
             {
+                // Player-unit removals can follow a destruction event and should not
+                // resurrect the unit as an unseen marker.
+                if (unit is PlayerUnit)
+                    return;
+
                 var mapped = MapUnit(unit, clusterId);
                 if (mapped is null)
                     return;
@@ -333,6 +346,46 @@ public sealed class MappingService : IConnectorEventHandler
                 EntityId = unitId,
                 Changes = UnitToChanges(existing)
             });
+        }
+    }
+
+    private void HandleControllableRemoved(ControllableInfoEvent controllableEvent)
+    {
+        EnsurePersistenceConfigured();
+
+        var scope = _scopeResolver();
+        if (scope is null || string.IsNullOrWhiteSpace(scope.Value.GalaxyId))
+            return;
+
+        if (scope.Value.LocalPlayerId.HasValue && controllableEvent.Player.Id == scope.Value.LocalPlayerId.Value)
+            return;
+
+        var unitId = BuildControllableUnitId(controllableEvent.Player.Id, controllableEvent.ControllableInfo.Id);
+        var galaxyId = scope.Value.GalaxyId;
+
+        lock (_stateLock)
+        {
+            EnsureGalaxyLoadedUnsafe(galaxyId);
+
+            var scopeKeys = _scopeStates.Keys
+                .Where(key => string.Equals(key.GalaxyId, galaxyId, StringComparison.Ordinal))
+                .ToList();
+
+            foreach (var scopeKey in scopeKeys)
+            {
+                if (!_scopeStates.TryGetValue(scopeKey, out var scopeState))
+                    continue;
+
+                if (!scopeState.Units.Remove(unitId))
+                    continue;
+
+                scopeState.StaticUnitIds.Remove(unitId);
+                AppendDeltaUnsafe(scopeState, new WorldDeltaDto
+                {
+                    EventType = "unit.removed",
+                    EntityId = unitId
+                });
+            }
         }
     }
 
@@ -411,9 +464,14 @@ public sealed class MappingService : IConnectorEventHandler
     private static string BuildUnitId(Unit unit)
     {
         if (unit is PlayerUnit playerUnit)
-            return $"p{playerUnit.Player.Id}-c{playerUnit.ControllableInfo.Id}";
+            return BuildControllableUnitId(playerUnit.Player.Id, playerUnit.ControllableInfo.Id);
 
         return unit.Name;
+    }
+
+    private static string BuildControllableUnitId(int playerId, int controllableId)
+    {
+        return $"p{playerId}-c{controllableId}";
     }
 
     internal static string MapUnitKind(UnitKind kind)
