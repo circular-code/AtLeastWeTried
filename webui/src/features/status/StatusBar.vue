@@ -18,6 +18,16 @@ type RepresentedShip = {
   overlay: Record<string, unknown> | undefined;
 };
 
+type SystemEntry = {
+  unitId: string;
+  displayName: string;
+  kind: string;
+  distance: number | null;
+  isCurrent: boolean;
+  isSeen: boolean;
+  isVisible: boolean;
+};
+
 const gateway = useGateway();
 const gameStore = useGameStore();
 const sessionStore = useSessionStore();
@@ -147,19 +157,7 @@ const unitsInCurrentSystem = computed(() => {
         clusterName,
       };
     })
-    .sort((left, right) => {
-      const leftDistance = left.distance ?? -1;
-      const rightDistance = right.distance ?? -1;
-      if (leftDistance !== rightDistance) {
-        return leftDistance - rightDistance;
-      }
-
-      if (left.isSeen !== right.isSeen) {
-        return left.isSeen ? -1 : 1;
-      }
-
-      return left.displayName.localeCompare(right.displayName);
-    });
+    .sort((left, right) => compareTrackedSystemEntries(left, right));
 });
 const shipEntries = computed(() => {
   if (!isShipsPopoverOpen.value || !currentSystem.value) {
@@ -193,25 +191,7 @@ const shipEntries = computed(() => {
       };
     })
     .sort((left, right) => {
-      if (left.isCurrent !== right.isCurrent) {
-        return left.isCurrent ? -1 : 1;
-      }
-
-      if (left.isSeen !== right.isSeen) {
-        return left.isSeen ? -1 : 1;
-      }
-
-      if (left.isVisible !== right.isVisible) {
-        return left.isVisible ? -1 : 1;
-      }
-
-      const leftDistance = left.distance ?? Number.POSITIVE_INFINITY;
-      const rightDistance = right.distance ?? Number.POSITIVE_INFINITY;
-      if (leftDistance !== rightDistance) {
-        return leftDistance - rightDistance;
-      }
-
-      return left.displayName.localeCompare(right.displayName);
+      return compareTrackedSystemEntries(left, right);
     });
 });
 const filteredUnitsInCurrentSystem = computed(() => filterSystemEntries(unitsInCurrentSystem.value, unitsSearchQuery.value));
@@ -431,11 +411,7 @@ function humanizeUnitKind(kind: string) {
 }
 
 function filterSystemEntries<
-  T extends {
-    unitId: string;
-    displayName: string;
-    kind: string;
-  },
+  T extends Pick<SystemEntry, 'unitId' | 'displayName' | 'kind'>,
 >(entries: T[], query: string) {
   const normalizedQuery = query.trim().toLowerCase();
   if (!normalizedQuery) {
@@ -450,6 +426,16 @@ function filterSystemEntries<
 
 function isUnitTracked(unitId: string) {
   return !!trackedUnitColors.value[unitId];
+}
+
+function compareTrackedSystemEntries(left: SystemEntry, right: SystemEntry) {
+  const leftTracked = isUnitTracked(left.unitId);
+  const rightTracked = isUnitTracked(right.unitId);
+  if (leftTracked !== rightTracked) {
+    return leftTracked ? -1 : 1;
+  }
+
+  return left.displayName.localeCompare(right.displayName);
 }
 
 function trackedUnitButtonStyle(unitId: string) {
