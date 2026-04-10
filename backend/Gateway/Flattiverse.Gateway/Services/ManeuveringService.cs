@@ -14,7 +14,7 @@ namespace Flattiverse.Gateway.Services;
 /// </summary>
 public sealed class ManeuveringService : IConnectorEventHandler
 {
-    private const int TrajectoryTicks = 200;
+    private const int TrajectoryTicks = 20;
     private const int TrajectoryDownsample = 4;
     private const double DefaultSpeedLimit = 6.0d;
 
@@ -118,20 +118,21 @@ public sealed class ManeuveringService : IConnectorEventHandler
 
         if (state.HasTarget)
         {
-            // Compute pointer direction from ship to target
-            var dx = state.TargetX - ship.Position.X;
-            var dy = state.TargetY - ship.Position.Y;
-            var dist = Math.Sqrt(dx * dx + dy * dy);
+            // Show current acceleration (engine) direction
+            var ex = state.LastEngineX;
+            var ey = state.LastEngineY;
+            var eMag = Math.Sqrt(ex * ex + ey * ey);
 
-            if (dist > 0d)
+            if (eMag > 1e-9d)
             {
-                var nx = dx / dist;
-                var ny = dy / dist;
+                var nx = ex / eMag;
+                var ny = ey / eMag;
                 result["vectorX"] = nx;
                 result["vectorY"] = ny;
 
-                // Pointer end: ship position + direction * min(dist, 80)
-                var pointerLen = Math.Min(dist, 80d);
+                // Pointer length proportional to thrust fraction (max 80 units)
+                var thrustFraction = eMag / Math.Max(1e-9d, (double)ship.Engine.Maximum);
+                var pointerLen = thrustFraction * 80d;
                 result["pointerX"] = ship.Position.X + nx * pointerLen;
                 result["pointerY"] = ship.Position.Y + ny * pointerLen;
             }

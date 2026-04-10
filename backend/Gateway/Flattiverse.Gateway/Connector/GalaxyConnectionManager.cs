@@ -74,12 +74,34 @@ public sealed class GalaxyConnectionManager : IDisposable
     /// </summary>
     public async Task ConnectAsync(IReadOnlyList<IConnectorEventHandler> eventHandlers)
     {
-        _galaxy = await Galaxy.Connect(
-            _galaxyUrl,
-            _apiKey,
-            _teamName,
-            _runtimeDisclosure ?? RuntimeSelfDisclosure,
-            _buildDisclosure ?? BuildSelfDisclosure);
+                BuildDisclosure buildDisclosure = new(
+            softwareDesign:    BuildDisclosureLevel.IntegratedLlm,
+            ui:                BuildDisclosureLevel.IntegratedLlm,
+            universeRendering: BuildDisclosureLevel.IntegratedLlm,
+            input:             BuildDisclosureLevel.IntegratedLlm,
+            engineControl:     BuildDisclosureLevel.IntegratedLlm,
+            navigation:        BuildDisclosureLevel.IntegratedLlm,
+            scannerControl:    BuildDisclosureLevel.IntegratedLlm,
+            weaponSystems:     BuildDisclosureLevel.IntegratedLlm,
+            resourceControl:   BuildDisclosureLevel.None,
+            fleetControl:      BuildDisclosureLevel.None,
+            missionControl:    BuildDisclosureLevel.None,
+            chat:              BuildDisclosureLevel.IntegratedLlm
+        );
+
+        RuntimeDisclosure runtimeDisclosure = new(
+            engineControl:         RuntimeDisclosureLevel.Automated,
+            navigation:            RuntimeDisclosureLevel.Autonomous,
+            scannerControl:        RuntimeDisclosureLevel.Automated,
+            weaponAiming:          RuntimeDisclosureLevel.Automated,
+            weaponTargetSelection: RuntimeDisclosureLevel.Automated,
+            resourceControl:       RuntimeDisclosureLevel.Unsupported,
+            fleetControl:          RuntimeDisclosureLevel.Unsupported,
+            missionControl:        RuntimeDisclosureLevel.Unsupported,
+            loadoutControl:        RuntimeDisclosureLevel.Manual,
+            chat:                  RuntimeDisclosureLevel.Manual
+        );
+        _galaxy = await Galaxy.Connect(_galaxyUrl, _apiKey, _teamName, runtimeDisclosure, buildDisclosure);
         _logger.LogInformation("Connected to Galaxy as {Player}", _galaxy.Player.Name);
 
         _eventLoop = new ConnectorEventLoop(_galaxy, eventHandlers, _logger);

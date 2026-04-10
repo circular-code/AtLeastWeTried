@@ -36,12 +36,29 @@ public static class TrajectoryAligner
     private const double TurnSpeedSafetyFactor = 0.85d;
 
     /// <summary>
+    /// Minimum sine of turn angle to trigger curvature braking.
+    /// Arc discretization produces many vertices with tiny turn angles (1-5°).
+    /// These smooth curves are handled by Phase 1 cross-track correction, so
+    /// curvature braking only kicks in for sharper turns above this threshold.
+    /// sin(10°) ≈ 0.17.
+    /// </summary>
+    private const double MinTurnSinAngle = 0.17d;
+
+    /// <summary>
     /// Proportional rate for the final approach: maxSpeed = distance × rate.
     /// This linear limit dominates near the endpoint where the sqrt braking curve
     /// is too generous for discrete-time control.  Chosen so the ship reaches
     /// ≈0.5 speed at typical arrival thresholds (~14 units).
     /// </summary>
     private const double StopApproachRate = 0.035d;
+
+    /// <summary>
+    /// Distance threshold (in world units) at which destination-stop braking activates.
+    /// Beyond this distance the ship only obeys curvature braking and the speed limit
+    /// so it can maintain enough velocity to survive gravity wells mid-path.
+    /// Roughly 3× the ideal stopping distance from speed limit.
+    /// </summary>
+    private const double StopBrakeActivationDistance = 500d;
 
     /// <summary>
     /// Compute the engine vector that best steers the ship from its current position
@@ -82,10 +99,77 @@ public static class TrajectoryAligner
         var crossTrackVx = velX - alongTrackSpeed * toTargetX;
         var crossTrackVy = velY - alongTrackSpeed * toTargetY;
 
-        // Predict cumulative gravity over the lookahead window
+        // Predict cumulative gravity over a lookahead window.
+        // When gravity magnitude approaches or exceeds engine thrust, reduce the
+        // compensation window so the engine keeps enough budget for along-track
+        // thrust.  Without this, the ship stalls near strong gravity bodies and
+        // spirals in.
         var (gx, gy) = ComputeGravityAcceleration(shipX, shipY, sources);
-        var gravCompX = gx * GravityLookaheadTicks;
-        var gravCompY = gy * GravityLookaheadTicks;
+        var gravMag = Math.Sqrt(gx * gx + gy * gy);
+        var effectiveLookahead = GravityLookaheadTicks;
+        if (gravMag > 1e-9d)
+        {
+            // Limit compensation to at most half the engine budget
+            var maxCompMag = maxThrust * 0.5d;
+            var maxTicks = maxCompMag / gravMag;
+            effectiveLookahead = Math.Min(effectiveLookahead, (int)Math.Max(1d, maxTicks));
+        }
+
+        // Decompose gravity into along-track and cross-track components.
+        // Cross-track gravity that matches the upcoming turn direction acts as
+        // free centripetal force — don't waste engine thrust fighting it.
+        var gravAlongTrack = gx * toTargetX + gy * toTargetY;
+        var gravCrossX = gx - gravAlongTrack * toTargetX;
+        var gravCrossY = gy - gravAlongTrack * toTargetY;
+
+        var gravCompCrossX = gravCrossX * effectiveLookahead;
+        var gravCompCrossY = gravCrossY * effectiveLookahead;
+
+        if (remainingPath is not null && remainingPath.Count >= 1)
+        {
+            // Determine the upcoming turn direction from the next path vertex.
+            var nextDx = remainingPath[0].X - targetX;
+            var nextDy = remainingPath[0].Y - targetY;
+            // Cross-track component of the next-segment direction
+            var nextAlong = nextDx * toTargetX + nextDy * toTargetY;
+            var nextCrossX = nextDx - nextAlong * toTargetX;
+            var nextCrossY = nextDy - nextAlong * toTargetY;
+            var nextCrossMag = Math.Sqrt(nextCrossX * nextCrossX + nextCrossY * nextCrossY);
+            var gravCrossMag = Math.Sqrt(gravCrossX * gravCrossX + gravCrossY * gravCrossY);
+
+            if (nextCrossMag > 1e-9d && gravCrossMag > 1e-9d)
+            {
+                // cosine between cross-track gravity and turn direction:
+                // +1 = perfectly aligned (gravity does the turn), -1 = opposes
+                var alignment = (gravCrossX * nextCrossX + gravCrossY * nextCrossY) / (gravCrossMag * nextCrossMag);
+
+                if (alignment > 0d)
+                {
+                    // Scale down cross-track gravity compensation proportional to alignment.
+                    // At perfect alignment (1.0) → keep only 10% compensation (use gravity).
+                    // At weak alignment (0.0) → keep 100% compensation.
+                    var keepFraction = 1d - alignment * 0.9d;
+                    gravCompCrossX *= keepFraction;
+                    gravCompCrossY *= keepFraction;
+                }
+            }
+        }
+
+        // Always compensate cross-track gravity (possibly reduced by gravity assist above).
+        // For along-track gravity: when it decelerates the ship and speed is above half the
+        // limit, skip compensation — let the ship use its inertia to coast through gravity
+        // wells.  This frees engine budget for cross-track control and acceleration.
+        var alongTrackGravComp = gravAlongTrack * effectiveLookahead;
+        var currentSpeed = Math.Sqrt(velX * velX + velY * velY);
+        if (gravAlongTrack < 0d && currentSpeed > speedLimit * 0.5d)
+        {
+            // Gravity decelerates the ship, but we have enough speed — don't fight it,
+            // prioritize path following.
+            alongTrackGravComp = 0d;
+        }
+
+        var gravCompX = alongTrackGravComp * toTargetX + gravCompCrossX;
+        var gravCompY = alongTrackGravComp * toTargetY + gravCompCrossY;
 
         // --- Phase 1: Cancel cross-track drift + gravity drift ---
         var cancelX = -crossTrackVx * CrossTrackCorrectionGain - gravCompX;
@@ -145,11 +229,8 @@ public static class TrajectoryAligner
         double maxThrust,
         double speedLimit)
     {
-        // Compute total remaining distance (ship → target → all remaining path vertices)
-        // and locate the path endpoint for gravity calculation.
+        // Compute total remaining distance (ship → target → all remaining path vertices).
         var totalRemainingDist = distToTarget;
-        var endX = targetX;
-        var endY = targetY;
         if (path is not null)
         {
             var tpx = targetX;
@@ -162,27 +243,30 @@ public static class TrajectoryAligner
                 tpx = path[i].X;
                 tpy = path[i].Y;
             }
-            endX = tpx;
-            endY = tpy;
         }
 
-        // Compute gravity at the path endpoint to determine effective braking thrust.
-        // The engine must counteract gravity while braking.  The gravity compensation
-        // in Phase 1 uses GravityLookaheadTicks, so the actual thrust consumed per tick
-        // for gravity is gravMag * GravityLookaheadTicks (clamped to maxThrust).
-        var (egx, egy) = ComputeGravityAcceleration(endX, endY, sources);
-        var gravMag = Math.Sqrt(egx * egx + egy * egy);
-        var gravCompCost = Math.Min(gravMag * GravityLookaheadTicks, maxThrust * 0.9d);
+        // Only apply destination-stop braking when close enough to matter.
+        // Far from the destination, the ship must maintain speed to survive
+        // gravity wells along the path.  Curvature braking still applies.
+        var vMaxForStop = speedLimit;
+        if (totalRemainingDist < StopBrakeActivationDistance)
+        {
+            // Use gravity at the ship's current position (what it's fighting right now)
+            // rather than gravity at the far-away endpoint.
+            var (egx, egy) = ComputeGravityAcceleration(shipX, shipY, sources);
+            var gravMag = Math.Sqrt(egx * egx + egy * egy);
+            var gravCompCost = Math.Min(gravMag * GravityLookaheadTicks, maxThrust * 0.9d);
 
-        // Effective braking = thrust left after gravity compensation.
-        var effectiveBraking = Math.Max(maxThrust - gravCompCost, maxThrust * 0.05d);
+            // Effective braking = thrust left after gravity compensation.
+            var effectiveBraking = Math.Max(maxThrust - gravCompCost, maxThrust * 0.05d);
 
-        // Two braking limits, take the tighter one:
-        // 1) Physics sqrt curve:  v = sqrt(2 · a_eff · d)
-        // 2) Proportional stop:   v = d · StopApproachRate  (dominates near the endpoint)
-        var vMaxSqrt = Math.Sqrt(2d * effectiveBraking * totalRemainingDist);
-        var vMaxProp = totalRemainingDist * StopApproachRate;
-        var vMaxForStop = Math.Min(vMaxSqrt, vMaxProp);
+            // Two braking limits, take the tighter one:
+            // 1) Physics sqrt curve:  v = sqrt(2 · a_eff · d)
+            // 2) Proportional stop:   v = d · StopApproachRate  (dominates near the endpoint)
+            var vMaxSqrt = Math.Sqrt(2d * effectiveBraking * totalRemainingDist);
+            var vMaxProp = totalRemainingDist * StopApproachRate;
+            vMaxForStop = Math.Min(vMaxSqrt, vMaxProp);
+        }
 
         if (path is null || path.Count < 2)
         {
@@ -245,7 +329,7 @@ public static class TrajectoryAligner
                     // sin(θ) where θ is the turn angle (deviation from straight)
                     var sinAngle = Math.Sqrt(1d - cosAngle * cosAngle);
 
-                    if (sinAngle > 0.01d)
+                    if (sinAngle > MinTurnSinAngle)
                     {
                         // Maximum speed at the turn vertex: v_turn = maxThrust / sin(θ)
                         var vMaxAtTurn = maxThrust * TurnSpeedSafetyFactor / sinAngle;

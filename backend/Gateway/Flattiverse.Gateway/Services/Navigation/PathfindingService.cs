@@ -210,7 +210,15 @@ public sealed class PathfindingService : IConnectorEventHandler
         var arrivalThreshold = ComputeArrivalThreshold(ship);
         if (currentPosition.DistanceTo(state.Goal) <= arrivalThreshold)
         {
-            ClearNavigationGoal(ship.Id);
+            // Station-keeping: keep targeting the goal so the aligner holds position against gravity.
+            state.Status = "station-keeping";
+            _maneuveringService.SetNavigationTarget(
+                ship,
+                (float)state.Goal.X,
+                (float)state.Goal.Y,
+                state.ThrustPercentage,
+                resetController: false,
+                remainingPath: null);
             return;
         }
 
@@ -253,7 +261,15 @@ public sealed class PathfindingService : IConnectorEventHandler
 
         if (followResult.GoalReached)
         {
-            ClearNavigationGoal(ship.Id);
+            // Station-keeping: keep targeting the goal so the aligner holds position against gravity.
+            state.Status = "station-keeping";
+            _maneuveringService.SetNavigationTarget(
+                ship,
+                (float)state.Goal.X,
+                (float)state.Goal.Y,
+                state.ThrustPercentage,
+                resetController: false,
+                remainingPath: null);
             return;
         }
 
