@@ -168,6 +168,18 @@ public sealed class TacticalService : IConnectorEventHandler
             return ShouldAutoFireCore(controllableId, tick, null, out request);
     }
 
+    public void RegisterSuccessfulFire(string controllableId, uint tick)
+    {
+        lock (_sync)
+        {
+            if (!_states.TryGetValue(controllableId, out var state))
+                return;
+
+            state.LastFireTick = tick;
+            state.HasLastFireTick = true;
+        }
+    }
+
     private bool ShouldAutoFireCore(string controllableId, uint tick, Dictionary<Cluster, List<GravitySource>>? gravitySourcesByCluster,
         out AutoFireRequest request)
     {
@@ -202,8 +214,6 @@ public sealed class TacticalService : IConnectorEventHandler
         if (!TryBuildPredictedShotRequest(controllableId, ship, target, tick, gravitySources, out request))
             return false;
 
-        state.LastFireTick = tick;
-        state.HasLastFireTick = true;
         return true;
     }
 
@@ -438,8 +448,19 @@ public sealed class TacticalService : IConnectorEventHandler
                 continue;
 
             float score = missDistance * PredictionMissScoreWeight + ticks * PredictionTickPenalty;
-            if (score >= bestScore)
+            bool scoreTie = MathF.Abs(score - bestScore) <= NumericEpsilon;
+            if (score > bestScore + NumericEpsilon)
                 continue;
+
+            if (scoreTie)
+            {
+                bool worseMissDistance = missDistance > bestMissDistance + NumericEpsilon;
+                bool sameMissDistance = MathF.Abs(missDistance - bestMissDistance) <= NumericEpsilon;
+                bool worseOrEqualTicks = ticks >= bestTicks;
+
+                if (worseMissDistance || (sameMissDistance && worseOrEqualTicks))
+                    continue;
+            }
 
             bestMissDistance = missDistance;
             bestScore = score;
@@ -449,9 +470,6 @@ public sealed class TacticalService : IConnectorEventHandler
             bestIonCost = ionCost;
             bestNeutrinoCost = neutrinoCost;
             bestFound = true;
-
-            if (bestMissDistance <= PredictionHitTolerance)
-                break;
         }
 
         if (!bestFound || bestMissDistance > PredictionMaximumMissDistance)
@@ -602,7 +620,7 @@ public sealed class TacticalService : IConnectorEventHandler
         if (cache is not null && cache.TryGetValue(ship.Cluster, out List<GravitySource>? cached))
             return cached;
 
-        List<GravitySource> gravitySources = BuildGravitySources(ship);
+        List<GravitySource> gravitySources = BuildGravitySources(ship.Cluster);
 
         if (cache is not null)
             cache[ship.Cluster] = gravitySources;
@@ -610,13 +628,11 @@ public sealed class TacticalService : IConnectorEventHandler
         return gravitySources;
     }
 
-    private static List<GravitySource> BuildGravitySources(ClassicShipControllable ship)
+    private static List<GravitySource> BuildGravitySources(Cluster cluster)
     {
         List<GravitySource> gravitySources = new();
-        float shipX = ship.Position.X;
-        float shipY = ship.Position.Y;
 
-        foreach (Unit unit in ship.Cluster.Units)
+        foreach (Unit unit in cluster.Units)
         {
             float gravity = unit.Gravity;
             float gravityWellRadius = 0f;
@@ -630,16 +646,6 @@ public sealed class TacticalService : IConnectorEventHandler
 
             if (gravity <= NumericEpsilon && gravityWellForce <= NumericEpsilon)
                 continue;
-
-            float deltaX = unit.Position.X - shipX;
-            float deltaY = unit.Position.Y - shipY;
-            float distanceSquared = deltaX * deltaX + deltaY * deltaY;
-
-            if (distanceSquared > GravityInfluenceRangeSquared &&
-                (gravityWellRadius <= NumericEpsilon || distanceSquared > gravityWellRadius * gravityWellRadius))
-            {
-                continue;
-            }
 
             gravitySources.Add(new GravitySource(
                 unit,

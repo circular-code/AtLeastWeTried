@@ -949,6 +949,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         {
             await request.Ship.ShotLauncher.Shoot(request.RelativeMovement, request.Ticks, request.Load, request.Damage)
                 .ConfigureAwait(false);
+            _tacticalService.RegisterSuccessfulFire(request.ControllableId, request.Tick);
         }
         catch (GameException ex)
         {
