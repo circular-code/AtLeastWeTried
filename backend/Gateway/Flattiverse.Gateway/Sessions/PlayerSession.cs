@@ -947,7 +947,11 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         if (payload?.TryGetProperty("width", out var widthEl) == true && widthEl.ValueKind != System.Text.Json.JsonValueKind.Null)
             width = widthEl.GetSingle();
 
-        await _scanningService.ApplyAsync(classic, mode, width);
+        float? length = null;
+        if (payload?.TryGetProperty("length", out var lengthEl) == true && lengthEl.ValueKind != System.Text.Json.JsonValueKind.Null)
+            length = lengthEl.GetSingle();
+
+        await _scanningService.ApplyAsync(classic, mode, width, length);
         return Completed(commandId);
     }
 

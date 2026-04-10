@@ -231,6 +231,7 @@ export interface ScannerCommandPayloadDto {
   controllableId: string;
   mode?: string | null;
   width?: number | null;
+  length?: number | null;
 }
 
 export interface SetNavigationTargetCommandMessage {

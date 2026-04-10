@@ -177,6 +177,30 @@ export const useGameStore = defineStore('game', {
       const overlayState = objectValue(resolveOverlayByControllableId(state.overlayBySessionId, controllableId)) ?? {};
       return deriveScannerMaximumWidth(resolveScannerState(overlayState.scanner));
     },
+    scannerLengthFor: (state) => (controllableId: string): number => {
+      if (!controllableId) {
+        return 200;
+      }
+
+      const overlayState = objectValue(resolveOverlayByControllableId(state.overlayBySessionId, controllableId)) ?? {};
+      return deriveScannerLength(resolveScannerState(overlayState.scanner));
+    },
+    scannerLengthMinimumFor: (state) => (controllableId: string): number => {
+      if (!controllableId) {
+        return 1;
+      }
+
+      const overlayState = objectValue(resolveOverlayByControllableId(state.overlayBySessionId, controllableId)) ?? {};
+      return deriveScannerMinimumLength(resolveScannerState(overlayState.scanner));
+    },
+    scannerLengthMaximumFor: (state) => (controllableId: string): number => {
+      if (!controllableId) {
+        return 200;
+      }
+
+      const overlayState = objectValue(resolveOverlayByControllableId(state.overlayBySessionId, controllableId)) ?? {};
+      return deriveScannerMaximumLength(resolveScannerState(overlayState.scanner));
+    },
     scannerRequestedModeFor: (state) => (controllableId: string): ScannerMode => {
       if (!controllableId) {
         return 'off';
@@ -917,6 +941,33 @@ function deriveScannerMaximumWidth(scannerState: Record<string, unknown> | undef
   }
 
   return numberValue(scannerState.maximumWidth, 90);
+}
+
+function deriveScannerLength(scannerState: Record<string, unknown> | undefined) {
+  if (!scannerState) {
+    return 200;
+  }
+
+  return numberValue(
+    scannerState.requestedLength,
+    numberValue(scannerState.targetLength, numberValue(scannerState.currentLength, deriveScannerMaximumLength(scannerState))),
+  );
+}
+
+function deriveScannerMinimumLength(scannerState: Record<string, unknown> | undefined) {
+  if (!scannerState) {
+    return 1;
+  }
+
+  return numberValue(scannerState.minimumLength, 1);
+}
+
+function deriveScannerMaximumLength(scannerState: Record<string, unknown> | undefined) {
+  if (!scannerState) {
+    return 200;
+  }
+
+  return numberValue(scannerState.maximumLength, 200);
 }
 
 function resolveScannerState(scannerValue: unknown) {

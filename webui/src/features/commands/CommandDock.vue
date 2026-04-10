@@ -28,6 +28,8 @@ const tacticalMode = computed(() => uiStore.tacticalMode);
 const scannerMode = computed<ScannerMode>(() => uiStore.scannerMode);
 const scannerWidthMin = computed(() => gameStore.scannerWidthMinimumFor(activeControllableId.value));
 const scannerWidthMax = computed(() => gameStore.scannerWidthMaximumFor(activeControllableId.value));
+const scannerLengthMin = computed(() => gameStore.scannerLengthMinimumFor(activeControllableId.value));
+const scannerLengthMax = computed(() => gameStore.scannerLengthMaximumFor(activeControllableId.value));
 const activeOverlayState = computed<Record<string, unknown>>(() => {
   const overlay = gameStore.ownerOverlay[activeControllableId.value];
   return overlay && typeof overlay === 'object'
@@ -42,6 +44,10 @@ const scannerWidth = computed({
   get: () => uiStore.scannerWidth,
   set: (value: number) => uiStore.setScannerWidth(value),
 });
+const scannerLength = computed({
+  get: () => uiStore.scannerLength,
+  set: (value: number) => uiStore.setScannerLength(value),
+});
 
 watch(
   activeControllableId,
@@ -55,6 +61,9 @@ watch(
 
     const scannerWidthFromOverlay = gameStore.scannerWidthFor(newId);
     uiStore.setScannerWidth(scannerWidthFromOverlay);
+
+    const scannerLengthFromOverlay = gameStore.scannerLengthFor(newId);
+    uiStore.setScannerLength(scannerLengthFromOverlay);
 
     const tacticalModeFromOverlay = gameStore.tacticalModeFor(newId);
     uiStore.setTacticalMode(tacticalModeFromOverlay);
@@ -79,6 +88,21 @@ watch(
   { immediate: true },
 );
 
+watch(
+  () => ({
+    min: scannerLengthMin.value,
+    max: scannerLengthMax.value,
+    length: scannerLength.value,
+  }),
+  ({ length, min, max }) => {
+    const clampedLength = Math.min(Math.max(length, min), max);
+    if (clampedLength !== length) {
+      uiStore.setScannerLength(clampedLength);
+    }
+  },
+  { immediate: true },
+);
+
 function setScanner(mode: ScannerMode) {
   uiStore.setScannerMode(mode);
   gateway.setScannerMode(activeControllableId.value, mode);
@@ -93,6 +117,17 @@ function setScannerWidth(value: number) {
   const clampedWidth = Math.min(Math.max(value, scannerWidthMin.value), scannerWidthMax.value);
   uiStore.setScannerWidth(clampedWidth);
   gateway.setScannerWidth(controllableId, clampedWidth);
+}
+
+function setScannerLength(value: number) {
+  const controllableId = activeControllableId.value;
+  if (!controllableId) {
+    return;
+  }
+
+  const clampedLength = Math.min(Math.max(value, scannerLengthMin.value), scannerLengthMax.value);
+  uiStore.setScannerLength(clampedLength);
+  gateway.setScannerLength(controllableId, clampedLength);
 }
 
 function setTactical(mode: TacticalMode) {
@@ -265,6 +300,19 @@ function humanizeSubsystemName(value: string) {
           @input="setScannerWidth(Number(($event.target as HTMLInputElement).value))"
         />
         <span class="dock-value">{{ scannerWidth.toFixed(0) }}&deg;</span>
+      </div>
+      <div class="dock-group">
+        <span class="dock-label">Length</span>
+        <input
+          :value="scannerLength"
+          class="dock-slider"
+          type="range"
+          :min="scannerLengthMin"
+          :max="scannerLengthMax"
+          step="1"
+          @input="setScannerLength(Number(($event.target as HTMLInputElement).value))"
+        />
+        <span class="dock-value">{{ scannerLength.toFixed(0) }}</span>
       </div>
     </div>
 

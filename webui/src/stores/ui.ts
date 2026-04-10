@@ -41,6 +41,7 @@ export const useUiStore = defineStore('ui', {
 
     scannerMode: 'off' as ScannerMode,
     scannerWidth: 90,
+    scannerLength: 200,
     tacticalMode: 'off' as TacticalMode,
     tacticalTargetsByControllableId: {} as Record<string, string>,
     lastSelection: null as WorldSceneSelection | null,
@@ -114,6 +115,14 @@ export const useUiStore = defineStore('ui', {
       }
 
       this.scannerWidth = Math.max(1, Math.floor(value));
+    },
+    setScannerLength(value: number) {
+      if (!Number.isFinite(value)) {
+        this.scannerLength = 200;
+        return;
+      }
+
+      this.scannerLength = Math.max(1, Math.floor(value));
     },
     setTacticalMode(mode: TacticalMode) {
       this.tacticalMode = mode;

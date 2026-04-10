@@ -352,7 +352,7 @@ function createGatewayApi() {
       return;
     }
 
-    const envelope = buildScannerCommand(controllableId, mode, gameStore.scannerWidthFor(controllableId));
+    const envelope = buildScannerCommand(controllableId, mode, gameStore.scannerWidthFor(controllableId), gameStore.scannerLengthFor(controllableId));
 
     gameStore.trackCommand(envelope.commandId, {
       label: `Scanner ${mode}`,
@@ -384,7 +384,22 @@ function createGatewayApi() {
     const envelope = buildScannerCommand(controllableId, undefined, width);
 
     gameStore.trackCommand(envelope.commandId, {
-      label: `Scanner width ${width.toFixed(0)}ï¿½`,
+      label: `Scanner width ${width.toFixed(0)}°`,
+      subject: gameStore.getControllableLabel(controllableId),
+    });
+
+    client.send(envelope.message);
+  }
+
+  function setScannerLength(controllableId: string, length: number) {
+    if (!controllableId) {
+      return;
+    }
+
+    const envelope = buildScannerCommand(controllableId, undefined, undefined, length);
+
+    gameStore.trackCommand(envelope.commandId, {
+      label: `Scanner length ${length.toFixed(0)}`,
       subject: gameStore.getControllableLabel(controllableId),
     });
 
@@ -507,6 +522,7 @@ function createGatewayApi() {
     setScannerMode,
     initiateTargetedScan,
     setScannerWidth,
+    setScannerLength,
     setTacticalMode,
     setTacticalTarget,
     setNavigationTarget,

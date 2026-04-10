@@ -167,7 +167,7 @@ export function buildSetEngineCommand(controllableId: string, engineId: string, 
   };
 }
 
-export function buildScannerCommand(controllableId: string, mode?: string, width?: number): CommandEnvelope<ScannerCommandMessage> {
+export function buildScannerCommand(controllableId: string, mode?: string, width?: number, length?: number): CommandEnvelope<ScannerCommandMessage> {
   const commandId = createCommandId();
   return {
     commandId,
@@ -178,6 +178,7 @@ export function buildScannerCommand(controllableId: string, mode?: string, width
         controllableId,
         mode,
         width,
+        length,
       },
     },
   };
