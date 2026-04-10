@@ -1,4 +1,5 @@
 using System.Globalization;
+using Flattiverse.Connector;
 using Flattiverse.Connector.Events;
 using Flattiverse.Connector.GalaxyHierarchy;
 using Flattiverse.Connector.Units;
@@ -325,6 +326,12 @@ public sealed class ManeuveringService : IConnectorEventHandler
             return;
         }
 
+        if (ControllableRebuildState.IsRebuilding(ship))
+        {
+            state.LastAppliedVector = new Vector(float.NaN, float.NaN);
+            return;
+        }
+
         var desiredVector = state.HasTarget
             ? new Vector(state.TargetX - ship.Position.X, state.TargetY - ship.Position.Y)
             : new Vector();
@@ -338,11 +345,32 @@ public sealed class ManeuveringService : IConnectorEventHandler
 
         if (IsNearZero(pointerVector))
         {
-            _ = ship.Engine.Off();
+            TryDispatchControlCommand(() => ship.Engine.Off());
             return;
         }
 
-        _ = ship.Engine.Set(pointerVector);
+        TryDispatchControlCommand(() => ship.Engine.Set(pointerVector));
+    }
+
+    private static void TryDispatchControlCommand(Func<Task> controlCommand)
+    {
+        try
+        {
+            var task = controlCommand();
+            if (task.IsCompleted)
+            {
+                _ = task.Exception;
+                return;
+            }
+
+            _ = task.ContinueWith(
+                static completedTask => _ = completedTask.Exception,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
+        }
+        catch (GameException)
+        {
+            // Command prechecks can race with lifecycle transitions and should not break the tick loop.
+        }
     }
 
     private static void LogManeuver(

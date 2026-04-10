@@ -91,14 +91,14 @@ public sealed class MappingService : IConnectorEventHandler
 
     private bool ShouldIgnoreLifecycleEvent(Unit unit)
     {
-        if (unit.Kind is not (UnitKind.ClassicShipPlayerUnit or UnitKind.ModernShipPlayerUnit))
+        if (unit is not PlayerUnit playerUnit)
             return false;
 
         var scope = _scopeResolver();
-        if (scope is null || string.IsNullOrWhiteSpace(scope.Value.FriendlyTeamName))
+        if (scope is null || !scope.Value.LocalPlayerId.HasValue)
             return false;
 
-        return string.Equals(unit.Team?.Name, scope.Value.FriendlyTeamName, StringComparison.Ordinal);
+        return playerUnit.Player.Id == scope.Value.LocalPlayerId.Value;
     }
 
     /// <summary>
@@ -221,6 +221,7 @@ public sealed class MappingService : IConnectorEventHandler
             EnsureGalaxyLoadedUnsafe(scopeKey.Value.GalaxyId);
 
             var scopeState = GetOrCreateScopeStateUnsafe(scopeKey.Value);
+            RemoveLegacyPlayerUnitIdUnsafe(scopeState, dto.UnitId, unit.Name);
             var alreadyKnown = scopeState.Units.TryGetValue(dto.UnitId, out var existing);
             MergeKnownDetailState(dto, existing);
 
@@ -265,6 +266,7 @@ public sealed class MappingService : IConnectorEventHandler
             EnsureGalaxyLoadedUnsafe(scopeKey.Value.GalaxyId);
 
             var scopeState = GetOrCreateScopeStateUnsafe(scopeKey.Value);
+            RemoveLegacyPlayerUnitIdUnsafe(scopeState, dto.UnitId, unit.Name);
             scopeState.Units.TryGetValue(dto.UnitId, out var existing);
             MergeKnownDetailState(dto, existing);
             scopeState.Units[dto.UnitId] = CloneUnitSnapshot(dto);
@@ -297,7 +299,8 @@ public sealed class MappingService : IConnectorEventHandler
         if (scopeKey is null)
             return;
 
-        var unitId = unit.Name;
+        var unitId = BuildUnitId(unit);
+        var legacyUnitId = unit.Name;
 
         lock (_stateLock)
         {
@@ -305,6 +308,12 @@ public sealed class MappingService : IConnectorEventHandler
 
             var scopeState = GetOrCreateScopeStateUnsafe(scopeKey.Value);
             if (!scopeState.Units.TryGetValue(unitId, out var existing))
+            {
+                if (RemoveLegacyPlayerUnitIdUnsafe(scopeState, unitId, legacyUnitId))
+                    scopeState.Units.TryGetValue(unitId, out existing);
+            }
+
+            if (existing is null)
             {
                 var mapped = MapUnit(unit, clusterId);
                 if (mapped is null)
@@ -366,7 +375,7 @@ public sealed class MappingService : IConnectorEventHandler
     {
         var dto = new UnitSnapshotDto
         {
-            UnitId = unit.Name,
+            UnitId = BuildUnitId(unit),
             ClusterId = clusterId,
             Kind = MapUnitKind(unit.Kind),
             FullStateKnown = unit.FullStateKnown,
@@ -397,6 +406,14 @@ public sealed class MappingService : IConnectorEventHandler
         }
 
         return dto;
+    }
+
+    private static string BuildUnitId(Unit unit)
+    {
+        if (unit is PlayerUnit playerUnit)
+            return $"p{playerUnit.Player.Id}-c{playerUnit.ControllableInfo.Id}";
+
+        return unit.Name;
     }
 
     internal static string MapUnitKind(UnitKind kind)
@@ -538,6 +555,30 @@ public sealed class MappingService : IConnectorEventHandler
             _loadedGalaxyIds.Clear();
             _persistenceConfigured = true;
         }
+    }
+
+    private static bool RemoveLegacyPlayerUnitIdUnsafe(ScopeState scopeState, string canonicalUnitId, string legacyUnitId)
+    {
+        if (string.IsNullOrWhiteSpace(canonicalUnitId) ||
+            string.IsNullOrWhiteSpace(legacyUnitId) ||
+            string.Equals(canonicalUnitId, legacyUnitId, StringComparison.Ordinal))
+            return false;
+
+        if (!scopeState.Units.TryGetValue(legacyUnitId, out var legacy))
+            return false;
+
+        scopeState.Units.Remove(legacyUnitId);
+        scopeState.Units[canonicalUnitId] = legacy;
+        scopeState.StaticUnitIds.Remove(legacyUnitId);
+        scopeState.StaticUnitIds.Remove(canonicalUnitId);
+
+        AppendDeltaUnsafe(scopeState, new WorldDeltaDto
+        {
+            EventType = "unit.removed",
+            EntityId = legacyUnitId
+        });
+
+        return true;
     }
 
     private static void ConfigurePersistencePathsUnsafe(string? configuredPath)
@@ -786,7 +827,7 @@ public sealed class MappingService : IConnectorEventHandler
         };
     }
 
-    public readonly record struct MappingScopeContext(string GalaxyId, int ClusterId, string? FriendlyTeamName);
+    public readonly record struct MappingScopeContext(string GalaxyId, int ClusterId, int? LocalPlayerId);
 
     private readonly record struct MappingScopeKey(string GalaxyId, int ClusterId);
 

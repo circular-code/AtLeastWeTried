@@ -9,7 +9,8 @@ import { createNavigationMarker } from './navigationMarker';
 import { createNavigationPointer } from './navigationPointer';
 import { type TrackedTargetVisual, createTrackedTargetVisual, disposeTrackedTargetVisual } from './trackOverlay';
 import { createNavigationLookaheadMarker } from './navigationLookaheadMarker';
-import { createGrid, createGlowField } from './grid';
+import { type GravitySource, type GravityStrengthGrid, createGrid, createGlowField, createGravityStrengthGrid } from './grid';
+import { type ShipStatusVisual, createShipStatusVisual, disposeShipStatusVisual, hideShipStatusVisual, updateShipStatusVisual } from './shipStatusOverlay';
 import type { NavigationOverlayPoint, NavigationOverlaySegment, NavigationOverlayState as TypedNavigationOverlayState } from '../types/navigation';
 
 export type WorldSceneSelection = {
@@ -46,6 +47,7 @@ type WorldSceneNavigationSearch = NavigationOverlaySegment[] | null;
 type WorldSceneOptions = {
   onSelection?: (selection: WorldSceneSelection) => void;
   onNavigationTargetRequested?: (selection: WorldSceneSelection) => void;
+  onFreeFireRequested?: (selection: WorldSceneSelection) => void;
   onVisibleUnitsChanged?: (unitIds: string[]) => void;
   onFocusSelectionChanged?: (isActive: boolean) => void;
 };
@@ -81,16 +83,20 @@ export class WorldScene {
   private readonly container: HTMLElement;
   private readonly onSelection?: (selection: WorldSceneSelection) => void;
   private readonly onNavigationTargetRequested?: (selection: WorldSceneSelection) => void;
+  private readonly onFreeFireRequested?: (selection: WorldSceneSelection) => void;
   private readonly onVisibleUnitsChanged?: (unitIds: string[]) => void;
   private readonly onFocusSelectionChanged?: (isActive: boolean) => void;
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene: THREE.Scene;
   private readonly camera: THREE.OrthographicCamera;
   private readonly grid: THREE.Group;
+  private readonly gravityStrengthGrid: GravityStrengthGrid;
   private readonly root: THREE.Group;
   private staticBodies: BodyMeshResources;
   private dynamicBodies: BodyMeshResources;
   private readonly selectedRing: THREE.LineLoop;
+  private readonly tacticalTargetRing: THREE.LineLoop;
+  private readonly selectedCenterDot: THREE.Mesh;
   private readonly navigationMarker: THREE.Group;
   private readonly navigationPointer: THREE.LineSegments;
   private readonly trackedTargetVisuals: Map<string, TrackedTargetVisual>;
@@ -100,6 +106,7 @@ export class WorldScene {
   private readonly unitBodyMaterial: UnitShaderMaterial;
   private readonly resizeObserver: ResizeObserver;
   private readonly unitVisuals: Map<string, UnitVisual>;
+  private readonly shipStatusVisuals: Map<string, ShipStatusVisual>;
   private readonly teamColors: Map<string, string>;
   private readonly debugUnits: NormalizedUnit[];
   private readonly lastSeenTraces: Map<string, NormalizedUnit>;
@@ -115,6 +122,7 @@ export class WorldScene {
   private selectedControllableId: string;
   private selectedUnitId: string;
   private selectedNavigationTarget: WorldSceneNavigationTarget;
+  private tacticalTargetUnitId: string;
   private trackedUnitColors: Record<string, string>;
   private readonly scannerCones: Map<string, ScannerConeVisual>;
   private animationFrame: number | null;
@@ -126,11 +134,14 @@ export class WorldScene {
   private isFollowingSelection: boolean;
   private isDisposed: boolean;
   private lastReportedVisibleUnitIds: string[];
+  private lastGravityGridViewSignature: string;
+  private lastGravityGridSourceSignature: string;
 
   constructor(container: HTMLElement, options: WorldSceneOptions = {}) {
     this.container = container;
     this.onSelection = options.onSelection;
     this.onNavigationTargetRequested = options.onNavigationTargetRequested;
+    this.onFreeFireRequested = options.onFreeFireRequested;
     this.onVisibleUnitsChanged = options.onVisibleUnitsChanged;
     this.onFocusSelectionChanged = options.onFocusSelectionChanged;
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -150,11 +161,29 @@ export class WorldScene {
     this.camera.lookAt(0, 0, 0);
 
     this.grid = createGrid();
+    this.gravityStrengthGrid = createGravityStrengthGrid();
     this.root = new THREE.Group();
     this.unitBodyMaterial = createUnitBodyMaterial();
     this.staticBodies = createUnitBodyMesh(Math.max(DEBUG_SUN_COUNT, 1), this.unitBodyMaterial);
     this.dynamicBodies = createUnitBodyMesh(1, this.unitBodyMaterial);
     this.selectedRing = createSelectionRing();
+    this.tacticalTargetRing = createSelectionRing();
+    const tacticalTargetRingMaterial = this.tacticalTargetRing.material as THREE.LineBasicMaterial;
+    tacticalTargetRingMaterial.color.setHex(0xff3b3b);
+    tacticalTargetRingMaterial.opacity = 0.98;
+    tacticalTargetRingMaterial.depthTest = false;
+    tacticalTargetRingMaterial.depthWrite = false;
+    this.tacticalTargetRing.renderOrder = 45;
+    this.selectedCenterDot = new THREE.Mesh(
+      new THREE.CircleGeometry(1, 18),
+      new THREE.MeshBasicMaterial({
+        color: 0x000000,
+        transparent: true,
+        opacity: 0.95,
+        depthTest: false,
+        depthWrite: false,
+      }),
+    );
     this.navigationMarker = createNavigationMarker();
     this.navigationPointer = createNavigationPointer();
     this.trackedTargetVisuals = new Map();
@@ -187,11 +216,14 @@ export class WorldScene {
     this.navigationSearchPreview.renderOrder = 38;
     this.scannerCones = new Map();
     this.scene.add(this.grid);
+    this.scene.add(this.gravityStrengthGrid.group);
     this.scene.add(this.staticBodies.mesh);
     this.scene.add(this.dynamicBodies.mesh);
     this.scene.add(this.root);
     this.scene.add(createGlowField());
     this.root.add(this.selectedRing);
+    this.root.add(this.tacticalTargetRing);
+    this.root.add(this.selectedCenterDot);
     this.root.add(this.navigationMarker);
     this.root.add(this.navigationPointer);
     this.root.add(this.navigationSearchPreview);
@@ -203,8 +235,10 @@ export class WorldScene {
     this.selectedControllableId = '';
     this.selectedUnitId = '';
     this.selectedNavigationTarget = null;
+    this.tacticalTargetUnitId = '';
     this.trackedUnitColors = {};
     this.unitVisuals = new Map<string, UnitVisual>();
+    this.shipStatusVisuals = new Map<string, ShipStatusVisual>();
     this.teamColors = new Map<string, string>();
     this.debugUnits = createDebugSuns();
     this.lastSeenTraces = new Map<string, NormalizedUnit>();
@@ -224,6 +258,9 @@ export class WorldScene {
     this.isFollowingSelection = false;
     this.isDisposed = false;
     this.lastReportedVisibleUnitIds = [];
+    this.lastGravityGridViewSignature = '';
+    this.lastGravityGridSourceSignature = '';
+    this.selectedCenterDot.visible = false;
 
     this.renderer.domElement.classList.add('world-canvas');
     this.container.appendChild(this.renderer.domElement);
@@ -274,21 +311,30 @@ export class WorldScene {
     this.disposeVisuals();
     this.disposeTrackedTargetVisuals();
     this.disposeScannerCones();
+    this.gravityStrengthGrid.dispose();
     this.unitBodyMaterial.dispose();
     this.renderer.dispose();
     this.container.innerHTML = '';
   }
 
-  setSnapshot(snapshot: GalaxySnapshotDto | null, ownerOverlay: Record<string, unknown>, selectedControllableId: string, navigationTarget: WorldSceneNavigationTarget) {
+  setSnapshot(
+    snapshot: GalaxySnapshotDto | null,
+    ownerOverlay: Record<string, unknown>,
+    selectedControllableId: string,
+    navigationTarget: WorldSceneNavigationTarget,
+    tacticalTargetUnitId: string,
+  ) {
     const snapshotChanged = this.snapshot !== snapshot;
     const ownerOverlayChanged = this.ownerOverlay !== ownerOverlay;
     const selectedControllableChanged = this.selectedControllableId !== selectedControllableId;
     const navigationTargetChanged = !sameNavigationTarget(this.selectedNavigationTarget, navigationTarget);
+    const tacticalTargetChanged = this.tacticalTargetUnitId !== tacticalTargetUnitId;
 
     this.snapshot = snapshot;
     this.ownerOverlay = normalizeOwnerOverlay(ownerOverlay);
     this.selectedControllableId = selectedControllableId;
     this.selectedNavigationTarget = navigationTarget;
+    this.tacticalTargetUnitId = tacticalTargetUnitId;
 
     if (snapshotChanged) {
       this.teamColors.clear();
@@ -305,6 +351,10 @@ export class WorldScene {
     } else {
       if (selectedControllableChanged) {
         this.updateSelectionRing();
+      }
+
+      if (selectedControllableChanged || tacticalTargetChanged) {
+        this.updateTacticalTargetRing();
       }
 
       if (selectedControllableChanged || navigationTargetChanged) {
@@ -332,6 +382,21 @@ export class WorldScene {
   toggleFocusSelection() {
     this.setFocusSelectionActive(!this.isFollowingSelection);
     this.updateFocusSelection();
+    this.requestRender();
+  }
+
+  jumpToUnit(unitId: string) {
+    if (!unitId) {
+      return;
+    }
+
+    const targetUnit = this.renderableUnitsById.get(unitId);
+    if (!targetUnit) {
+      return;
+    }
+
+    this.camera.position.x = targetUnit.x;
+    this.camera.position.y = -targetUnit.y;
     this.requestRender();
   }
 
@@ -393,6 +458,18 @@ export class WorldScene {
       return;
     }
 
+    if (pointerButton === 0 && event.ctrlKey) {
+      const unit = this.findNearestUnit(worldPosition.x, worldPosition.y);
+      this.onFreeFireRequested?.({
+        worldX: worldPosition.x,
+        worldY: worldPosition.y,
+        unitId: unit?.unitId,
+        kind: unit?.kind,
+        teamName: unit?.teamName,
+      });
+      return;
+    }
+
     if (pointerButton === 2) {
       const unit = this.findNearestUnit(worldPosition.x, worldPosition.y);
       this.onNavigationTargetRequested?.({
@@ -408,6 +485,7 @@ export class WorldScene {
     const unit = this.findNearestUnit(worldPosition.x, worldPosition.y);
     this.selectedUnitId = unit?.unitId ?? '';
     this.updateSelectionRing();
+    this.updateTacticalTargetRing();
     this.updateFocusSelection();
     this.requestRender();
     this.onSelection?.({
@@ -442,7 +520,7 @@ export class WorldScene {
   private readonly handleWheel = (event: WheelEvent) => {
     event.preventDefault();
     const worldBeforeZoom = this.clientToWorld(event.clientX, event.clientY);
-    const zoomFactor = Math.exp(event.deltaY * 0.0012);
+    const zoomFactor = Math.exp(-event.deltaY * 0.0012);
     this.camera.zoom = THREE.MathUtils.clamp(this.camera.zoom * zoomFactor, 0.12, 8);
     this.camera.updateProjectionMatrix();
 
@@ -488,6 +566,7 @@ export class WorldScene {
     }
 
     this.updateFocusSelection();
+    this.updateGravityStrengthGrid();
     this.updateTrackedTargets();
     this.reportVisibleUnits();
     this.renderer.render(this.scene, this.camera);
@@ -525,6 +604,8 @@ export class WorldScene {
       this.unitVisuals.delete(unitId);
     }
 
+    this.syncShipStatusVisuals(dynamicUnits);
+
     if (staticUnitsChanged) {
       this.syncBodyInstances(this.staticBodies, staticUnits);
     }
@@ -550,6 +631,7 @@ export class WorldScene {
     }
 
     this.updateSelectionRing();
+    this.updateTacticalTargetRing();
     this.updateFocusSelection();
     this.updateNavigationMarker();
     this.updateNavigationPointer();
@@ -558,6 +640,70 @@ export class WorldScene {
     this.updateNavigationLookaheadMarker();
     this.updateScannerCones();
     this.updateTrackedTargets();
+  }
+
+  private syncShipStatusVisuals(units: NormalizedUnit[]) {
+    const liveStatusIds = new Set<string>();
+
+    for (const unit of units) {
+      if (unit.isTrace || !isShipKind(unit.renderKind)) {
+        continue;
+      }
+
+      const relation = this.getShipRelation(unit);
+      if (!relation) {
+        continue;
+      }
+
+      const overlayState = objectValue(this.ownerOverlay[unit.unitId]);
+      const hullState = objectValue(overlayState?.hull);
+      const shieldState = objectValue(overlayState?.shield);
+      const hullMaximum = numberValue(hullState?.maximum, 0);
+      const shieldMaximum = numberValue(shieldState?.maximum, 0);
+      if (hullMaximum <= 0 && shieldMaximum <= 0) {
+        continue;
+      }
+
+      let visual = this.shipStatusVisuals.get(unit.unitId);
+      if (!visual) {
+        visual = createShipStatusVisual();
+        this.shipStatusVisuals.set(unit.unitId, visual);
+        this.root.add(visual.group);
+      }
+
+      updateShipStatusVisual(visual, {
+        x: unit.x,
+        y: -unit.y,
+        radius: unit.renderRadius,
+        hullRatio: hullMaximum > 0 ? THREE.MathUtils.clamp(numberValue(hullState?.current, 0) / hullMaximum, 0, 1) : 0,
+        shieldRatio: shieldMaximum > 0 ? THREE.MathUtils.clamp(numberValue(shieldState?.current, 0) / shieldMaximum, 0, 1) : 0,
+        relation,
+      });
+      liveStatusIds.add(unit.unitId);
+    }
+
+    for (const [unitId, visual] of this.shipStatusVisuals.entries()) {
+      if (liveStatusIds.has(unitId)) {
+        continue;
+      }
+
+      hideShipStatusVisual(visual);
+      this.root.remove(visual.group);
+      disposeShipStatusVisual(visual);
+      this.shipStatusVisuals.delete(unitId);
+    }
+  }
+
+  private getShipRelation(unit: NormalizedUnit): 'friendly' | 'enemy' | null {
+    const selectedTeamName = this.snapshot?.controllables.find(
+      (controllable) => controllable.controllableId === this.selectedControllableId,
+    )?.teamName;
+
+    if (!selectedTeamName || !unit.teamName) {
+      return null;
+    }
+
+    return unit.teamName === selectedTeamName ? 'friendly' : 'enemy';
   }
 
   private updateFocusSelection() {
@@ -733,6 +879,7 @@ export class WorldScene {
       ?? this.renderableUnitsById.get(this.selectedControllableId);
     if (!selectedUnit) {
       this.selectedRing.visible = false;
+      this.selectedCenterDot.visible = false;
       return;
     }
 
@@ -740,6 +887,33 @@ export class WorldScene {
     this.selectedRing.visible = true;
     this.selectedRing.position.set(selectedUnit.x, -selectedUnit.y, 0);
     this.selectedRing.scale.set(selectionRadius / 1.25, selectionRadius / 1.25, 1);
+
+    if (selectedUnit.unitId === this.selectedControllableId) {
+      const dotRadius = Math.max(selectedUnit.renderRadius * 0.16, 0.9) + this.getWorldUnitsPerPixel() * 2;
+      this.selectedCenterDot.visible = true;
+      this.selectedCenterDot.position.set(selectedUnit.x, -selectedUnit.y, 2);
+      this.selectedCenterDot.scale.set(dotRadius, dotRadius, 1);
+    } else {
+      this.selectedCenterDot.visible = false;
+    }
+  }
+
+  private updateTacticalTargetRing() {
+    if (!this.tacticalTargetUnitId) {
+      this.tacticalTargetRing.visible = false;
+      return;
+    }
+
+    const targetUnit = this.renderableUnitsById.get(this.tacticalTargetUnitId);
+    if (!targetUnit) {
+      this.tacticalTargetRing.visible = false;
+      return;
+    }
+
+    const targetRadius = Math.max(targetUnit.renderRadius * 1.35, 5.5);
+    this.tacticalTargetRing.visible = true;
+    this.tacticalTargetRing.position.set(targetUnit.x, -targetUnit.y, 0.1);
+    this.tacticalTargetRing.scale.set(targetRadius / 1.25, targetRadius / 1.25, 1);
   }
 
   private updateNavigationMarker() {
@@ -1161,6 +1335,55 @@ export class WorldScene {
     this.onVisibleUnitsChanged(visibleUnitIds);
   }
 
+  private updateGravityStrengthGrid() {
+    const viewBounds = this.getViewBounds();
+    const viewPrecision = this.gravityStrengthGrid.cellSize / 4;
+    const viewSignature = [
+      roundTo(viewBounds.minX, viewPrecision),
+      roundTo(viewBounds.maxX, viewPrecision),
+      roundTo(viewBounds.minY, viewPrecision),
+      roundTo(viewBounds.maxY, viewPrecision),
+      roundTo(this.camera.zoom, 0.001),
+    ].join('|');
+
+    const gravitySources: GravitySource[] = [];
+    const sourceSignatureParts: string[] = [];
+    for (const unit of this.renderableUnits) {
+      if (unit.isTrace) {
+        continue;
+      }
+
+      const gravity = numberValue(unit.gravity, 0);
+      if (gravity <= 0) {
+        continue;
+      }
+
+      gravitySources.push({
+        x: unit.x,
+        y: unit.y,
+        gravity,
+      });
+      sourceSignatureParts.push(
+        unit.unitId,
+        `${roundTo(unit.x, 0.1)}`,
+        `${roundTo(unit.y, 0.1)}`,
+        `${roundTo(gravity, 0.0001)}`,
+      );
+    }
+
+    const sourceSignature = sourceSignatureParts.join('|');
+    if (
+      viewSignature === this.lastGravityGridViewSignature
+      && sourceSignature === this.lastGravityGridSourceSignature
+    ) {
+      return;
+    }
+
+    this.lastGravityGridViewSignature = viewSignature;
+    this.lastGravityGridSourceSignature = sourceSignature;
+    this.gravityStrengthGrid.update(viewBounds, gravitySources);
+  }
+
   private clientToWorld(clientX: number, clientY: number) {
     const rect = this.container.getBoundingClientRect();
     const ndc = new THREE.Vector3(
@@ -1183,8 +1406,17 @@ export class WorldScene {
     }
 
     this.unitVisuals.clear();
+    for (const visual of this.shipStatusVisuals.values()) {
+      this.root.remove(visual.group);
+      disposeShipStatusVisual(visual);
+    }
+    this.shipStatusVisuals.clear();
     this.selectedRing.geometry.dispose();
     (this.selectedRing.material as THREE.Material).dispose();
+    this.tacticalTargetRing.geometry.dispose();
+    (this.tacticalTargetRing.material as THREE.Material).dispose();
+    this.selectedCenterDot.geometry.dispose();
+    (this.selectedCenterDot.material as THREE.Material).dispose();
     for (const child of this.navigationMarker.children) {
       if (child instanceof THREE.Line || child instanceof THREE.LineLoop || child instanceof THREE.LineSegments) {
         child.geometry.dispose();
@@ -1324,12 +1556,14 @@ export class WorldScene {
       clusterId: unit.clusterId,
       kind: unit.kind,
       isStatic: unit.isStatic,
+      isSolid: unit.isSolid,
       isSeen: unit.isSeen,
       lastSeenTick: unit.lastSeenTick,
       x: unit.x,
       y: unit.y,
       angle: unit.angle,
       radius: unit.radius,
+      gravity: unit.gravity,
       teamName: unit.teamName,
       isTrace,
       renderKind,
@@ -1633,4 +1867,12 @@ function objectValue(value: unknown) {
 
 function stringValue(value: unknown, fallback: string) {
   return typeof value === 'string' && value.length > 0 ? value : fallback;
+}
+
+function roundTo(value: number, precision: number) {
+  if (!Number.isFinite(value) || !Number.isFinite(precision) || precision <= 0) {
+    return value;
+  }
+
+  return Math.round(value / precision) * precision;
 }

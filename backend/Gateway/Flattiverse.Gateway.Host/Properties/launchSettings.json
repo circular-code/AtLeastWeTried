@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "Flattiverse.Gateway.Host": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Information"
+      },
+      "applicationUrl": "https://localhost:63068;http://localhost:63069"
+    }
+  }
+}

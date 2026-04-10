@@ -325,7 +325,7 @@ function cloneSnapshot(source: GalaxySnapshotDto): GalaxySnapshotDto {
     ...source,
     teams: source.teams.map((team) => ({ ...team })),
     clusters: source.clusters.map((cluster) => ({ ...cluster })),
-    units: source.units.map((unit) => ({
+    units: dedupeUnitsById(source.units.map((unit) => ({
       ...unit,
       fullStateKnown: booleanValue(unit.fullStateKnown, false),
       isStatic: booleanValue(unit.isStatic, false),
@@ -333,7 +333,7 @@ function cloneSnapshot(source: GalaxySnapshotDto): GalaxySnapshotDto {
       isSeen: booleanValue(unit.isSeen, true),
       lastSeenTick: numberValue(unit.lastSeenTick, 0),
       gravity: numberValue(unit.gravity, 0),
-    })),
+    }))),
     controllables: source.controllables.map((controllable) => ({ ...controllable })),
   };
 }
@@ -343,65 +343,32 @@ function applyWorldDeltaToSnapshot(current: GalaxySnapshotDto, message: WorldDel
 
   for (const event of message.events) {
     if (event.eventType === 'unit.updated') {
-      const unit = next.units.find((item) => item.unitId === event.entityId);
-      if (!unit || !event.changes) {
+      if (!event.changes) {
         continue;
       }
 
-      unit.clusterId = numberValue(event.changes.clusterId, unit.clusterId);
-      unit.kind = stringValue(event.changes.kind, unit.kind);
-      unit.fullStateKnown = booleanValue(event.changes.fullStateKnown, booleanValue(unit.fullStateKnown, false));
-      unit.isStatic = booleanValue(event.changes.isStatic, unit.isStatic);
-      unit.isSolid = booleanValue(event.changes.isSolid, booleanValue(unit.isSolid, true));
-      unit.isSeen = booleanValue(event.changes.isSeen, unit.isSeen);
-      unit.lastSeenTick = numberValue(event.changes.lastSeenTick, unit.lastSeenTick);
-      unit.x = numberValue(event.changes.x, unit.x);
-      unit.y = numberValue(event.changes.y, unit.y);
-      unit.angle = numberValue(event.changes.angle, unit.angle);
-      unit.radius = numberValue(event.changes.radius, unit.radius);
-      unit.gravity = numberValue(event.changes.gravity, numberValue(unit.gravity, 0));
-      unit.teamName = hasRecordKey(event.changes, 'teamName') ? optionalStringValue(event.changes.teamName) : unit.teamName;
-      applyOptionalUnitMetric(unit, 'sunEnergy', event.changes.sunEnergy);
-      applyOptionalUnitMetric(unit, 'sunIons', event.changes.sunIons);
-      applyOptionalUnitMetric(unit, 'sunNeutrinos', event.changes.sunNeutrinos);
-      applyOptionalUnitMetric(unit, 'sunHeat', event.changes.sunHeat);
-      applyOptionalUnitMetric(unit, 'sunDrain', event.changes.sunDrain);
-      applyOptionalUnitMetric(unit, 'planetMetal', event.changes.planetMetal);
-      applyOptionalUnitMetric(unit, 'planetCarbon', event.changes.planetCarbon);
-      applyOptionalUnitMetric(unit, 'planetHydrogen', event.changes.planetHydrogen);
-      applyOptionalUnitMetric(unit, 'planetSilicon', event.changes.planetSilicon);
+      const unit = next.units.find((item) => item.unitId === event.entityId);
+      if (unit) {
+        applyUnitChanges(unit, event.changes);
+      } else {
+        next.units = [
+          ...next.units,
+          createUnitFromChanges(event.entityId, event.changes),
+        ];
+      }
       continue;
     }
 
     if (event.eventType === 'unit.created' && event.changes) {
-      next.units = [
-        ...next.units,
-        {
-          unitId: event.entityId,
-          clusterId: numberValue(event.changes.clusterId, 1),
-          kind: stringValue(event.changes.kind, 'unknown'),
-          fullStateKnown: booleanValue(event.changes.fullStateKnown, false),
-          isStatic: booleanValue(event.changes.isStatic, false),
-          isSolid: booleanValue(event.changes.isSolid, true),
-          isSeen: booleanValue(event.changes.isSeen, true),
-          lastSeenTick: numberValue(event.changes.lastSeenTick, 0),
-          x: numberValue(event.changes.x, 0),
-          y: numberValue(event.changes.y, 0),
-          angle: numberValue(event.changes.angle, 0),
-          radius: numberValue(event.changes.radius, 3),
-          gravity: numberValue(event.changes.gravity, 0),
-          teamName: optionalStringValue(event.changes.teamName),
-          sunEnergy: optionalNumberValue(event.changes.sunEnergy),
-          sunIons: optionalNumberValue(event.changes.sunIons),
-          sunNeutrinos: optionalNumberValue(event.changes.sunNeutrinos),
-          sunHeat: optionalNumberValue(event.changes.sunHeat),
-          sunDrain: optionalNumberValue(event.changes.sunDrain),
-          planetMetal: optionalNumberValue(event.changes.planetMetal),
-          planetCarbon: optionalNumberValue(event.changes.planetCarbon),
-          planetHydrogen: optionalNumberValue(event.changes.planetHydrogen),
-          planetSilicon: optionalNumberValue(event.changes.planetSilicon),
-        },
-      ];
+      const existing = next.units.find((item) => item.unitId === event.entityId);
+      if (existing) {
+        applyUnitChanges(existing, event.changes);
+      } else {
+        next.units = [
+          ...next.units,
+          createUnitFromChanges(event.entityId, event.changes),
+        ];
+      }
       continue;
     }
 
@@ -432,7 +399,73 @@ function applyWorldDeltaToSnapshot(current: GalaxySnapshotDto, message: WorldDel
     }
   }
 
+  next.units = dedupeUnitsById(next.units);
   return next;
+}
+
+function createUnitFromChanges(unitId: string, changes: Record<string, unknown>): UnitSnapshotDto {
+  const unit: UnitSnapshotDto = {
+    unitId,
+    clusterId: 1,
+    kind: 'unknown',
+    fullStateKnown: false,
+    isStatic: false,
+    isSolid: true,
+    isSeen: true,
+    lastSeenTick: 0,
+    x: 0,
+    y: 0,
+    angle: 0,
+    radius: 3,
+    gravity: 0,
+    teamName: undefined,
+    sunEnergy: undefined,
+    sunIons: undefined,
+    sunNeutrinos: undefined,
+    sunHeat: undefined,
+    sunDrain: undefined,
+    planetMetal: undefined,
+    planetCarbon: undefined,
+    planetHydrogen: undefined,
+    planetSilicon: undefined,
+  };
+
+  applyUnitChanges(unit, changes);
+  return unit;
+}
+
+function applyUnitChanges(unit: UnitSnapshotDto, changes: Record<string, unknown>) {
+  unit.clusterId = numberValue(changes.clusterId, unit.clusterId);
+  unit.kind = stringValue(changes.kind, unit.kind);
+  unit.fullStateKnown = booleanValue(changes.fullStateKnown, booleanValue(unit.fullStateKnown, false));
+  unit.isStatic = booleanValue(changes.isStatic, unit.isStatic);
+  unit.isSolid = booleanValue(changes.isSolid, booleanValue(unit.isSolid, true));
+  unit.isSeen = booleanValue(changes.isSeen, unit.isSeen);
+  unit.lastSeenTick = numberValue(changes.lastSeenTick, unit.lastSeenTick);
+  unit.x = numberValue(changes.x, unit.x);
+  unit.y = numberValue(changes.y, unit.y);
+  unit.angle = numberValue(changes.angle, unit.angle);
+  unit.radius = numberValue(changes.radius, unit.radius);
+  unit.gravity = numberValue(changes.gravity, numberValue(unit.gravity, 0));
+  unit.teamName = hasRecordKey(changes, 'teamName') ? optionalStringValue(changes.teamName) : unit.teamName;
+  applyOptionalUnitMetric(unit, 'sunEnergy', changes.sunEnergy);
+  applyOptionalUnitMetric(unit, 'sunIons', changes.sunIons);
+  applyOptionalUnitMetric(unit, 'sunNeutrinos', changes.sunNeutrinos);
+  applyOptionalUnitMetric(unit, 'sunHeat', changes.sunHeat);
+  applyOptionalUnitMetric(unit, 'sunDrain', changes.sunDrain);
+  applyOptionalUnitMetric(unit, 'planetMetal', changes.planetMetal);
+  applyOptionalUnitMetric(unit, 'planetCarbon', changes.planetCarbon);
+  applyOptionalUnitMetric(unit, 'planetHydrogen', changes.planetHydrogen);
+  applyOptionalUnitMetric(unit, 'planetSilicon', changes.planetSilicon);
+}
+
+function dedupeUnitsById(units: UnitSnapshotDto[]) {
+  const unitsById = new Map<string, UnitSnapshotDto>();
+  for (const unit of units) {
+    unitsById.set(unit.unitId, unit);
+  }
+
+  return Array.from(unitsById.values());
 }
 
 function applyOwnerOverlay(current: Record<string, unknown>, message: OwnerOverlayDeltaMessage) {
