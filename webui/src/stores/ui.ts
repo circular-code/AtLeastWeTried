@@ -36,6 +36,7 @@ export const useUiStore = defineStore('ui', {
 
     return ({
     selectedControllableId: '',
+    viewportJumpTargetId: '',
     navigationThrustPercentage: 0.25,
     scannerMode: 'off' as ScannerMode,
     scannerWidth: 90,
@@ -86,6 +87,12 @@ export const useUiStore = defineStore('ui', {
   actions: {
     setSelectedControllable(controllableId: string) {
       this.selectedControllableId = controllableId;
+    },
+    requestViewportJump(unitId: string) {
+      this.viewportJumpTargetId = unitId;
+    },
+    clearViewportJump() {
+      this.viewportJumpTargetId = '';
     },
     setNavigationThrustPercentage(value: number) {
       if (!Number.isFinite(value)) {
@@ -184,13 +191,13 @@ export const useUiStore = defineStore('ui', {
         return;
       }
 
-      this.debugLogEntries = [{
+      this.debugLogEntries.unshift({
         id: `debug-${Date.now()}-${Math.random().toString(16).slice(2)}`,
         direction,
         messageType: message.type,
         payload,
         createdAt: Date.now(),
-      }, ...this.debugLogEntries];
+      });
     },
     clearDebugLog() {
       this.debugLogEntries = [];

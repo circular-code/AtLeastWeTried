@@ -98,6 +98,18 @@ watch(
   { deep: true },
 );
 
+watch(
+  () => uiStore.viewportJumpTargetId,
+  (targetUnitId) => {
+    if (!targetUnitId) {
+      return;
+    }
+
+    worldScene?.jumpToUnit(targetUnitId);
+    uiStore.clearViewportJump();
+  },
+);
+
 onBeforeUnmount(() => {
   uiStore.setVisibleUnitIds([]);
   isFocusSelectionActive.value = false;
