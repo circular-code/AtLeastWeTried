@@ -19,6 +19,7 @@ export type WorldSceneSelection = {
   unitId?: string;
   kind?: string;
   teamName?: string;
+  direct?: boolean;
 };
 
 type WorldSceneNavigationTarget = {
@@ -490,6 +491,7 @@ export class WorldScene {
         unitId: unit?.unitId,
         kind: unit?.kind,
         teamName: unit?.teamName,
+        direct: event.shiftKey,
       });
       return;
     }

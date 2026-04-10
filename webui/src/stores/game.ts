@@ -46,8 +46,10 @@ import type {
   OwnedControllableSummary,
   PendingCommandDescriptor,
   ScannerMode,
+  TacticalMode,
 } from '../types/client';
 import { useSessionStore } from './session';
+import { useUiStore } from './ui';
 
 type GameState = {
   galaxy: GalaxySnapshotDto | null;
@@ -85,6 +87,17 @@ export const useGameStore = defineStore('game', {
       controllables: state.galaxy?.controllables.length ?? 0,
     }),
     latestChatEntry: (state) => state.chatEntries[0] ?? null,
+    teamScores: (state): TeamSnapshotDto[] => {
+      return [...(state.galaxy?.teams ?? [])]
+        .filter((team) => team.playable !== false)
+        .sort((left, right) => {
+        if (right.score !== left.score) {
+          return right.score - left.score;
+        }
+
+        return left.name.localeCompare(right.name);
+        });
+    },
     ownedControllables: (state): OwnedControllableSummary[] => {
       const sessionStore = useSessionStore();
       const selectedSessionId = sessionStore.selectedPlayerSession?.playerSessionId ?? '';
@@ -119,7 +132,8 @@ export const useGameStore = defineStore('game', {
         return null;
       }
 
-      return buildOverlayEntry(controllableId, state.galaxy, new Map(Object.entries(overlayById) as Array<[string, ControllableOverlayState]>), controllableId);
+      const uiStore = useUiStore();
+      return buildOverlayEntry(controllableId, state.galaxy, new Map(Object.entries(overlayById) as Array<[string, ControllableOverlayState]>), uiStore.selectedControllableId);
     },
     selectionEntry: (state) => (selection: WorldSceneSelection | null): ClickedUnitEntry | null => {
       return buildClickedUnitEntry(selection, state.galaxy, new Map(Object.entries(aggregateOverlayState(state.overlayBySessionId)) as Array<[string, ControllableOverlayState]>));
@@ -164,6 +178,77 @@ export const useGameStore = defineStore('game', {
 
       const overlayState = objectValue(resolveOverlayByControllableId(state.overlayBySessionId, controllableId)) ?? {};
       return deriveScannerMaximumWidth(resolveScannerState(overlayState.scanner));
+    },
+    scannerLengthFor: (state) => (controllableId: string): number => {
+      if (!controllableId) {
+        return 200;
+      }
+
+      const overlayState = objectValue(resolveOverlayByControllableId(state.overlayBySessionId, controllableId)) ?? {};
+      return deriveScannerLength(resolveScannerState(overlayState.scanner));
+    },
+    scannerLengthMinimumFor: (state) => (controllableId: string): number => {
+      if (!controllableId) {
+        return 1;
+      }
+
+      const overlayState = objectValue(resolveOverlayByControllableId(state.overlayBySessionId, controllableId)) ?? {};
+      return deriveScannerMinimumLength(resolveScannerState(overlayState.scanner));
+    },
+    scannerLengthMaximumFor: (state) => (controllableId: string): number => {
+      if (!controllableId) {
+        return 200;
+      }
+
+      const overlayState = objectValue(resolveOverlayByControllableId(state.overlayBySessionId, controllableId)) ?? {};
+      return deriveScannerMaximumLength(resolveScannerState(overlayState.scanner));
+    },
+    scannerRequestedModeFor: (state) => (controllableId: string): ScannerMode => {
+      if (!controllableId) {
+        return 'off';
+      }
+
+      const overlayState = objectValue(resolveOverlayByControllableId(state.overlayBySessionId, controllableId)) ?? {};
+      const scannerState = resolveScannerState(overlayState.scanner);
+      if (!scannerState) {
+        return 'off';
+      }
+
+      const mode = stringValue(scannerState.mode, 'off').toLowerCase();
+      if (mode === '360' || mode === 'full') return '360';
+      if (mode === 'forward') return 'forward';
+      if (mode === 'sweep') return 'sweep';
+      if (mode === 'targeted' || mode === 'target') return 'targeted';
+      return 'off';
+    },
+    tacticalModeFor: (state) => (controllableId: string): TacticalMode => {
+      if (!controllableId) {
+        return 'off';
+      }
+
+      const overlayState = objectValue(resolveOverlayByControllableId(state.overlayBySessionId, controllableId)) ?? {};
+      const tacticalState = objectValue(overlayState.tactical);
+      if (!tacticalState) {
+        return 'off';
+      }
+
+      const mode = stringValue(tacticalState.mode, 'off').toLowerCase();
+      if (mode === 'enemy') return 'enemy';
+      if (mode === 'target') return 'target';
+      return 'off';
+    },
+    thrustPercentageFor: (state) => (controllableId: string): number => {
+      if (!controllableId) {
+        return 1;
+      }
+
+      const overlayState = objectValue(resolveOverlayByControllableId(state.overlayBySessionId, controllableId)) ?? {};
+      const navigationState = objectValue(overlayState.navigation);
+      if (!navigationState) {
+        return 1;
+      }
+
+      return numberValue(navigationState.thrustPercentage, 1);
     },
     recentActivity: (state) => (lifetimeMs: number) => {
       const now = Date.now();
@@ -325,7 +410,10 @@ function rebuildIndexes(store: GameState) {
 function cloneSnapshot(source: GalaxySnapshotDto): GalaxySnapshotDto {
   return {
     ...source,
-    teams: source.teams.map((team) => ({ ...team })),
+    teams: source.teams.map((team) => ({
+      ...team,
+      playable: booleanValue(team.playable, true),
+    })),
     clusters: source.clusters.map((cluster) => ({ ...cluster })),
     units: dedupeUnitsById(source.units.map((unit) => ({
       ...unit,
@@ -344,6 +432,35 @@ function applyWorldDeltaToSnapshot(current: GalaxySnapshotDto, message: WorldDel
   const next = cloneSnapshot(current);
 
   for (const event of message.events) {
+    if (event.eventType === 'team.removed') {
+      const teamId = numberValue(event.changes?.id, Number(event.entityId));
+      next.teams = next.teams.filter((team) => team.id !== teamId);
+      continue;
+    }
+
+    if ((event.eventType === 'team.created' || event.eventType === 'team.updated') && event.changes) {
+      const teamId = numberValue(event.changes.id, Number(event.entityId));
+      const existing = next.teams.find((team) => team.id === teamId);
+      if (existing) {
+        existing.name = stringValue(event.changes.name, existing.name);
+        existing.score = numberValue(event.changes.score, existing.score);
+        existing.colorHex = stringValue(event.changes.colorHex, existing.colorHex);
+        existing.playable = booleanValue(event.changes.playable, existing.playable);
+      } else {
+        next.teams = [
+          ...next.teams,
+          {
+            id: teamId,
+            name: stringValue(event.changes.name, `Team ${teamId}`),
+            score: numberValue(event.changes.score, 0),
+            colorHex: stringValue(event.changes.colorHex, '#808080'),
+            playable: booleanValue(event.changes.playable, true),
+          },
+        ];
+      }
+      continue;
+    }
+
     if (event.eventType === 'unit.updated') {
       if (!event.changes) {
         continue;
@@ -834,6 +951,33 @@ function deriveScannerMaximumWidth(scannerState: Record<string, unknown> | undef
   }
 
   return numberValue(scannerState.maximumWidth, 90);
+}
+
+function deriveScannerLength(scannerState: Record<string, unknown> | undefined) {
+  if (!scannerState) {
+    return 200;
+  }
+
+  return numberValue(
+    scannerState.requestedLength,
+    numberValue(scannerState.targetLength, numberValue(scannerState.currentLength, deriveScannerMaximumLength(scannerState))),
+  );
+}
+
+function deriveScannerMinimumLength(scannerState: Record<string, unknown> | undefined) {
+  if (!scannerState) {
+    return 1;
+  }
+
+  return numberValue(scannerState.minimumLength, 1);
+}
+
+function deriveScannerMaximumLength(scannerState: Record<string, unknown> | undefined) {
+  if (!scannerState) {
+    return 200;
+  }
+
+  return numberValue(scannerState.maximumLength, 200);
 }
 
 function resolveScannerState(scannerValue: unknown) {

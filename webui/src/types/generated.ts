@@ -231,6 +231,7 @@ export interface ScannerCommandPayloadDto {
   controllableId: string;
   mode?: string | null;
   width?: number | null;
+  length?: number | null;
 }
 
 export interface SetNavigationTargetCommandMessage {
@@ -244,6 +245,7 @@ export interface SetNavigationTargetCommandPayloadDto {
   targetX: number;
   targetY: number;
   thrustPercentage?: number | null;
+  direct?: boolean | null;
 }
 
 export interface SetSubsystemModeCommandMessage {
@@ -270,6 +272,7 @@ export interface TeamSnapshotDto {
   name: string;
   score: number;
   colorHex: string;
+  playable: boolean;
 }
 
 export interface UnitSnapshotDto {

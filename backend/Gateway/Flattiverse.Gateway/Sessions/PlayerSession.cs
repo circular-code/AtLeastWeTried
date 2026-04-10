@@ -178,7 +178,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 Id = team.Id,
                 Name = team.Name,
                 Score = team.Score.Mission,
-                ColorHex = $"#{team.Red:X2}{team.Green:X2}{team.Blue:X2}"
+                ColorHex = $"#{team.Red:X2}{team.Green:X2}{team.Blue:X2}",
+                Playable = team.Playable,
             });
         }
 
@@ -312,6 +313,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 { "currentY", classic.Engine.Current.Y }
             };
             changes["scanner"] = _scanningService.BuildOverlay(classic.Id);
+            changes["tactical"] = _tacticalService.BuildOverlay($"p{Galaxy!.Player.Id}-c{controllable.Id}");
             changes["shield"] = new Dictionary<string, object>
             {
                 { "active", controllable.Shield.Active },
@@ -723,9 +725,13 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         var overlay = _maneuveringService.BuildOverlay(controllableId)
             .ToDictionary(entry => entry.Key, entry => (object?)entry.Value, StringComparer.Ordinal);
 
-        foreach (var (key, value) in _pathfindingService.BuildOverlay(controllableId))
+        var pathfindingOverlay = _pathfindingService.BuildOverlay(controllableId);
+        if (pathfindingOverlay.TryGetValue("active", out var pathActive) && pathActive is true)
         {
-            overlay[key] = value;
+            foreach (var (key, value) in pathfindingOverlay)
+            {
+                overlay[key] = value;
+            }
         }
 
         return overlay;
@@ -849,6 +855,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         _maneuveringService.ClearNavigationTarget(classic.Id);
 
         var thrust = payload?.GetProperty("thrust").GetSingle() ?? 0f;
+        _maneuveringService.SetThrustPercentage(classic.Id, thrust);
 
         if (payload?.TryGetProperty("x", out var xEl) == true && payload?.TryGetProperty("y", out var yEl) == true &&
             xEl.ValueKind != System.Text.Json.JsonValueKind.Null && yEl.ValueKind != System.Text.Json.JsonValueKind.Null)
@@ -890,8 +897,18 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             && thrustEl.ValueKind != System.Text.Json.JsonValueKind.Null
             ? thrustEl.GetSingle()
             : 1f;
+        var direct = payload?.TryGetProperty("direct", out var directEl) == true
+            && directEl.ValueKind == System.Text.Json.JsonValueKind.True;
 
-        _pathfindingService.SetNavigationGoal(classic, targetX, targetY, thrustPercentage);
+        if (direct)
+        {
+            _pathfindingService.ClearNavigationGoal(classic.Id);
+            _maneuveringService.SetNavigationTarget(classic, targetX, targetY, thrustPercentage, true, isDirect: true);
+        }
+        else
+        {
+            _pathfindingService.SetNavigationGoal(classic, targetX, targetY, thrustPercentage);
+        }
 
         return Completed(commandId);
     }
@@ -945,7 +962,11 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         if (payload?.TryGetProperty("width", out var widthEl) == true && widthEl.ValueKind != System.Text.Json.JsonValueKind.Null)
             width = widthEl.GetSingle();
 
-        await _scanningService.ApplyAsync(classic, mode, width);
+        float? length = null;
+        if (payload?.TryGetProperty("length", out var lengthEl) == true && lengthEl.ValueKind != System.Text.Json.JsonValueKind.Null)
+            length = lengthEl.GetSingle();
+
+        await _scanningService.ApplyAsync(classic, mode, width, length);
         return Completed(commandId);
     }
 
@@ -1572,7 +1593,37 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 break;
             }
 
-            case DestroyedControllableInfoEvent:
+            case DestroyedControllableInfoEvent destroyedEvent:
+            {
+                var destroyedDelta = new WorldDeltaDto
+                {
+                    EventType = "controllable.created",
+                    EntityId = $"p{destroyedEvent.Player.Id}-c{destroyedEvent.ControllableInfo.Id}",
+                    Changes = new Dictionary<string, object?>
+                    {
+                        { "controllableId", $"p{destroyedEvent.Player.Id}-c{destroyedEvent.ControllableInfo.Id}" },
+                        { "displayName", destroyedEvent.ControllableInfo.Name },
+                        { "teamName", destroyedEvent.Player.Team?.Name ?? "" },
+                        { "alive", destroyedEvent.ControllableInfo.Alive },
+                        { "score", destroyedEvent.ControllableInfo.Score.Mission }
+                    }
+                };
+                BroadcastWorldDelta(connections, new List<WorldDeltaDto> { destroyedDelta });
+
+                // Auto-continue own controllables when they die
+                if (destroyedEvent.Player.Id == Galaxy?.Player?.Id)
+                {
+                    foreach (var c in Galaxy!.Controllables)
+                    {
+                        if (c is null || c.Id != destroyedEvent.ControllableInfo.Id)
+                            continue;
+                        ObserveBackgroundTask(c.Continue());
+                        break;
+                    }
+                }
+                break;
+            }
+
             case ClosedControllableInfoEvent:
             case UpdatedControllableInfoScoreEvent:
                 // Re-broadcast full controllable state on these events; the tick overlay will handle owner side
@@ -1599,7 +1650,59 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                     BroadcastWorldDelta(connections, new List<WorldDeltaDto> { cDelta2 });
                 }
                 break;
+
+            case CreatedTeamEvent createdTeam:
+                BroadcastWorldDelta(connections, new List<WorldDeltaDto> { BuildTeamDelta("team.created", createdTeam.Team) });
+                break;
+
+            case UpdatedTeamEvent updatedTeam:
+                BroadcastWorldDelta(connections, new List<WorldDeltaDto> { BuildTeamDelta("team.updated", updatedTeam.New) });
+                break;
+
+            case UpdatedTeamScoreEvent updatedTeamScore:
+                BroadcastWorldDelta(connections, new List<WorldDeltaDto> { BuildTeamDelta("team.updated", updatedTeamScore.Team) });
+                break;
+
+            case RemovedTeamEvent removedTeam:
+                BroadcastWorldDelta(connections, new List<WorldDeltaDto> { BuildTeamDelta("team.removed", removedTeam.Team) });
+                break;
         }
+    }
+
+    private WorldDeltaDto BuildTeamDelta(string eventType, Team team)
+    {
+        return new WorldDeltaDto
+        {
+            EventType = eventType,
+            EntityId = team.Id.ToString(),
+            Changes = new Dictionary<string, object?>
+            {
+                { "id", team.Id },
+                { "name", team.Name },
+                { "score", team.Score.Mission },
+                { "colorHex", $"#{team.Red:X2}{team.Green:X2}{team.Blue:X2}" },
+                { "playable", team.Playable }
+            }
+        };
+    }
+
+    private WorldDeltaDto BuildTeamDelta(string eventType, TeamSnapshot team)
+    {
+        var liveScore = Galaxy?.Teams.FirstOrDefault(candidate => candidate.Id == team.Id)?.Score.Mission ?? 0;
+
+        return new WorldDeltaDto
+        {
+            EventType = eventType,
+            EntityId = team.Id.ToString(),
+            Changes = new Dictionary<string, object?>
+            {
+                { "id", team.Id },
+                { "name", team.Name },
+                { "score", liveScore },
+                { "colorHex", $"#{team.Red:X2}{team.Green:X2}{team.Blue:X2}" },
+                { "playable", team.Playable }
+            }
+        };
     }
 
     private void DispatchPendingAutoFireRequests()
