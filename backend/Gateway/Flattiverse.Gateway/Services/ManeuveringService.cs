@@ -33,6 +33,8 @@ public sealed class ManeuveringService : IConnectorEventHandler
         float Ki,
         float Kd,
         float BrakeDistance,
+        float ClosingSpeedBrakeLeadTime,
+        float StoppingDistanceSafetyFactor,
         float DriftBrakeDistanceFactor,
         float DriftDerivativeFactor,
         float IntegralWindow,
@@ -234,13 +236,28 @@ public sealed class ManeuveringService : IConnectorEventHandler
 
         var proportionalTerm = distanceError * pidConfig.Kp;
         var integralTerm = targetErrorIntegral * pidConfig.Ki;
-        var effectiveBrakeDistance = pidConfig.BrakeDistance + undesiredSpeed * pidConfig.DriftBrakeDistanceFactor;
+        var effectiveBrakeDistance =
+            pidConfig.BrakeDistance +
+            Math.Max(0f, closingSpeed) * pidConfig.ClosingSpeedBrakeLeadTime +
+            undesiredSpeed * pidConfig.DriftBrakeDistanceFactor;
         var brakeBlend = effectiveBrakeDistance <= 0f
             ? 1f
             : Clamp01(1f - distanceError / effectiveBrakeDistance);
+        var stoppingAcceleration = Math.Max(desiredVectorLengthLimit, maximumVectorLength * 0.5f);
+        var stoppingDistance = closingSpeed > 0f && stoppingAcceleration > 0f
+            ? (closingSpeed * closingSpeed) / (2f * stoppingAcceleration)
+            : 0f;
+        var stoppingDistanceBlend = distanceError <= 0f
+            ? 1f
+            : Clamp01((stoppingDistance * pidConfig.StoppingDistanceSafetyFactor - distanceError) / Math.Max(distanceError, 0.001f));
+        brakeBlend = Math.Max(brakeBlend, stoppingDistanceBlend);
         var effectiveClosingSpeed = Math.Max(0f, closingSpeed) + undesiredSpeed * pidConfig.DriftDerivativeFactor;
         var derivativeTerm = effectiveClosingSpeed * pidConfig.Kd * brakeBlend;
-        var targetMagnitude = proportionalTerm + integralTerm - derivativeTerm;
+        var proactiveBrakeBlend = closingSpeed <= 0f || stoppingDistance <= 0f
+            ? 0f
+            : Clamp01((stoppingDistance * 1.1f - distanceError) / Math.Max(stoppingDistance * 0.6f, 0.001f));
+        var proactiveBrakeTerm = closingSpeed * 1.0f * proactiveBrakeBlend;
+        var targetMagnitude = proportionalTerm + integralTerm - derivativeTerm - proactiveBrakeTerm;
         var targetVector = desiredDirection * targetMagnitude;
 
         if (targetMagnitude >= 0f)
@@ -264,6 +281,8 @@ public sealed class ManeuveringService : IConnectorEventHandler
         var integralDistanceSeconds = Lerp(260f, 75f, thrustFactor);
         var derivativeSpeed = Lerp(5.5f, 1.8f, thrustFactor);
         var brakeDistance = Lerp(14f, 32f, thrustFactor);
+        var closingSpeedBrakeLeadTime = Lerp(1.6f, 2.6f, thrustFactor);
+        var stoppingDistanceSafetyFactor = Lerp(1.2f, 1.6f, thrustFactor);
         var driftBrakeDistanceFactor = Lerp(7f, 18f, thrustFactor);
         var driftDerivativeFactor = Lerp(0.8f, 1.4f, thrustFactor);
         var integralWindow = Lerp(70f, 24f, thrustFactor);
@@ -274,6 +293,8 @@ public sealed class ManeuveringService : IConnectorEventHandler
             desiredVectorLengthLimit / integralDistanceSeconds,
             maximumVectorLength / derivativeSpeed,
             brakeDistance,
+            closingSpeedBrakeLeadTime,
+            stoppingDistanceSafetyFactor,
             driftBrakeDistanceFactor,
             driftDerivativeFactor,
             integralWindow,
