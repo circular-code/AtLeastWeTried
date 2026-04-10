@@ -4,6 +4,7 @@ import { TRACE_OPACITY_SCALE, UNIT_KIND_CODE, UNSEEN_OPACITY_SCALE } from './con
 
 export type UnitVisual = {
   heading?: THREE.Line;
+  status?: import('./shipStatusOverlay').ShipStatusVisual;
   instanceIndex: number;
 };
 

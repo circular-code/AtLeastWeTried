@@ -10,6 +10,7 @@ import { createNavigationPointer } from './navigationPointer';
 import { type TrackedTargetVisual, createTrackedTargetVisual, disposeTrackedTargetVisual } from './trackOverlay';
 import { createNavigationLookaheadMarker } from './navigationLookaheadMarker';
 import { type GravitySource, type GravityStrengthGrid, createGrid, createGlowField, createGravityStrengthGrid } from './grid';
+import { type ShipStatusVisual, createShipStatusVisual, disposeShipStatusVisual, hideShipStatusVisual, updateShipStatusVisual } from './shipStatusOverlay';
 import type { NavigationOverlayPoint, NavigationOverlaySegment, NavigationOverlayState as TypedNavigationOverlayState } from '../types/navigation';
 
 export type WorldSceneSelection = {
@@ -95,6 +96,7 @@ export class WorldScene {
   private dynamicBodies: BodyMeshResources;
   private readonly selectedRing: THREE.LineLoop;
   private readonly tacticalTargetRing: THREE.LineLoop;
+  private readonly selectedCenterDot: THREE.Mesh;
   private readonly navigationMarker: THREE.Group;
   private readonly navigationPointer: THREE.LineSegments;
   private readonly trackedTargetVisuals: Map<string, TrackedTargetVisual>;
@@ -104,6 +106,7 @@ export class WorldScene {
   private readonly unitBodyMaterial: UnitShaderMaterial;
   private readonly resizeObserver: ResizeObserver;
   private readonly unitVisuals: Map<string, UnitVisual>;
+  private readonly shipStatusVisuals: Map<string, ShipStatusVisual>;
   private readonly teamColors: Map<string, string>;
   private readonly debugUnits: NormalizedUnit[];
   private readonly lastSeenTraces: Map<string, NormalizedUnit>;
@@ -171,6 +174,16 @@ export class WorldScene {
     tacticalTargetRingMaterial.depthTest = false;
     tacticalTargetRingMaterial.depthWrite = false;
     this.tacticalTargetRing.renderOrder = 45;
+    this.selectedCenterDot = new THREE.Mesh(
+      new THREE.CircleGeometry(1, 18),
+      new THREE.MeshBasicMaterial({
+        color: 0x000000,
+        transparent: true,
+        opacity: 0.95,
+        depthTest: false,
+        depthWrite: false,
+      }),
+    );
     this.navigationMarker = createNavigationMarker();
     this.navigationPointer = createNavigationPointer();
     this.trackedTargetVisuals = new Map();
@@ -210,6 +223,7 @@ export class WorldScene {
     this.scene.add(createGlowField());
     this.root.add(this.selectedRing);
     this.root.add(this.tacticalTargetRing);
+    this.root.add(this.selectedCenterDot);
     this.root.add(this.navigationMarker);
     this.root.add(this.navigationPointer);
     this.root.add(this.navigationSearchPreview);
@@ -224,6 +238,7 @@ export class WorldScene {
     this.tacticalTargetUnitId = '';
     this.trackedUnitColors = {};
     this.unitVisuals = new Map<string, UnitVisual>();
+    this.shipStatusVisuals = new Map<string, ShipStatusVisual>();
     this.teamColors = new Map<string, string>();
     this.debugUnits = createDebugSuns();
     this.lastSeenTraces = new Map<string, NormalizedUnit>();
@@ -245,6 +260,7 @@ export class WorldScene {
     this.lastReportedVisibleUnitIds = [];
     this.lastGravityGridViewSignature = '';
     this.lastGravityGridSourceSignature = '';
+    this.selectedCenterDot.visible = false;
 
     this.renderer.domElement.classList.add('world-canvas');
     this.container.appendChild(this.renderer.domElement);
@@ -588,6 +604,8 @@ export class WorldScene {
       this.unitVisuals.delete(unitId);
     }
 
+    this.syncShipStatusVisuals(dynamicUnits);
+
     if (staticUnitsChanged) {
       this.syncBodyInstances(this.staticBodies, staticUnits);
     }
@@ -622,6 +640,70 @@ export class WorldScene {
     this.updateNavigationLookaheadMarker();
     this.updateScannerCones();
     this.updateTrackedTargets();
+  }
+
+  private syncShipStatusVisuals(units: NormalizedUnit[]) {
+    const liveStatusIds = new Set<string>();
+
+    for (const unit of units) {
+      if (unit.isTrace || !isShipKind(unit.renderKind)) {
+        continue;
+      }
+
+      const relation = this.getShipRelation(unit);
+      if (!relation) {
+        continue;
+      }
+
+      const overlayState = objectValue(this.ownerOverlay[unit.unitId]);
+      const hullState = objectValue(overlayState?.hull);
+      const shieldState = objectValue(overlayState?.shield);
+      const hullMaximum = numberValue(hullState?.maximum, 0);
+      const shieldMaximum = numberValue(shieldState?.maximum, 0);
+      if (hullMaximum <= 0 && shieldMaximum <= 0) {
+        continue;
+      }
+
+      let visual = this.shipStatusVisuals.get(unit.unitId);
+      if (!visual) {
+        visual = createShipStatusVisual();
+        this.shipStatusVisuals.set(unit.unitId, visual);
+        this.root.add(visual.group);
+      }
+
+      updateShipStatusVisual(visual, {
+        x: unit.x,
+        y: -unit.y,
+        radius: unit.renderRadius,
+        hullRatio: hullMaximum > 0 ? THREE.MathUtils.clamp(numberValue(hullState?.current, 0) / hullMaximum, 0, 1) : 0,
+        shieldRatio: shieldMaximum > 0 ? THREE.MathUtils.clamp(numberValue(shieldState?.current, 0) / shieldMaximum, 0, 1) : 0,
+        relation,
+      });
+      liveStatusIds.add(unit.unitId);
+    }
+
+    for (const [unitId, visual] of this.shipStatusVisuals.entries()) {
+      if (liveStatusIds.has(unitId)) {
+        continue;
+      }
+
+      hideShipStatusVisual(visual);
+      this.root.remove(visual.group);
+      disposeShipStatusVisual(visual);
+      this.shipStatusVisuals.delete(unitId);
+    }
+  }
+
+  private getShipRelation(unit: NormalizedUnit): 'friendly' | 'enemy' | null {
+    const selectedTeamName = this.snapshot?.controllables.find(
+      (controllable) => controllable.controllableId === this.selectedControllableId,
+    )?.teamName;
+
+    if (!selectedTeamName || !unit.teamName) {
+      return null;
+    }
+
+    return unit.teamName === selectedTeamName ? 'friendly' : 'enemy';
   }
 
   private updateFocusSelection() {
@@ -797,6 +879,7 @@ export class WorldScene {
       ?? this.renderableUnitsById.get(this.selectedControllableId);
     if (!selectedUnit) {
       this.selectedRing.visible = false;
+      this.selectedCenterDot.visible = false;
       return;
     }
 
@@ -804,6 +887,15 @@ export class WorldScene {
     this.selectedRing.visible = true;
     this.selectedRing.position.set(selectedUnit.x, -selectedUnit.y, 0);
     this.selectedRing.scale.set(selectionRadius / 1.25, selectionRadius / 1.25, 1);
+
+    if (selectedUnit.unitId === this.selectedControllableId) {
+      const dotRadius = Math.max(selectedUnit.renderRadius * 0.16, 0.9) + this.getWorldUnitsPerPixel() * 2;
+      this.selectedCenterDot.visible = true;
+      this.selectedCenterDot.position.set(selectedUnit.x, -selectedUnit.y, 2);
+      this.selectedCenterDot.scale.set(dotRadius, dotRadius, 1);
+    } else {
+      this.selectedCenterDot.visible = false;
+    }
   }
 
   private updateTacticalTargetRing() {
@@ -1314,10 +1406,17 @@ export class WorldScene {
     }
 
     this.unitVisuals.clear();
+    for (const visual of this.shipStatusVisuals.values()) {
+      this.root.remove(visual.group);
+      disposeShipStatusVisual(visual);
+    }
+    this.shipStatusVisuals.clear();
     this.selectedRing.geometry.dispose();
     (this.selectedRing.material as THREE.Material).dispose();
     this.tacticalTargetRing.geometry.dispose();
     (this.tacticalTargetRing.material as THREE.Material).dispose();
+    this.selectedCenterDot.geometry.dispose();
+    (this.selectedCenterDot.material as THREE.Material).dispose();
     for (const child of this.navigationMarker.children) {
       if (child instanceof THREE.Line || child instanceof THREE.LineLoop || child instanceof THREE.LineSegments) {
         child.geometry.dispose();
