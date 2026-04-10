@@ -22,8 +22,6 @@ export interface NavigationOverlayState {
   pathStatus?: string;
   targetX?: number;
   targetY?: number;
-  currentTargetX?: number;
-  currentTargetY?: number;
   vectorX?: number;
   vectorY?: number;
   pointerX?: number;
@@ -32,4 +30,5 @@ export interface NavigationOverlayState {
   searchNodes?: NavigationOverlayPoint[];
   searchEdges?: NavigationOverlaySegment[];
   inflatedObstacles?: NavigationOverlayCircle[];
+  trajectory?: NavigationOverlayPoint[];
 }

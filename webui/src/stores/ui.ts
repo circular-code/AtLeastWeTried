@@ -36,8 +36,9 @@ export const useUiStore = defineStore('ui', {
 
     return ({
     selectedControllableId: '',
+    navigationThrustPercentage: 1,
     viewportJumpTargetId: '',
-    navigationThrustPercentage: 0.25,
+
     scannerMode: 'off' as ScannerMode,
     scannerWidth: 90,
     tacticalMode: 'off' as TacticalMode,

@@ -4,12 +4,14 @@ using Flattiverse.Gateway.Connector;
 using Flattiverse.Gateway.Options;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using static Flattiverse.Gateway.Services.GravitySimulator;
 
 namespace Flattiverse.Gateway.Services.Navigation;
 
 public sealed class PathfindingService : IConnectorEventHandler
 {
     private const double ClearanceMargin = 8d;
+    private const double MaxPathDeviation = 40d;
     private const double MinimumLookahead = 36d;
     private const double MaximumLookahead = 132d;
     private const double MinimumTargetDistance = 18d;
@@ -32,8 +34,6 @@ public sealed class PathfindingService : IConnectorEventHandler
         public NavigationPoint PlannedStart { get; set; }
 
         public CircularPathPlanner.PlanResult? Plan { get; set; }
-
-        public NavigationPoint? CurrentLookahead { get; set; }
 
         public string? Status { get; set; }
 
@@ -104,7 +104,6 @@ public sealed class PathfindingService : IConnectorEventHandler
         state.Goal = new NavigationPoint(targetX, targetY);
         state.ThrustPercentage = thrustPercentage;
         state.Plan = null;
-        state.CurrentLookahead = null;
         state.PlannedClusterId = int.MinValue;
         state.Status = "planning";
         state.ObstacleIdsFromSuccessfulPlan.Clear();
@@ -135,7 +134,6 @@ public sealed class PathfindingService : IConnectorEventHandler
 
         state.HasGoal = false;
         state.Plan = null;
-        state.CurrentLookahead = null;
         state.Status = "idle";
         state.ObstacleIdsFromSuccessfulPlan.Clear();
         state.ObstacleIdsAtLastPlanAttempt.Clear();
@@ -152,7 +150,6 @@ public sealed class PathfindingService : IConnectorEventHandler
             };
         }
 
-        var lookahead = state.CurrentLookahead;
         var plan = state.Plan;
         var overlay = new Dictionary<string, object?>
         {
@@ -161,12 +158,6 @@ public sealed class PathfindingService : IConnectorEventHandler
             { "targetY", state.Goal.Y },
             { "pathStatus", state.Status ?? "planned" },
         };
-
-        if (lookahead is NavigationPoint currentLookahead)
-        {
-            overlay["currentTargetX"] = currentLookahead.X;
-            overlay["currentTargetY"] = currentLookahead.Y;
-        }
 
         if (plan is not null)
         {
@@ -219,7 +210,15 @@ public sealed class PathfindingService : IConnectorEventHandler
         var arrivalThreshold = ComputeArrivalThreshold(ship);
         if (currentPosition.DistanceTo(state.Goal) <= arrivalThreshold)
         {
-            ClearNavigationGoal(ship.Id);
+            // Station-keeping: keep targeting the goal so the aligner holds position against gravity.
+            state.Status = "station-keeping";
+            _maneuveringService.SetNavigationTarget(
+                ship,
+                (float)state.Goal.X,
+                (float)state.Goal.Y,
+                state.ThrustPercentage,
+                resetController: false,
+                remainingPath: null);
             return;
         }
 
@@ -232,7 +231,7 @@ public sealed class PathfindingService : IConnectorEventHandler
             destinationUnitId: null,
             shipPosition: currentPosition);
 
-        var replanDecision = GetReplanDecision(state, obstacles, clusterId);
+        var replanDecision = GetReplanDecision(state, obstacles, clusterId, currentPosition);
         if (replanDecision.Replan)
         {
             if (_enableLogging)
@@ -249,7 +248,6 @@ public sealed class PathfindingService : IConnectorEventHandler
 
         if (state.Plan is null || !state.Plan.Succeeded || state.Plan.PathPoints.Count == 0)
         {
-            state.CurrentLookahead = null;
             _maneuveringService.ClearNavigationTarget(ship.Id);
             return;
         }
@@ -263,18 +261,35 @@ public sealed class PathfindingService : IConnectorEventHandler
 
         if (followResult.GoalReached)
         {
-            ClearNavigationGoal(ship.Id);
+            // Station-keeping: keep targeting the goal so the aligner holds position against gravity.
+            state.Status = "station-keeping";
+            _maneuveringService.SetNavigationTarget(
+                ship,
+                (float)state.Goal.X,
+                (float)state.Goal.Y,
+                state.ThrustPercentage,
+                resetController: false,
+                remainingPath: null);
             return;
         }
 
-        state.CurrentLookahead = followResult.Target;
         state.Status = "following";
+
+        // Build the remaining path from the lookahead target onward so the aligner can anticipate turns
+        var remainingPath = BuildRemainingPath(followResult.Target, followResult.ProgressDistance, state.Plan.PathPoints);
+
         _maneuveringService.SetNavigationTarget(
             ship,
             (float)followResult.Target.X,
             (float)followResult.Target.Y,
             state.ThrustPercentage,
-            resetController: false);
+            resetController: false,
+            remainingPath: remainingPath);
+
+        if (_enableLogging)
+        {
+            LogTrajectory(ship, currentPosition, followResult.Target, state.ThrustPercentage, remainingPath);
+        }
     }
 
     private void Replan(
@@ -287,7 +302,6 @@ public sealed class PathfindingService : IConnectorEventHandler
         state.PlannedClusterId = clusterId;
         state.PlannedStart = currentPosition;
         state.Plan = _planner.Plan(currentPosition, state.Goal, obstacles);
-        state.CurrentLookahead = null;
         state.Status = state.Plan.Succeeded ? "planned" : "blocked";
 
         state.ObstacleIdsAtLastPlanAttempt.Clear();
@@ -346,7 +360,7 @@ public sealed class PathfindingService : IConnectorEventHandler
 
     private readonly record struct ReplanDecision(bool Replan, string Reason);
 
-    private static ReplanDecision GetReplanDecision(PathState state, List<NavigationObstacle> obstacles, int clusterId)
+    private static ReplanDecision GetReplanDecision(PathState state, List<NavigationObstacle> obstacles, int clusterId, NavigationPoint shipPosition)
     {
         if (state.Plan is null)
         {
@@ -360,6 +374,12 @@ public sealed class PathfindingService : IConnectorEventHandler
 
         if (state.Plan.Succeeded && state.Plan.PathPoints.Count >= 2)
         {
+            var deviation = DistanceToPolyline(shipPosition, state.Plan.PathPoints);
+            if (deviation > MaxPathDeviation)
+            {
+                return new ReplanDecision(true, $"off_path deviation={deviation:F1}");
+            }
+
             foreach (var obstacle in obstacles)
             {
                 if (state.ObstacleIdsFromSuccessfulPlan.Contains(obstacle.Id))
@@ -396,7 +416,7 @@ public sealed class PathfindingService : IConnectorEventHandler
 
     private static double ComputeLookaheadDistance(ClassicShipControllable ship)
     {
-        return Math.Clamp(ship.Size * 7d, MinimumLookahead, MaximumLookahead);
+        return Math.Clamp(ship.Movement.Length * 1.9d + ship.Size * 2.0d, MinimumLookahead * 0.4d, MaximumLookahead);
     }
 
     private static double ComputeMinimumTargetDistance(ClassicShipControllable ship)
@@ -407,5 +427,145 @@ public sealed class PathfindingService : IConnectorEventHandler
     private static double ComputeArrivalThreshold(ClassicShipControllable ship)
     {
         return Math.Clamp(ship.Size * 1.8d, MinimumArrivalDistance, MaximumArrivalDistance);
+    }
+
+    private static double DistanceToPolyline(NavigationPoint point, IReadOnlyList<NavigationPoint> polyline)
+    {
+        var minDist = double.PositiveInfinity;
+        for (var i = 0; i < polyline.Count - 1; i++)
+        {
+            var dist = NavigationMath.DistanceToSegment(point, polyline[i], polyline[i + 1], out _);
+            minDist = Math.Min(minDist, dist);
+        }
+        return minDist;
+    }
+
+    /// <summary>
+    /// Extract the portion of the planned path polyline that lies ahead of the given
+    /// <paramref name="progressDistance"/>, starting from the lookahead target point.
+    /// Returns a list of (X, Y) tuples for the aligner to scan for upcoming turns.
+    /// </summary>
+    private static IReadOnlyList<(double X, double Y)> BuildRemainingPath(
+        NavigationPoint lookahead,
+        double progressDistance,
+        IReadOnlyList<NavigationPoint> fullPath)
+    {
+        if (fullPath.Count < 2)
+            return Array.Empty<(double, double)>();
+
+        // Find which segment the progress falls on
+        var cumulative = 0d;
+        var startIndex = 0;
+        for (var i = 0; i < fullPath.Count - 1; i++)
+        {
+            var segLen = fullPath[i].DistanceTo(fullPath[i + 1]);
+            if (cumulative + segLen >= progressDistance)
+            {
+                startIndex = i + 1;
+                break;
+            }
+            cumulative += segLen;
+            startIndex = i + 1;
+        }
+
+        // Build remaining path: lookahead target → remaining vertices
+        var result = new List<(double, double)>();
+        for (var i = startIndex; i < fullPath.Count; i++)
+        {
+            result.Add((fullPath[i].X, fullPath[i].Y));
+        }
+
+        return result;
+    }
+
+    private void LogTrajectory(
+        ClassicShipControllable ship,
+        NavigationPoint currentPosition,
+        NavigationPoint target,
+        float thrustPercentage,
+        IReadOnlyList<(double X, double Y)> remainingPath)
+    {
+        const int trajectoryTicks = 200;
+        const double defaultSpeedLimit = 6.0d;
+
+        var shipX = (double)ship.Position.X;
+        var shipY = (double)ship.Position.Y;
+        var velX = (double)ship.Movement.X;
+        var velY = (double)ship.Movement.Y;
+        var engineMax = (double)ship.Engine.Maximum;
+        var speed = Math.Sqrt(velX * velX + velY * velY);
+
+        // Extract gravity sources from mapping
+        var units = _mappingService.BuildUnitSnapshots();
+        var gravitySources = new List<GravitySource>();
+        foreach (var unit in units)
+        {
+            if (unit.Gravity > 0f)
+                gravitySources.Add(new GravitySource(unit.X, unit.Y, unit.Gravity));
+        }
+
+        // Compute the engine vector (same as ManeuveringService will)
+        var (engineX, engineY) = TrajectoryAligner.ComputeEngineVector(
+            shipX, shipY, velX, velY,
+            target.X, target.Y,
+            gravitySources, engineMax,
+            thrustPercentage, defaultSpeedLimit,
+            remainingPath);
+
+        var engineMag = Math.Sqrt(engineX * engineX + engineY * engineY);
+
+        // Compute gravity at current position
+        var (gx, gy) = ComputeGravityAcceleration(shipX, shipY, gravitySources);
+        var gravMag = Math.Sqrt(gx * gx + gy * gy);
+
+        // Compute distance to path polyline
+        var pathDeviation = 0d;
+        if (remainingPath.Count >= 2)
+        {
+            pathDeviation = DistanceToTuplePath(currentPosition, remainingPath);
+        }
+
+        _logger.LogDebug(
+            "[Trajectory] ship={ShipId} pos=({PosX:F1},{PosY:F1}) vel=({VelX:F2},{VelY:F2}) spd={Speed:F2} " +
+            "target=({TargetX:F1},{TargetY:F1}) distToTarget={DistToTarget:F1} " +
+            "engine=({EngineX:F3},{EngineY:F3}) engineMag={EngineMag:F3}/{EngineMax:F3} " +
+            "gravity=({GravX:F4},{GravY:F4}) gravMag={GravMag:F4} " +
+            "pathDev={PathDev:F1} remainPts={RemainPts}",
+            ship.Id,
+            shipX, shipY,
+            velX, velY, speed,
+            target.X, target.Y,
+            currentPosition.DistanceTo(target),
+            engineX, engineY, engineMag, engineMax,
+            gx, gy, gravMag,
+            pathDeviation,
+            remainingPath.Count);
+
+        // Simulate trajectory and log every 10th tick
+        var trajectory = SimulateTrajectory(
+            shipX, shipY, velX, velY,
+            engineX, engineY,
+            gravitySources, trajectoryTicks, defaultSpeedLimit);
+
+        for (var t = 0; t < trajectory.Count; t += 10)
+        {
+            var pt = trajectory[t];
+            _logger.LogDebug(
+                "[Trajectory] ship={ShipId} tick={Tick:000} pos=({X:F1},{Y:F1})",
+                ship.Id, t, pt.X, pt.Y);
+        }
+    }
+
+    private static double DistanceToTuplePath(NavigationPoint point, IReadOnlyList<(double X, double Y)> path)
+    {
+        var minDist = double.PositiveInfinity;
+        for (var i = 0; i < path.Count - 1; i++)
+        {
+            var a = new NavigationPoint(path[i].X, path[i].Y);
+            var b = new NavigationPoint(path[i + 1].X, path[i + 1].Y);
+            var dist = NavigationMath.DistanceToSegment(point, a, b, out _);
+            minDist = Math.Min(minDist, dist);
+        }
+        return minDist;
     }
 }

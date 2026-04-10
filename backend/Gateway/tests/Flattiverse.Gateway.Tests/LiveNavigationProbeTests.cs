@@ -15,30 +15,40 @@ public sealed class LiveNavigationProbeTests
     private const string DefaultTeamName = "";
     private const string DefaultPersistenceRelativePath = "backend/Gateway/Flattiverse.Gateway.Host/data/world-state.wss-www-flattiverse-com-galaxies-0-api-b.fe66663304e80502.json";
     private const string DefaultPersistenceBinRelativePath = "backend/Gateway/Flattiverse.Gateway.Host/bin/Debug/net8.0/data/world-state.wss-www-flattiverse-com-galaxies-0-api-b.fe66663304e80502.json";
-    private const string ApiKey1 = "e15a4e7276dfed7355e201d1119b23d00486116e66237e191c9683b7e8896f5b";
-    private const string ApiKey2 = "a8f86eb995f29230c55521d95dd182cd6c0325fa864336a42b8d143c391e2940";
 
-    private static readonly NavigationPoint Destination = new(527.5d, -457.2d);
+    private static readonly NavigationPoint Destination = new(-378.9d, -274.8d);
     private static readonly TimeSpan SpawnTimeout = TimeSpan.FromSeconds(25);
     private static readonly TimeSpan NavigationTimeout = TimeSpan.FromMinutes(3);
     private static readonly TimeSpan SampleInterval = TimeSpan.FromMilliseconds(250);
 
+    private static readonly string LogFilePath = Path.Combine(AppContext.BaseDirectory, "live-probe-log.txt");
+
     private readonly ITestOutputHelper _output;
+    private StreamWriter? _fileLog;
 
     public LiveNavigationProbeTests(ITestOutputHelper output)
     {
         _output = output;
     }
 
+    private void Log(string message)
+    {
+        _output.WriteLine(message);
+        _fileLog?.WriteLine(message);
+        _fileLog?.Flush();
+    }
+
     [Fact]
     public async Task Live_server_spawn_and_navigate_logs_planned_and_actual_paths()
     {
+        LoadDotEnv();
+
         var galaxyUrl = Environment.GetEnvironmentVariable("FV_LIVE_GALAXY_URL") ?? DefaultGalaxyUrl;
         var teamName = Environment.GetEnvironmentVariable("FV_LIVE_TEAM") ?? DefaultTeamName;
         var configuredKeys = new[]
         {
-            Environment.GetEnvironmentVariable("FV_LIVE_API_KEY_1") ?? ApiKey1,
-            Environment.GetEnvironmentVariable("FV_LIVE_API_KEY_2") ?? ApiKey2,
+            Environment.GetEnvironmentVariable("FV_LIVE_API_KEY_1"),
+            Environment.GetEnvironmentVariable("FV_LIVE_API_KEY_2"),
         }.Where(key => !string.IsNullOrWhiteSpace(key)).Distinct(StringComparer.Ordinal).ToArray();
 
         if (configuredKeys.Length == 0)
@@ -46,19 +56,21 @@ public sealed class LiveNavigationProbeTests
             throw new InvalidOperationException("No API keys configured for live navigation probe.");
         }
 
-        _output.WriteLine($"[LiveProbe] Connecting to {galaxyUrl} (preferred team: {teamName})");
+        _fileLog = new StreamWriter(LogFilePath, append: false);
+        _fileLog.WriteLine($"[LiveProbe] Run started at {DateTime.UtcNow:O}");
+        Log($"[LiveProbe] Log file: {LogFilePath}");
+        Log($"[LiveProbe] Connecting to {galaxyUrl} (preferred team: {teamName})");
 
         Galaxy galaxy = await ConnectWithFallbacks(galaxyUrl, teamName, configuredKeys);
         try
         {
             var spawnedShip = await SpawnRandomShip(galaxy);
-            _output.WriteLine(
+            Log(
                 $"[LiveProbe] Spawned ship '{spawnedShip.Name}' id={spawnedShip.Id} at ({spawnedShip.Position.X:0.###}, {spawnedShip.Position.Y:0.###}) in cluster {spawnedShip.Cluster.Id}:{spawnedShip.Cluster.Name}");
 
             var start = new NavigationPoint(spawnedShip.Position.X, spawnedShip.Position.Y);
             var planner = new CircularPathPlanner();
             var follower = new PathFollower();
-            var maneuvering = new ManeuveringService();
             var currentClusterId = spawnedShip.Cluster.Id;
             var mappingGalaxyId = $"{galaxyUrl}|{galaxy.Name}";
             var persistencePath = ResolvePersistencePath();
@@ -67,8 +79,9 @@ public sealed class LiveNavigationProbeTests
                 mappingGalaxyId,
                 currentClusterId,
                 galaxy.Player.Team?.Name));
-            _output.WriteLine($"[LiveProbe] MappingService persistence file: {persistencePath}");
-            _output.WriteLine($"[LiveProbe] MappingService scope galaxyId={mappingGalaxyId} clusterId={currentClusterId}");
+            var maneuvering = new ManeuveringService(mapping);
+            Log($"[LiveProbe] MappingService persistence file: {persistencePath}");
+            Log($"[LiveProbe] MappingService scope galaxyId={mappingGalaxyId} clusterId={currentClusterId}");
 
             using var pumpCts = new CancellationTokenSource();
             var pumpTask = Task.Run(async () =>
@@ -90,7 +103,7 @@ public sealed class LiveNavigationProbeTests
 
                     if (@event is ConnectionTerminatedEvent terminated)
                     {
-                        _output.WriteLine($"[LiveProbe] Connection terminated: {terminated.Message}");
+                        Log($"[LiveProbe] Connection terminated: {terminated.Message}");
                         break;
                     }
                 }
@@ -105,6 +118,10 @@ public sealed class LiveNavigationProbeTests
             var crashed = false;
             var startedAt = DateTime.UtcNow;
             var arrivalThreshold = Math.Clamp(spawnedShip.Size * 1.8d, 10d, 34d);
+            const double maxPathDeviation = 40d;
+            var stationKeepingDuration = TimeSpan.FromSeconds(15);
+            DateTime? stationKeepingSince = null;
+            var maxDriftFromGoal = 0d;
 
             while (DateTime.UtcNow - startedAt < NavigationTimeout)
             {
@@ -119,10 +136,49 @@ public sealed class LiveNavigationProbeTests
                 currentClusterId = spawnedShip.Cluster.Id;
 
                 var distanceToGoal = current.DistanceTo(Destination);
-                if (distanceToGoal <= arrivalThreshold)
+                if (distanceToGoal <= arrivalThreshold && !reachedGoal)
                 {
                     reachedGoal = true;
-                    break;
+                    stationKeepingSince = DateTime.UtcNow;
+                    Log($"[LiveProbe] Reached goal at sample #{actualSamples.Count}, distance={distanceToGoal:F2}. Starting station-keeping phase.");
+                }
+
+                if (reachedGoal)
+                {
+                    maxDriftFromGoal = Math.Max(maxDriftFromGoal, distanceToGoal);
+
+                    if (DateTime.UtcNow - stationKeepingSince!.Value >= stationKeepingDuration)
+                    {
+                        Log($"[LiveProbe] Station-keeping complete. maxDrift={maxDriftFromGoal:F2}");
+                        break;
+                    }
+
+                    // During station-keeping, target the destination directly
+                    maneuvering.SetNavigationTarget(
+                        spawnedShip,
+                        (float)Destination.X,
+                        (float)Destination.Y,
+                        thrustPercentage: 1f,
+                        resetController: false,
+                        remainingPath: null);
+
+                    await Task.Delay(SampleInterval);
+                    continue;
+                }
+
+                // Replan when the ship has drifted too far from the planned path
+                if (plannedPath.Count >= 2)
+                {
+                    var deviation = DistanceToPolyline(current, plannedPath);
+                    if (deviation > maxPathDeviation)
+                    {
+                        Log($"[LiveProbe] Off-path replan: deviation={deviation:F1}");
+                        var replanned = BuildPlannedPath(spawnedShip, planner, mapping, current, Destination);
+                        if (replanned.Count >= 2)
+                        {
+                            plannedPath = replanned;
+                        }
+                    }
                 }
 
                 var follow = follower.Follow(
@@ -132,12 +188,75 @@ public sealed class LiveNavigationProbeTests
                     minTargetDistance: Math.Clamp(spawnedShip.Size * 3.2d, 18d, 56d),
                     arrivalThreshold: arrivalThreshold);
 
+                // Build remaining path from lookahead onward for curvature-aware steering
+                var remainingPath = BuildRemainingPathFromProgress(
+                    follow.Target, follow.ProgressDistance, plannedPath);
+
                 maneuvering.SetNavigationTarget(
                     spawnedShip,
                     (float)follow.Target.X,
                     (float)follow.Target.Y,
                     thrustPercentage: 1f,
-                    resetController: false);
+                    resetController: false,
+                    remainingPath: remainingPath);
+
+                // Log trajectory every 10 samples for debugging, including predicted trajectory
+                if (actualSamples.Count % 10 == 0)
+                {
+                    var vel = spawnedShip.Movement;
+                    var speed = Math.Sqrt(vel.X * vel.X + vel.Y * vel.Y);
+                    var shipX = (double)spawnedShip.Position.X;
+                    var shipY = (double)spawnedShip.Position.Y;
+                    var velX = (double)vel.X;
+                    var velY = (double)vel.Y;
+                    var engineMax = (double)spawnedShip.Engine.Maximum;
+
+                    // Extract gravity sources
+                    var units = mapping.BuildUnitSnapshots();
+                    var gravitySources = new List<GravitySimulator.GravitySource>();
+                    foreach (var u in units)
+                    {
+                        if (u.Gravity > 0f)
+                            gravitySources.Add(new GravitySimulator.GravitySource(u.X, u.Y, u.Gravity));
+                    }
+
+                    // Compute engine vector
+                    var (engineX, engineY) = TrajectoryAligner.ComputeEngineVector(
+                        shipX, shipY, velX, velY,
+                        follow.Target.X, follow.Target.Y,
+                        gravitySources, engineMax,
+                        thrustPercentage: 1f, speedLimit: 6.0d,
+                        remainingPath: remainingPath);
+                    var engineMag = Math.Sqrt(engineX * engineX + engineY * engineY);
+
+                    // Compute gravity at current position
+                    var (gx, gy) = GravitySimulator.ComputeGravityAcceleration(shipX, shipY, gravitySources);
+
+                    // Compute path deviation
+                    var pathDev = remainingPath.Count >= 2 ? DistanceToTuplePath(current, remainingPath) : 0d;
+
+                    Log(
+                        $"[Traj] #{actualSamples.Count:000} pos=({current.X:F1},{current.Y:F1}) vel=({velX:F2},{velY:F2}) spd={speed:F2} " +
+                        $"target=({follow.Target.X:F1},{follow.Target.Y:F1}) distToTarget={current.DistanceTo(follow.Target):F1} " +
+                        $"engine=({engineX:F3},{engineY:F3}) mag={engineMag:F3}/{engineMax:F3} " +
+                        $"grav=({gx:F4},{gy:F4}) pathDev={pathDev:F1} remainPts={remainingPath.Count}");
+
+                    // Simulate 200-tick predicted trajectory and log every 20th tick
+                    var predicted = GravitySimulator.SimulateTrajectory(
+                        shipX, shipY, velX, velY,
+                        engineX, engineY,
+                        gravitySources, 200, 6.0d);
+
+                    for (var t = 0; t < predicted.Count; t += 20)
+                    {
+                        var pt = predicted[t];
+                        Log($"[Pred] #{actualSamples.Count:000} t={t:000} pos=({pt.X:F1},{pt.Y:F1})");
+                    }
+
+                    // Log predicted final position
+                    var final20 = predicted[^1];
+                    Log($"[Pred] #{actualSamples.Count:000} t=200 pos=({final20.X:F1},{final20.Y:F1})");
+                }
 
                 await Task.Delay(SampleInterval);
             }
@@ -157,11 +276,14 @@ public sealed class LiveNavigationProbeTests
             LogPath("[LiveProbe] Actual path samples", actualSamples);
             var finalPoint = actualSamples.Count > 0 ? actualSamples[^1] : start;
             var finalDistance = finalPoint.DistanceTo(Destination);
-            _output.WriteLine(
-                $"[LiveProbe] Result: reachedGoal={reachedGoal}, crashed={crashed}, samples={actualSamples.Count}, finalDistance={finalDistance:0.###}");
+            Log(
+                $"[LiveProbe] Result: reachedGoal={reachedGoal}, crashed={crashed}, samples={actualSamples.Count}, finalDistance={finalDistance:0.###}, maxDrift={maxDriftFromGoal:0.###}");
+            _fileLog?.Dispose();
+            _fileLog = null;
 
-            // Probe-style assertion: setup/navigation pipeline must run, but reaching destination is best-effort.
             Assert.NotEmpty(actualSamples);
+            Assert.True(reachedGoal, $"Ship did not reach destination within {NavigationTimeout.TotalMinutes:0.#} min. crashed={crashed}, finalDistance={finalDistance:0.###}");
+            Assert.True(maxDriftFromGoal <= arrivalThreshold * 2d, $"Ship drifted too far during station-keeping: maxDrift={maxDriftFromGoal:0.###}, limit={arrivalThreshold * 2d:0.###}");
         }
         finally
         {
@@ -183,7 +305,7 @@ public sealed class LiveNavigationProbeTests
                 try
                 {
                     var galaxy = await Galaxy.Connect(galaxyUrl, key, team);
-                    _output.WriteLine($"[LiveProbe] Connected using key={MaskKey(key)} team={(team ?? "<auto>")}");
+                    Log($"[LiveProbe] Connected using key={MaskKey(key)} team={(team ?? "<auto>")}");
                     return galaxy;
                 }
                 catch (Exception exception)
@@ -262,10 +384,10 @@ public sealed class LiveNavigationProbeTests
 
     private void LogPath(string label, IReadOnlyList<NavigationPoint> path)
     {
-        _output.WriteLine($"{label}: points={path.Count}");
+        Log($"{label}: points={path.Count}");
         for (var i = 0; i < path.Count; i++)
         {
-            _output.WriteLine($"  [{i:000}] ({path[i].X:0.###}, {path[i].Y:0.###})");
+            Log($"  [{i:000}] ({path[i].X:0.###}, {path[i].Y:0.###})");
         }
     }
 
@@ -277,6 +399,99 @@ public sealed class LiveNavigationProbeTests
         }
 
         return $"{key[..4]}...{key[^4..]}";
+    }
+
+    private static double DistanceToPolyline(NavigationPoint point, IReadOnlyList<NavigationPoint> polyline)
+    {
+        var minDist = double.PositiveInfinity;
+        for (var i = 0; i < polyline.Count - 1; i++)
+        {
+            var dist = NavigationMath.DistanceToSegment(point, polyline[i], polyline[i + 1], out _);
+            minDist = Math.Min(minDist, dist);
+        }
+        return minDist;
+    }
+
+    private static double DistanceToTuplePath(NavigationPoint point, IReadOnlyList<(double X, double Y)> path)
+    {
+        var minDist = double.PositiveInfinity;
+        for (var i = 0; i < path.Count - 1; i++)
+        {
+            var a = new NavigationPoint(path[i].X, path[i].Y);
+            var b = new NavigationPoint(path[i + 1].X, path[i + 1].Y);
+            var dist = NavigationMath.DistanceToSegment(point, a, b, out _);
+            minDist = Math.Min(minDist, dist);
+        }
+        return minDist;
+    }
+
+    private static IReadOnlyList<(double X, double Y)> BuildRemainingPathFromProgress(
+        NavigationPoint lookahead,
+        double progressDistance,
+        IReadOnlyList<NavigationPoint> fullPath)
+    {
+        if (fullPath.Count < 2)
+            return Array.Empty<(double, double)>();
+
+        var cumulative = 0d;
+        var startIndex = 0;
+        for (var i = 0; i < fullPath.Count - 1; i++)
+        {
+            var segLen = fullPath[i].DistanceTo(fullPath[i + 1]);
+            if (cumulative + segLen >= progressDistance)
+            {
+                startIndex = i + 1;
+                break;
+            }
+            cumulative += segLen;
+            startIndex = i + 1;
+        }
+
+        var result = new List<(double, double)>();
+        for (var i = startIndex; i < fullPath.Count; i++)
+        {
+            result.Add((fullPath[i].X, fullPath[i].Y));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Loads a <c>.env</c> file from the nearest ancestor directory that contains one,
+    /// starting from <see cref="AppContext.BaseDirectory"/>.
+    /// Variables that are already set in the process environment are not overwritten.
+    /// </summary>
+    private static void LoadDotEnv()
+    {
+        var current = Path.GetFullPath(AppContext.BaseDirectory);
+        for (var depth = 0; depth < 12; depth++)
+        {
+            var candidate = Path.Combine(current, ".env");
+            if (File.Exists(candidate))
+            {
+                foreach (var line in File.ReadLines(candidate))
+                {
+                    var trimmed = line.Trim();
+                    if (trimmed.Length == 0 || trimmed.StartsWith('#'))
+                        continue;
+
+                    var eq = trimmed.IndexOf('=');
+                    if (eq <= 0)
+                        continue;
+
+                    var key = trimmed[..eq].Trim();
+                    var value = trimmed[(eq + 1)..].Trim();
+                    if (Environment.GetEnvironmentVariable(key) is null)
+                        Environment.SetEnvironmentVariable(key, value);
+                }
+                return;
+            }
+
+            var parent = Directory.GetParent(current);
+            if (parent is null)
+                break;
+            current = parent.FullName;
+        }
     }
 
     private static string ResolvePersistencePath()
