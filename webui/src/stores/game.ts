@@ -915,12 +915,13 @@ function buildClickedUnitEntry(
     badges,
     meters,
     stats,
-    detailGroups: buildDetailGroups(publicUnit),
+    detailGroups: buildDetailGroups(publicUnit, kind),
   };
 }
 
-function buildDetailGroups(unit: UnitSnapshotDto | undefined | null) {
+function buildDetailGroups(unit: UnitSnapshotDto | undefined | null, kindHint?: string) {
   const groups = [] as Array<{ title: string; tone: 'solar' | 'hazard'; stats: OverlayStat[] }>;
+  const normalizedKind = (kindHint ?? unit?.kind ?? '').toLowerCase();
 
   if (hasSunTelemetry(unit)) {
     groups.push(
@@ -928,9 +929,9 @@ function buildDetailGroups(unit: UnitSnapshotDto | undefined | null) {
         title: 'Stellar Output',
         tone: 'solar' as const,
         stats: [
-          { label: 'Photon Flux', value: formatMetric(unit?.sunEnergy ?? 0) },
-          { label: 'Plasma Wind', value: formatMetric(unit?.sunIons ?? 0) },
-          { label: 'Neutrino Flux', value: formatMetric(unit?.sunNeutrinos ?? 0) },
+          { label: 'Photon Flux', value: formatOptionalMetric(unit?.sunEnergy) },
+          { label: 'Plasma Wind', value: formatOptionalMetric(unit?.sunIons) },
+          { label: 'Neutrino Flux', value: formatOptionalMetric(unit?.sunNeutrinos) },
         ],
       },
       {
@@ -944,15 +945,15 @@ function buildDetailGroups(unit: UnitSnapshotDto | undefined | null) {
     );
   }
 
-  if (hasPlanetTelemetry(unit)) {
+  if (hasPlanetTelemetry(unit) || normalizedKind === 'planet') {
     groups.push({
       title: 'Planetary Composition',
       tone: 'solar' as const,
       stats: [
-        { label: 'Metal', value: formatMetric(unit?.planetMetal ?? 0) },
-        { label: 'Carbon', value: formatMetric(unit?.planetCarbon ?? 0) },
-        { label: 'Hydrogen', value: formatMetric(unit?.planetHydrogen ?? 0) },
-        { label: 'Silicon', value: formatMetric(unit?.planetSilicon ?? 0) },
+        { label: 'Metal', value: formatPlanetMetric(unit?.planetMetal) },
+        { label: 'Carbon', value: formatPlanetMetric(unit?.planetCarbon) },
+        { label: 'Hydrogen', value: formatPlanetMetric(unit?.planetHydrogen) },
+        { label: 'Silicon', value: formatPlanetMetric(unit?.planetSilicon) },
       ],
     });
   }
@@ -966,6 +967,14 @@ function hasSunTelemetry(unit: UnitSnapshotDto | null | undefined) {
 
 function hasPlanetTelemetry(unit: UnitSnapshotDto | null | undefined) {
   return !!unit && [unit.planetMetal, unit.planetCarbon, unit.planetHydrogen, unit.planetSilicon].some((value) => typeof value === 'number');
+}
+
+function formatOptionalMetric(value: number | null | undefined) {
+  return typeof value === 'number' ? formatMetric(value) : 'Unknown';
+}
+
+function formatPlanetMetric(value: number | null | undefined) {
+  return formatMetric(typeof value === 'number' ? value : 0);
 }
 
 function deriveScannerMode(scannerState: Record<string, unknown> | undefined): ScannerMode {
