@@ -12,6 +12,10 @@ float maskCircle(vec2 point, float radius) {
   return 1.0 - smoothstep(radius, radius + 0.035, length(point));
 }
 
+float maskCircleSharp(vec2 point, float radius) {
+  return 1.0 - smoothstep(radius, radius + 0.006, length(point));
+}
+
 float maskEllipse(vec2 point, vec2 radii) {
   return 1.0 - smoothstep(1.0, 1.05, length(point / radii));
 }
@@ -110,7 +114,7 @@ void main() {
   // kind 1: sun
   } else if (kind < 1.5) {
     if (tryhardMode > 0.5) {
-      baseMask = maskCircle(point, 0.7);
+      baseMask = maskCircleSharp(point, 0.7);
       glowMask = 0.0;
       color = vec3(1.0, 0.88, 0.2);
       emissiveBoost = 1.0;
