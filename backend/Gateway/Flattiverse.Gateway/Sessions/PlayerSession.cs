@@ -105,6 +105,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     private void OnConnectionLost()
     {
         _connected = false;
+        TeamOverlaySyncService.RemoveSession(_id);
 
         List<BrowserConnection> connections;
         lock (_lock)
@@ -199,19 +200,53 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
     public List<OwnerOverlayDeltaDto> BuildOverlaySnapshot()
     {
+        var ownSnapshots = BuildOwnOverlaySnapshot();
+        var teamScopeKey = BuildTeamOverlayScopeKey();
+        if (string.IsNullOrWhiteSpace(teamScopeKey))
+            return ownSnapshots;
+
+        TeamOverlaySyncService.Publish(teamScopeKey, _id, ownSnapshots);
+
+        var teammateSnapshots = TeamOverlaySyncService.CollectTeammateSnapshots(teamScopeKey, _id);
+        if (teammateSnapshots.Count == 0)
+            return ownSnapshots;
+
+        var mergedByControllableId = new Dictionary<string, OwnerOverlayDeltaDto>(StringComparer.Ordinal);
+        foreach (var snapshot in ownSnapshots)
+            mergedByControllableId[snapshot.ControllableId] = snapshot;
+
+        foreach (var snapshot in teammateSnapshots)
+            mergedByControllableId.TryAdd(snapshot.ControllableId, snapshot);
+
+        return mergedByControllableId.Values.ToList();
+    }
+
+    private List<OwnerOverlayDeltaDto> BuildOwnOverlaySnapshot()
+    {
         var galaxy = Galaxy;
         if (galaxy is null)
             return new List<OwnerOverlayDeltaDto>();
 
         var events = new List<OwnerOverlayDeltaDto>();
-
         foreach (var controllable in galaxy.Controllables)
         {
-            if (controllable is null) continue;
+            if (controllable is null)
+                continue;
+
             events.Add(BuildControllableOverlay(controllable));
         }
 
         return events;
+    }
+
+    private string? BuildTeamOverlayScopeKey()
+    {
+        var galaxy = Galaxy;
+        var teamName = galaxy?.Player?.Team?.Name;
+        if (galaxy is null || string.IsNullOrWhiteSpace(teamName))
+            return null;
+
+        return $"{_galaxyUrl}|{galaxy.Name}|team:{teamName}";
     }
 
     private OwnerOverlayDeltaDto BuildControllableOverlay(Controllable controllable)
@@ -760,7 +795,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
         var clusterId = ResolveCurrentClusterId(galaxy);
         var galaxyId = $"{_galaxyUrl}|{galaxy.Name}";
-        return new MappingService.MappingScopeContext(galaxyId, clusterId, galaxy.Player.Team?.Name);
+        return new MappingService.MappingScopeContext(galaxyId, clusterId, galaxy.Player.Id);
     }
 
     private static int ResolveCurrentClusterId(Galaxy galaxy)
@@ -981,16 +1016,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
     private void BroadcastOwnerOverlay(List<BrowserConnection> connections)
     {
-        var galaxy = Galaxy;
-        if (galaxy is null) return;
-
-        var events = new List<OwnerOverlayDeltaDto>();
-
-        foreach (var controllable in galaxy.Controllables)
-        {
-            if (controllable is null) continue;
-            events.Add(BuildControllableOverlay(controllable));
-        }
+        var events = BuildOverlaySnapshot();
 
         if (events.Count == 0) return;
 
@@ -1021,6 +1047,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
     public void Dispose()
     {
+        TeamOverlaySyncService.RemoveSession(_id);
+
         if (_connectionManager is not null)
         {
             _connectionManager.ConnectionLost -= OnConnectionLost;

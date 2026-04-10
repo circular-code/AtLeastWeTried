@@ -9,7 +9,7 @@ import { createNavigationMarker } from './navigationMarker';
 import { createNavigationPointer } from './navigationPointer';
 import { type TrackedTargetVisual, createTrackedTargetVisual, disposeTrackedTargetVisual } from './trackOverlay';
 import { createNavigationLookaheadMarker } from './navigationLookaheadMarker';
-import { createGrid, createGlowField } from './grid';
+import { type GravitySource, type GravityStrengthGrid, createGrid, createGlowField, createGravityStrengthGrid } from './grid';
 import type { NavigationOverlayPoint, NavigationOverlaySegment, NavigationOverlayState as TypedNavigationOverlayState } from '../types/navigation';
 
 export type WorldSceneSelection = {
@@ -87,6 +87,7 @@ export class WorldScene {
   private readonly scene: THREE.Scene;
   private readonly camera: THREE.OrthographicCamera;
   private readonly grid: THREE.Group;
+  private readonly gravityStrengthGrid: GravityStrengthGrid;
   private readonly root: THREE.Group;
   private staticBodies: BodyMeshResources;
   private dynamicBodies: BodyMeshResources;
@@ -126,6 +127,8 @@ export class WorldScene {
   private isFollowingSelection: boolean;
   private isDisposed: boolean;
   private lastReportedVisibleUnitIds: string[];
+  private lastGravityGridViewSignature: string;
+  private lastGravityGridSourceSignature: string;
 
   constructor(container: HTMLElement, options: WorldSceneOptions = {}) {
     this.container = container;
@@ -150,6 +153,7 @@ export class WorldScene {
     this.camera.lookAt(0, 0, 0);
 
     this.grid = createGrid();
+    this.gravityStrengthGrid = createGravityStrengthGrid();
     this.root = new THREE.Group();
     this.unitBodyMaterial = createUnitBodyMaterial();
     this.staticBodies = createUnitBodyMesh(Math.max(DEBUG_SUN_COUNT, 1), this.unitBodyMaterial);
@@ -187,6 +191,7 @@ export class WorldScene {
     this.navigationSearchPreview.renderOrder = 38;
     this.scannerCones = new Map();
     this.scene.add(this.grid);
+    this.scene.add(this.gravityStrengthGrid.group);
     this.scene.add(this.staticBodies.mesh);
     this.scene.add(this.dynamicBodies.mesh);
     this.scene.add(this.root);
@@ -224,6 +229,8 @@ export class WorldScene {
     this.isFollowingSelection = false;
     this.isDisposed = false;
     this.lastReportedVisibleUnitIds = [];
+    this.lastGravityGridViewSignature = '';
+    this.lastGravityGridSourceSignature = '';
 
     this.renderer.domElement.classList.add('world-canvas');
     this.container.appendChild(this.renderer.domElement);
@@ -274,6 +281,7 @@ export class WorldScene {
     this.disposeVisuals();
     this.disposeTrackedTargetVisuals();
     this.disposeScannerCones();
+    this.gravityStrengthGrid.dispose();
     this.unitBodyMaterial.dispose();
     this.renderer.dispose();
     this.container.innerHTML = '';
@@ -488,6 +496,7 @@ export class WorldScene {
     }
 
     this.updateFocusSelection();
+    this.updateGravityStrengthGrid();
     this.updateTrackedTargets();
     this.reportVisibleUnits();
     this.renderer.render(this.scene, this.camera);
@@ -1161,6 +1170,55 @@ export class WorldScene {
     this.onVisibleUnitsChanged(visibleUnitIds);
   }
 
+  private updateGravityStrengthGrid() {
+    const viewBounds = this.getViewBounds();
+    const viewPrecision = this.gravityStrengthGrid.cellSize / 4;
+    const viewSignature = [
+      roundTo(viewBounds.minX, viewPrecision),
+      roundTo(viewBounds.maxX, viewPrecision),
+      roundTo(viewBounds.minY, viewPrecision),
+      roundTo(viewBounds.maxY, viewPrecision),
+      roundTo(this.camera.zoom, 0.001),
+    ].join('|');
+
+    const gravitySources: GravitySource[] = [];
+    const sourceSignatureParts: string[] = [];
+    for (const unit of this.renderableUnits) {
+      if (unit.isTrace) {
+        continue;
+      }
+
+      const gravity = numberValue(unit.gravity, 0);
+      if (gravity <= 0) {
+        continue;
+      }
+
+      gravitySources.push({
+        x: unit.x,
+        y: unit.y,
+        gravity,
+      });
+      sourceSignatureParts.push(
+        unit.unitId,
+        `${roundTo(unit.x, 0.1)}`,
+        `${roundTo(unit.y, 0.1)}`,
+        `${roundTo(gravity, 0.0001)}`,
+      );
+    }
+
+    const sourceSignature = sourceSignatureParts.join('|');
+    if (
+      viewSignature === this.lastGravityGridViewSignature
+      && sourceSignature === this.lastGravityGridSourceSignature
+    ) {
+      return;
+    }
+
+    this.lastGravityGridViewSignature = viewSignature;
+    this.lastGravityGridSourceSignature = sourceSignature;
+    this.gravityStrengthGrid.update(viewBounds, gravitySources);
+  }
+
   private clientToWorld(clientX: number, clientY: number) {
     const rect = this.container.getBoundingClientRect();
     const ndc = new THREE.Vector3(
@@ -1324,12 +1382,14 @@ export class WorldScene {
       clusterId: unit.clusterId,
       kind: unit.kind,
       isStatic: unit.isStatic,
+      isSolid: unit.isSolid,
       isSeen: unit.isSeen,
       lastSeenTick: unit.lastSeenTick,
       x: unit.x,
       y: unit.y,
       angle: unit.angle,
       radius: unit.radius,
+      gravity: unit.gravity,
       teamName: unit.teamName,
       isTrace,
       renderKind,
@@ -1633,4 +1693,12 @@ function objectValue(value: unknown) {
 
 function stringValue(value: unknown, fallback: string) {
   return typeof value === 'string' && value.length > 0 ? value : fallback;
+}
+
+function roundTo(value: number, precision: number) {
+  if (!Number.isFinite(value) || !Number.isFinite(precision) || precision <= 0) {
+    return value;
+  }
+
+  return Math.round(value / precision) * precision;
 }
