@@ -40,6 +40,7 @@ const activeSubsystems = computed(() => readSubsystemEntries(activeOverlayState.
 const shotFabricator = computed(() => activeSubsystems.value.find((entry) => entry.name === 'Shot Fabricator' && entry.exists) ?? null);
 const shotFabricatorRunning = computed(() => shotFabricator.value ? isShotFabricatorRunning(shotFabricator.value) : false);
 const shotFabricatorMaximumRate = computed(() => shotFabricator.value ? readSubsystemStatMaximumMetric(shotFabricator.value, 'Rate') : null);
+const isFocusSelectionActive = computed(() => ('isFocusSelectionActive' in uiStore ? !!uiStore.isFocusSelectionActive : false));
 const scannerWidth = computed({
   get: () => uiStore.scannerWidth,
   set: (value: number) => uiStore.setScannerWidth(value),
@@ -153,6 +154,18 @@ function toggleShotRegeneration() {
   }
 
   gateway.setSubsystemMode(controllableId, subsystem.id, 'on');
+}
+
+function requestFocusSelectionToggle() {
+  if (typeof uiStore.requestToggleFocusSelection === 'function') {
+    uiStore.requestToggleFocusSelection();
+    return;
+  }
+
+  const currentToken = 'focusSelectionRequestToken' in uiStore && typeof uiStore.focusSelectionRequestToken === 'number'
+    ? uiStore.focusSelectionRequestToken
+    : 0;
+  uiStore.focusSelectionRequestToken = currentToken + 1;
 }
 
 type ShipSubsystemStat = {
@@ -328,6 +341,20 @@ function humanizeSubsystemName(value: string) {
       <button class="dock-btn" type="button" @click="gateway.clearNavigationTarget(activeControllableId)">Clear Nav</button>
       <button v-if="shotFabricator" class="dock-btn" :class="{ active: shotFabricatorRunning }" type="button" @click="toggleShotRegeneration">
         {{ shotFabricatorRunning ? 'Stop Regen' : 'Regen Shots' }}
+      </button>
+    </div>
+
+    <span class="dock-sep" aria-hidden="true"></span>
+
+    <div class="dock-group dock-group--lock">
+      <button
+        class="dock-btn"
+        :class="{ active: isFocusSelectionActive }"
+        :aria-pressed="isFocusSelectionActive"
+        type="button"
+        @click="requestFocusSelectionToggle()"
+      >
+        Lock onto ship
       </button>
     </div>
   </section>

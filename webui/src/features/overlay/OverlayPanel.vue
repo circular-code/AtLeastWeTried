@@ -26,6 +26,21 @@ const statIcons: Record<string, string> = {
   Drive: `<svg viewBox="0 0 16 16" focusable="false"><path d="M6.5 4Q8 2 9.5 4l2 6H4.5z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M5.5 10.5 8 14.5 10.5 10.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 10.5v2" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" opacity="0.55"/></svg>`,
 };
 
+function energyTelemetry(controllableId: string) {
+  const overlayState = ownerOverlay.value[controllableId];
+  const rawSubsystems = overlayState?.subsystems ?? overlayState?.modules;
+  const collection = readSubsystemResourceMetric(rawSubsystems, 'Energy Cell', ['Collected', 'Charge per tick', 'Charge']);
+  const drain = readSubsystemResourceMetric(rawSubsystems, 'Energy Battery', ['Drain', 'Drain per tick']);
+  const delta = collection !== null || drain !== null ? (collection ?? 0) - (drain ?? 0) : null;
+
+  return {
+    collection: formatTelemetryMetric(collection),
+    drain: formatTelemetryMetric(drain),
+    delta: delta === null ? '0' : `${delta >= 0 ? '+' : ''}${formatTelemetryMetric(delta)}`,
+    deltaTone: delta === null ? 'neutral' : delta >= 0 ? 'positive' : 'negative',
+  };
+}
+
 function selectControllable(controllableId: string) {
   uiStore.setSelectedControllable(controllableId);
   uiStore.requestViewportJump(controllableId);
@@ -117,6 +132,40 @@ function readAvailableUpgradeResources(rawSubsystems: unknown[]) {
     ions: readSubsystemResourceValue(rawSubsystems, 'Ion Battery', 'Charge'),
     neutrinos: readSubsystemResourceValue(rawSubsystems, 'Neutrino Battery', 'Charge'),
   };
+}
+
+function readSubsystemResourceMetric(rawSubsystems: unknown, subsystemName: string, statLabels: string[]) {
+  if (!Array.isArray(rawSubsystems)) {
+    return null;
+  }
+
+  const subsystem = rawSubsystems.find((entry) => {
+    const record = readRecord(entry);
+    if (!record) {
+      return false;
+    }
+
+    return humanizeSubsystemName(readText(record.name, readText(record.slot, ''))) === subsystemName;
+  });
+  const subsystemRecord = readRecord(subsystem);
+  if (!subsystemRecord || !Array.isArray(subsystemRecord.stats)) {
+    return null;
+  }
+
+  const stat = subsystemRecord.stats.find((entry) => {
+    const record = readRecord(entry);
+    return record ? statLabels.includes(readText(record.label)) : false;
+  });
+  const statRecord = readRecord(stat);
+  if (!statRecord) {
+    return null;
+  }
+
+  return readLeadingMetric(readText(statRecord.value));
+}
+
+function formatTelemetryMetric(value: number | null) {
+  return value === null ? '0' : value.toFixed(2).replace(/\.?0+$/, '');
 }
 
 function readSubsystemResourceValue(rawSubsystems: unknown[], subsystemName: string, statLabel: string) {
@@ -256,6 +305,21 @@ function humanizeSubsystemName(value: string) {
           </div>
         </dl>
 
+        <div class="owner-overlay-energy">
+          <div class="owner-overlay-energy-stat">
+            <span class="owner-overlay-energy-label">Collect</span>
+            <strong class="is-positive">{{ energyTelemetry(entry.id).collection }}</strong>
+          </div>
+          <div class="owner-overlay-energy-stat">
+            <span class="owner-overlay-energy-label">Drain</span>
+            <strong class="is-negative">{{ energyTelemetry(entry.id).drain }}</strong>
+          </div>
+          <div class="owner-overlay-energy-stat">
+            <span class="owner-overlay-energy-label">Delta</span>
+            <strong :class="`is-${energyTelemetry(entry.id).deltaTone}`">{{ energyTelemetry(entry.id).delta }}</strong>
+          </div>
+        </div>
+
         <div class="actions-compact">
           <button v-if="!entry.alive" class="button-secondary button-compact" type="button" @click.stop="handleLifecycleAction(entry.id, entry.alive)">
             Spawn
@@ -351,5 +415,45 @@ function humanizeSubsystemName(value: string) {
   border-color: rgba(125, 255, 178, 0.9);
   color: #dfffe8;
   background: rgba(52, 138, 92, 0.28);
+}
+
+.owner-overlay-energy {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.35rem;
+}
+
+.owner-overlay-energy-stat {
+  display: grid;
+  gap: 0.08rem;
+  padding: 0.34rem 0.42rem;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.owner-overlay-energy-label {
+  font-size: 0.53rem;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.owner-overlay-energy-stat strong {
+  font-size: 0.72rem;
+  line-height: 1;
+  color: #f4ecda;
+}
+
+.owner-overlay-energy-stat .is-positive {
+  color: #9ff3bc;
+}
+
+.owner-overlay-energy-stat .is-negative {
+  color: #ff9e94;
+}
+
+.owner-overlay-energy-stat .is-neutral {
+  color: #dce8f4;
 }
 </style>

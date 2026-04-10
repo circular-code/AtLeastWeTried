@@ -40,6 +40,8 @@ export const useUiStore = defineStore('ui', {
     selectedControllableId: '',
     navigationThrustPercentage: 1,
     viewportJumpTargetId: '',
+    focusSelectionRequestToken: 0,
+    isFocusSelectionActive: false,
 
     scannerMode: 'off' as ScannerMode,
     scannerWidth: 90,
@@ -99,6 +101,12 @@ export const useUiStore = defineStore('ui', {
     },
     clearViewportJump() {
       this.viewportJumpTargetId = '';
+    },
+    requestToggleFocusSelection() {
+      this.focusSelectionRequestToken += 1;
+    },
+    setFocusSelectionActive(value: boolean) {
+      this.isFocusSelectionActive = value;
     },
     setNavigationThrustPercentage(value: number) {
       if (!Number.isFinite(value)) {
