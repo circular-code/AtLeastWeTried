@@ -955,6 +955,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         if (payload?.TryGetProperty("targetY", out var targetYEl) == true && targetYEl.ValueKind != System.Text.Json.JsonValueKind.Null)
             targetY = targetYEl.GetSingle();
 
+        Dictionary<string, object?>? result = null;
+
         switch (weaponId)
         {
             case "shot":
@@ -967,6 +969,24 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
                     await classic.ShotLauncher.Shoot(request.RelativeMovement, request.Ticks, request.Load, request.Damage);
                     _tacticalService.RegisterSuccessfulFire(controllableId, request.Tick);
+                    result = new Dictionary<string, object?>
+                    {
+                        { "mode", "point" },
+                        { "targetX", targetX.Value },
+                        { "targetY", targetY.Value },
+                        { "predictedMissDistance", request.PredictedMissDistance },
+                        { "ticks", request.Ticks },
+                        {
+                            "relativeMovement", new Dictionary<string, object?>
+                            {
+                                { "x", request.RelativeMovement.X },
+                                { "y", request.RelativeMovement.Y },
+                                { "length", request.RelativeMovement.Length }
+                            }
+                        },
+                        { "load", request.Load },
+                        { "damage", request.Damage }
+                    };
                     break;
                 }
 
@@ -983,7 +1003,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 break;
         }
 
-        return Completed(commandId);
+        return Completed(commandId, result);
     }
 
     private async Task<CommandReplyMessage> HandleSetSubsystemMode(string commandId, System.Text.Json.JsonElement? payload)
@@ -1067,7 +1087,16 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 {
                     var targetId = targetEl.GetString();
                     if (!string.IsNullOrWhiteSpace(targetId))
+                    {
+                        if (tacticalMode == TacticalService.TacticalMode.Target &&
+                            !_tacticalService.IsTargetAllowedForTargetMode(classic, targetId))
+                        {
+                            return Rejected(commandId, "friendly_target_not_allowed",
+                                "Teammates cannot be targeted in tactical target mode.");
+                        }
+
                         _tacticalService.SetTarget(controllableId, targetId);
+                    }
                 }
                 break;
         }
@@ -1140,7 +1169,11 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             return Rejected(commandId, "invalid_target", "Target id is required.");
 
         if (controllable is ClassicShipControllable classic)
+        {
             _tacticalService.AttachControllable(controllableId, classic);
+            if (!_tacticalService.IsTargetAllowedForTargetMode(classic, targetId))
+                return Rejected(commandId, "friendly_target_not_allowed", "Teammates cannot be targeted in tactical target mode.");
+        }
 
         _tacticalService.SetTarget(controllableId, targetId);
 

@@ -9,6 +9,32 @@ namespace Flattiverse.Gateway.Connector;
 /// </summary>
 public sealed class GalaxyConnectionManager : IDisposable
 {
+    private static readonly RuntimeDisclosure RuntimeSelfDisclosure = new(
+        RuntimeDisclosureLevel.Automated,
+        RuntimeDisclosureLevel.Automated,
+        RuntimeDisclosureLevel.Automated,
+        RuntimeDisclosureLevel.Automated,
+        RuntimeDisclosureLevel.AiControlled,
+        RuntimeDisclosureLevel.Manual,
+        RuntimeDisclosureLevel.Unsupported,
+        RuntimeDisclosureLevel.Unsupported,
+        RuntimeDisclosureLevel.Manual,
+        RuntimeDisclosureLevel.Manual);
+
+    private static readonly BuildDisclosure BuildSelfDisclosure = new(
+        BuildDisclosureLevel.AgenticTool,
+        BuildDisclosureLevel.IntegratedLlm,
+        BuildDisclosureLevel.SearchOnly,
+        BuildDisclosureLevel.SearchOnly,
+        BuildDisclosureLevel.AgenticTool,
+        BuildDisclosureLevel.AgenticTool,
+        BuildDisclosureLevel.AgenticTool,
+        BuildDisclosureLevel.AgenticTool,
+        BuildDisclosureLevel.SearchOnly,
+        BuildDisclosureLevel.None,
+        BuildDisclosureLevel.None,
+        BuildDisclosureLevel.None);
+
     private readonly string _galaxyUrl;
     private readonly string _apiKey;
     private readonly string? _teamName;
@@ -48,7 +74,12 @@ public sealed class GalaxyConnectionManager : IDisposable
     /// </summary>
     public async Task ConnectAsync(IReadOnlyList<IConnectorEventHandler> eventHandlers)
     {
-        _galaxy = await Galaxy.Connect(_galaxyUrl, _apiKey, _teamName, _runtimeDisclosure, _buildDisclosure);
+        _galaxy = await Galaxy.Connect(
+            _galaxyUrl,
+            _apiKey,
+            _teamName,
+            _runtimeDisclosure ?? RuntimeSelfDisclosure,
+            _buildDisclosure ?? BuildSelfDisclosure);
         _logger.LogInformation("Connected to Galaxy as {Player}", _galaxy.Player.Name);
 
         _eventLoop = new ConnectorEventLoop(_galaxy, eventHandlers, _logger);
