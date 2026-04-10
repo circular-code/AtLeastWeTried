@@ -100,9 +100,11 @@ export function isShipKind(kind: string): boolean {
   return kind === 'classic-ship' || kind === 'modern-ship' || kind === 'ship';
 }
 
-export function getColorForUnit(unit: NormalizedUnit, teamColors: Map<string, string>): string {
+export function getColorForUnit(unit: NormalizedUnit, teamColors: Map<string, string>, customShipColors?: Record<string, string>): string {
   let baseColor: string;
-  if (unit.teamName && teamColors.has(unit.teamName)) {
+  if (customShipColors && customShipColors[unit.unitId]) {
+    baseColor = customShipColors[unit.unitId]!;
+  } else if (unit.teamName && teamColors.has(unit.teamName)) {
     baseColor = teamColors.get(unit.teamName)!;
   } else {
     switch (unit.renderKind) {

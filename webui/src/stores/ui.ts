@@ -8,6 +8,7 @@ import { formatDebugPayload } from '../lib/formatting';
 const DEBUG_LOG_OPEN_STORAGE_KEY = 'flattiverse.debugLog.open';
 const DEBUG_LOG_INGAME_STORAGE_KEY = 'flattiverse.debugLog.ingame';
 const DEBUG_LOG_SETTINGS_STORAGE_KEY = 'flattiverse.debugLog.settings';
+const CUSTOM_SHIP_COLORS_STORAGE_KEY = 'flattiverse.customShipColors';
 const TRACKED_UNIT_COLOR_PALETTE = [
   '#6ef2ff',
   '#ff8a5b',
@@ -33,6 +34,7 @@ type DebugGatewayMessage = ClientMessage | ServerMessage | SetTacticalModeComman
 export const useUiStore = defineStore('ui', {
   state: () => {
     const storedSettings = readStoredDebugLogSettings();
+    const storedCustomShipColors = readStoredCustomShipColors();
 
     return ({
     selectedControllableId: '',
@@ -47,6 +49,7 @@ export const useUiStore = defineStore('ui', {
     lastSelection: null as WorldSceneSelection | null,
     visibleUnitIds: [] as string[],
     trackedUnitColors: {} as Record<string, string>,
+    customShipColors: storedCustomShipColors,
     isManagerPopupOpen: false,
     isChatPopupOpen: false,
     isActivityHistoryOpen: false,
@@ -174,6 +177,30 @@ export const useUiStore = defineStore('ui', {
         ...this.trackedUnitColors,
         [unitId]: pickTrackedUnitColor(Object.values(this.trackedUnitColors)),
       };
+    },
+    setCustomShipColor(controllableId: string, color: string) {
+      const normalizedControllableId = controllableId.trim();
+      const normalizedColor = normalizeHexColor(color);
+      if (!normalizedControllableId || !normalizedColor) {
+        return;
+      }
+
+      this.customShipColors = {
+        ...this.customShipColors,
+        [normalizedControllableId]: normalizedColor,
+      };
+      persistCustomShipColors(this.customShipColors);
+    },
+    clearCustomShipColor(controllableId: string) {
+      const normalizedControllableId = controllableId.trim();
+      if (!normalizedControllableId || !this.customShipColors[normalizedControllableId]) {
+        return;
+      }
+
+      const nextCustomShipColors = { ...this.customShipColors };
+      delete nextCustomShipColors[normalizedControllableId];
+      this.customShipColors = nextCustomShipColors;
+      persistCustomShipColors(this.customShipColors);
     },
     closeAllPopups() {
       this.isManagerPopupOpen = false;
@@ -309,6 +336,36 @@ function persistDebugLogSettings(settings: StoredDebugLogSettings) {
   }
 }
 
+function readStoredCustomShipColors() {
+  try {
+    const storedValue = globalThis.localStorage?.getItem(CUSTOM_SHIP_COLORS_STORAGE_KEY);
+    if (!storedValue) {
+      return {} as Record<string, string>;
+    }
+
+    const parsed = JSON.parse(storedValue);
+    if (!parsed || typeof parsed !== 'object') {
+      return {} as Record<string, string>;
+    }
+
+    return Object.fromEntries(
+      Object.entries(parsed as Record<string, unknown>)
+        .map(([controllableId, color]) => [controllableId, normalizeHexColor(typeof color === 'string' ? color : '')])
+        .filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+    );
+  } catch {
+    return {} as Record<string, string>;
+  }
+}
+
+function persistCustomShipColors(customShipColors: Record<string, string>) {
+  try {
+    globalThis.localStorage?.setItem(CUSTOM_SHIP_COLORS_STORAGE_KEY, JSON.stringify(customShipColors));
+  } catch {
+    // Ignore browser storage failures.
+  }
+}
+
 function readStoredDebugLogLimit(settings: StoredDebugLogSettings) {
   if (!Number.isFinite(settings.limit)) {
     return 200;
@@ -324,6 +381,11 @@ function pickTrackedUnitColor(usedColors: string[]) {
   }
 
   return TRACKED_UNIT_COLOR_PALETTE[Math.floor(Math.random() * TRACKED_UNIT_COLOR_PALETTE.length)] ?? '#6ef2ff';
+}
+
+function normalizeHexColor(value: string) {
+  const normalized = value.trim();
+  return /^#[0-9a-fA-F]{6}$/.test(normalized) ? normalized.toLowerCase() : undefined;
 }
 
 function buildDebugSearchableText(messageType: string, payload: string) {

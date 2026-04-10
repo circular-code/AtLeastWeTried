@@ -280,7 +280,7 @@ function humanizeSubsystemName(value: string) {
 
     <span class="dock-sep" aria-hidden="true"></span>
 
-    <div class="dock-group-stack">
+    <div class="dock-group-stack dock-group-stack--scanner">
       <div class="dock-group">
         <span class="dock-label">Scanner</span>
         <button class="dock-btn" :class="{ active: scannerMode === '360' }" type="button" @click="setScanner('360')">360°</button>
@@ -288,8 +288,9 @@ function humanizeSubsystemName(value: string) {
         <button class="dock-btn" :class="{ active: scannerMode === 'sweep' }" type="button" @click="setScanner('sweep')">Sweep</button>
         <button class="dock-btn" :class="{ active: scannerMode === 'off' }" type="button" @click="setScanner('off')">Off</button>
       </div>
-      <div class="dock-group">
-        <span class="dock-label">Width</span>
+      <div class="dock-group dock-group--scanner-metrics">
+        <div class="dock-group dock-group--scanner-metric">
+        <span class="dock-label">W</span>
         <input
           :value="scannerWidth"
           class="dock-slider"
@@ -300,9 +301,9 @@ function humanizeSubsystemName(value: string) {
           @input="setScannerWidth(Number(($event.target as HTMLInputElement).value))"
         />
         <span class="dock-value">{{ scannerWidth.toFixed(0) }}&deg;</span>
-      </div>
-      <div class="dock-group">
-        <span class="dock-label">Length</span>
+        </div>
+        <div class="dock-group dock-group--scanner-metric">
+        <span class="dock-label">L</span>
         <input
           :value="scannerLength"
           class="dock-slider"
@@ -313,6 +314,7 @@ function humanizeSubsystemName(value: string) {
           @input="setScannerLength(Number(($event.target as HTMLInputElement).value))"
         />
         <span class="dock-value">{{ scannerLength.toFixed(0) }}</span>
+        </div>
       </div>
     </div>
 

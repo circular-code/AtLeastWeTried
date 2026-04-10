@@ -41,6 +41,7 @@ const tacticalTargetUnitId = computed(() => selectedControllableId.value
   ? (uiStore.tacticalTargetsByControllableId[selectedControllableId.value] ?? '')
   : '');
 const trackedUnitColors = computed(() => uiStore.trackedUnitColors);
+const customShipColors = computed(() => uiStore.customShipColors);
 const activeOverlayEntry = computed(() => gameStore.overlayEntry(selectedControllableId.value));
 const activeOverlayState = computed(() => {
   const controllableId = selectedControllableId.value;
@@ -276,6 +277,7 @@ onMounted(() => {
     tacticalTargetUnitId.value,
   );
   worldScene.setTrackedUnits(trackedUnitColors.value);
+  worldScene.setCustomShipColors(customShipColors.value);
   syncDisplayedEnergyTelemetry();
   energyTelemetryIntervalId = window.setInterval(() => {
     syncDisplayedEnergyTelemetry();
@@ -293,6 +295,14 @@ watch(
   trackedUnitColors,
   (nextTrackedUnitColors) => {
     worldScene?.setTrackedUnits(nextTrackedUnitColors);
+  },
+  { deep: true },
+);
+
+watch(
+  customShipColors,
+  (nextCustomShipColors) => {
+    worldScene?.setCustomShipColors(nextCustomShipColors);
   },
   { deep: true },
 );

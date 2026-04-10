@@ -124,6 +124,7 @@ export class WorldScene {
   private selectedNavigationTarget: WorldSceneNavigationTarget;
   private tacticalTargetUnitId: string;
   private trackedUnitColors: Record<string, string>;
+  private customShipColors: Record<string, string>;
   private readonly scannerCones: Map<string, ScannerConeVisual>;
   private animationFrame: number | null;
   private dragStartClient: { x: number; y: number } | null;
@@ -250,6 +251,7 @@ export class WorldScene {
     this.selectedNavigationTarget = null;
     this.tacticalTargetUnitId = '';
     this.trackedUnitColors = {};
+    this.customShipColors = {};
     this.unitVisuals = new Map<string, UnitVisual>();
     this.shipStatusVisuals = new Map<string, ShipStatusVisual>();
     this.teamColors = new Map<string, string>();
@@ -303,6 +305,16 @@ export class WorldScene {
     this.trackedUnitColors = { ...trackedUnitColors };
     this.syncTrackedTargetVisuals();
     this.updateTrackedTargets();
+    this.requestRender();
+  }
+
+  setCustomShipColors(customShipColors: Record<string, string>) {
+    if (sameColorAssignments(this.customShipColors, customShipColors)) {
+      return;
+    }
+
+    this.customShipColors = { ...customShipColors };
+    this.syncUnits();
     this.requestRender();
   }
 
@@ -865,7 +877,7 @@ export class WorldScene {
 
   private updateVisual(visual: UnitVisual, unit: NormalizedUnit, instanceIndex: number) {
     const scale = getRenderScale(unit);
-    const bodyColor = this.tempColor.set(getColorForUnit(unit, this.teamColors));
+    const bodyColor = this.tempColor.set(getColorForUnit(unit, this.teamColors, this.customShipColors));
     visual.instanceIndex = instanceIndex;
 
     if (visual.heading) {
@@ -881,7 +893,7 @@ export class WorldScene {
 
   private updateBodyInstance(bodies: BodyMeshResources, index: number, unit: NormalizedUnit) {
     const scale = getRenderScale(unit);
-    const bodyColor = this.tempColor.set(getColorForUnit(unit, this.teamColors));
+    const bodyColor = this.tempColor.set(getColorForUnit(unit, this.teamColors, this.customShipColors));
 
     this.tempBodyTransform.position.set(unit.x, -unit.y, 0);
     this.tempBodyTransform.rotation.set(0, 0, toSceneRotation(unit.angle));
@@ -1759,6 +1771,20 @@ function sameNavigationTarget(left: WorldSceneNavigationTarget, right: WorldScen
 }
 
 function sameTrackedUnitColors(left: Record<string, string>, right: Record<string, string>) {
+  if (left === right) {
+    return true;
+  }
+
+  const leftEntries = Object.entries(left);
+  const rightEntries = Object.entries(right);
+  if (leftEntries.length !== rightEntries.length) {
+    return false;
+  }
+
+  return leftEntries.every(([unitId, color]) => right[unitId] === color);
+}
+
+function sameColorAssignments(left: Record<string, string>, right: Record<string, string>) {
   if (left === right) {
     return true;
   }

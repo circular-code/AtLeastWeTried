@@ -14,6 +14,7 @@ const openSubsystemsForId = ref('');
 
 const activeControllableId = computed(() => uiStore.selectedControllableId || (gameStore.ownedControllables[0]?.controllableId ?? ''));
 const ownerOverlay = computed(() => gameStore.ownerOverlay as Record<string, Record<string, unknown> | undefined>);
+const customShipColors = computed(() => uiStore.customShipColors);
 const entries = computed(() => gameStore.ownedControllables
   .map((entry) => gameStore.overlayEntry(entry.controllableId))
   .filter((entry): entry is NonNullable<ReturnType<typeof gameStore.overlayEntry>> => !!entry));
@@ -28,6 +29,24 @@ const statIcons: Record<string, string> = {
 function selectControllable(controllableId: string) {
   uiStore.setSelectedControllable(controllableId);
   uiStore.requestViewportJump(controllableId);
+}
+
+function shipColorValue(controllableId: string) {
+  return customShipColors.value[controllableId] ?? '#d7ecff';
+}
+
+function updateShipColor(controllableId: string, event: Event) {
+  const input = event.target as HTMLInputElement | null;
+  const color = input?.value ?? '';
+  if (!color) {
+    return;
+  }
+
+  uiStore.setCustomShipColor(controllableId, color);
+}
+
+function resetShipColor(controllableId: string) {
+  uiStore.clearCustomShipColor(controllableId);
 }
 
 function handleLifecycleAction(controllableId: string, alive: boolean) {
@@ -192,8 +211,29 @@ function humanizeSubsystemName(value: string) {
               <h3>{{ entry.displayName }}</h3>
               <p>{{ entry.kind }}</p>
             </div>
-            <div class="owner-overlay-badges">
+            <div class="owner-overlay-head-actions">
+              <label class="ship-color-control" title="Ship color">
+                <span class="ship-color-control-label">Color</span>
+                <input
+                  class="ship-color-input"
+                  type="color"
+                  :value="shipColorValue(entry.id)"
+                  @click.stop
+                  @input.stop="updateShipColor(entry.id, $event)"
+                />
+              </label>
+              <button
+                v-if="customShipColors[entry.id]"
+                class="button-ghost button-compact ship-color-reset"
+                type="button"
+                title="Reset ship color"
+                @click.stop="resetShipColor(entry.id)"
+              >
+                Reset
+              </button>
+              <div class="owner-overlay-badges">
               <span v-for="badge in entry.badges" :key="badge.label" class="overlay-badge" :class="`is-${badge.tone}`">{{ badge.label }}</span>
+              </div>
             </div>
           </div>
           <div class="owner-overlay-meta">
@@ -247,6 +287,61 @@ function humanizeSubsystemName(value: string) {
 </template>
 
 <style scoped>
+.owner-overlay-head-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.ship-color-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  padding: 0.18rem 0.38rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+}
+
+.ship-color-control-label {
+  color: var(--text-muted);
+  font-size: 0.54rem;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.ship-color-input {
+  width: 1.1rem;
+  height: 1.1rem;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.ship-color-input::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.ship-color-input::-webkit-color-swatch {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+}
+
+.ship-color-input::-moz-color-swatch {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+}
+
+.ship-color-reset {
+  padding-inline: 0.46rem;
+  font-size: 0.58rem;
+}
+
 .owner-overlay-action-button {
   font-size: 0.64rem;
   padding-inline: 0.52rem;

@@ -1385,6 +1385,24 @@ h2 {
   padding: 0;
 }
 
+.dock-group-stack--scanner {
+  gap: 0.24rem;
+}
+
+.dock-group--scanner-metrics {
+  gap: 0.55rem;
+  flex-wrap: nowrap;
+}
+
+.dock-group--scanner-metric {
+  gap: 0.25rem;
+  padding: 0;
+}
+
+.dock-group--scanner-metric .dock-slider {
+  width: 62px;
+}
+
 .dock-label {
   font-size: 0.65rem;
   font-weight: 600;
