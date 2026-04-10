@@ -566,8 +566,8 @@ public sealed class PathfindingFixtureTests
     {
         var planner = new CircularPathPlanner();
         var obstacles = LoadFixtureObstacles();
-        var start = new NavigationPoint(-240d, -450d);
-        var goal = new NavigationPoint(140d, -350d);
+        var start = new NavigationPoint(-338d, 276d);
+        var goal = new NavigationPoint(527.5d, -457.2d);
 
         var result = planner.Plan(start, goal, obstacles);
 
@@ -585,8 +585,8 @@ public sealed class PathfindingFixtureTests
         var planner = new CircularPathPlanner();
         var pathFollower = new PathFollower();
         var obstacles = LoadFixtureObstacles();
-        var start = new NavigationPoint(-240d, -450d);
-        var goal = new NavigationPoint(140d, -350d);
+        var start = new NavigationPoint(-338d, 276d);
+        var goal = new NavigationPoint(527.5d, -457.2d);
         var result = planner.Plan(start, goal, obstacles);
 
         Assert.True(result.Succeeded, result.FailureReason);
@@ -614,7 +614,7 @@ public sealed class PathfindingFixtureTests
 
     private static List<UnitSnapshotDto> LoadFixtureUnits()
     {
-        return LoadFixtureUnits("old-world-state.wss-www-flattiverse-com-galaxies-0-api-b.fe66663304e80502.json");
+        return LoadFixtureUnits("world-state.wss-www-flattiverse-com-galaxies-0-api-b.fe66663304e80502.json");
     }
 
     private static List<UnitSnapshotDto> LoadFixtureUnits(string fixtureFileName)

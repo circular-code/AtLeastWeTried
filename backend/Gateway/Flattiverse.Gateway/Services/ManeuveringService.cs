@@ -1,73 +1,67 @@
-using System.Globalization;
-using Flattiverse.Connector;
 using Flattiverse.Connector.Events;
 using Flattiverse.Connector.GalaxyHierarchy;
 using Flattiverse.Connector.Units;
 using Flattiverse.Gateway.Connector;
+using Flattiverse.Gateway.Protocol.Dtos;
+using static Flattiverse.Gateway.Services.GravitySimulator;
 
 namespace Flattiverse.Gateway.Services;
 
 /// <summary>
-/// Per-player-session service that turns high-level navigation targets into
-/// per-tick engine vectors for each controllable.
+/// Per-player-session service that drives ship engines toward navigation targets,
+/// compensating for gravitational forces. Computes a predicted trajectory overlay
+/// for UI visualization.
 /// </summary>
 public sealed class ManeuveringService : IConnectorEventHandler
 {
-    private const bool EnableManeuverLogging = false;
-    private static readonly object LogFileLock = new();
-    private static readonly string LogFilePath = Path.Combine(AppContext.BaseDirectory, "maneuvering.log");
-    private const float DefaultTickSeconds = 0.1f;
+    private const int TrajectoryTicks = 200;
+    private const int TrajectoryDownsample = 4;
+    private const double DefaultSpeedLimit = 6.0d;
 
-    private sealed class ManeuverState
+    private sealed class ShipState
     {
         public ClassicShipControllable? Ship { get; set; }
         public bool HasTarget { get; set; }
         public float TargetX { get; set; }
         public float TargetY { get; set; }
-        public float ThrustPercentage { get; set; }
-        public float TargetErrorIntegral { get; set; }
-        public Vector LastAppliedVector { get; set; } = new();
+        public float ThrustPercentage { get; set; } = 1f;
+        public double LastEngineX { get; set; }
+        public double LastEngineY { get; set; }
+        public List<TrajectoryPoint>? CachedTrajectory { get; set; }
+        public bool EngineCommandInFlight { get; set; }
+
+        /// <summary>Remaining path polyline from the current lookahead onward. Used by the aligner to anticipate turns.</summary>
+        public IReadOnlyList<(double X, double Y)>? RemainingPath { get; set; }
     }
 
-    private readonly record struct TargetPidConfig(
-        float Kp,
-        float Ki,
-        float Kd,
-        float BrakeDistance,
-        float DriftBrakeDistanceFactor,
-        float DriftDerivativeFactor,
-        float IntegralWindow,
-        float IntegralLimit);
+    private readonly MappingService _mappingService;
+    private readonly Dictionary<int, ShipState> _states = new();
 
-    private readonly Dictionary<int, ManeuverState> _states = new();
-
-    public void Handle(FlattiverseEvent @event)
+    public ManeuveringService(MappingService mappingService)
     {
-        if (@event is not GalaxyTickEvent tickEvent)
-            return;
-
-        var deltaSeconds = ResolveTickSeconds(tickEvent);
-        foreach (var state in _states.Values)
-            ApplyManeuver(state, deltaSeconds);
+        _mappingService = mappingService;
     }
 
     public void TrackShip(ClassicShipControllable ship)
     {
-        if (_states.TryGetValue(ship.Id, out var existingState))
+        if (_states.TryGetValue(ship.Id, out var existing))
         {
-            existingState.Ship = ship;
+            existing.Ship = ship;
             return;
         }
 
-        _states[ship.Id] = new ManeuverState
+        _states[ship.Id] = new ShipState { Ship = ship };
+    }
+
+    public void RebindShip(ClassicShipControllable ship)
+    {
+        if (_states.TryGetValue(ship.Id, out var existing))
         {
-            Ship = ship,
-            HasTarget = false,
-            TargetX = ship.Position.X,
-            TargetY = ship.Position.Y,
-            ThrustPercentage = 1f,
-            LastAppliedVector = new Vector(float.NaN, float.NaN),
-        };
+            existing.Ship = ship;
+            return;
+        }
+
+        _states[ship.Id] = new ShipState { Ship = ship };
     }
 
     public void SetNavigationTarget(
@@ -75,33 +69,24 @@ public sealed class ManeuveringService : IConnectorEventHandler
         float targetX,
         float targetY,
         float thrustPercentage,
-        bool resetController = true)
+        bool resetController,
+        IReadOnlyList<(double X, double Y)>? remainingPath = null)
     {
         TrackShip(ship);
-
         var state = _states[ship.Id];
-        var clampedThrust = Clamp01(thrustPercentage);
-        var targetChanged = !state.HasTarget
-            || Math.Abs(state.TargetX - targetX) > 0.001f
-            || Math.Abs(state.TargetY - targetY) > 0.001f
-            || Math.Abs(state.ThrustPercentage - clampedThrust) > 0.0001f;
-
-        state.Ship = ship;
         state.HasTarget = true;
         state.TargetX = targetX;
         state.TargetY = targetY;
-        state.ThrustPercentage = clampedThrust;
+        state.ThrustPercentage = thrustPercentage;
+        state.RemainingPath = remainingPath;
 
-        if (resetController || targetChanged)
+        if (resetController)
         {
-            state.TargetErrorIntegral = 0f;
-            state.LastAppliedVector = new Vector(float.NaN, float.NaN);
+            state.LastEngineX = 0d;
+            state.LastEngineY = 0d;
         }
-    }
 
-    public void RebindShip(ClassicShipControllable ship)
-    {
-        TrackShip(ship);
+        state.CachedTrajectory = null;
     }
 
     public void ClearNavigationTarget(int controllableId)
@@ -109,292 +94,185 @@ public sealed class ManeuveringService : IConnectorEventHandler
         if (!_states.TryGetValue(controllableId, out var state))
             return;
 
-        state.HasTarget = false;
-        if (state.Ship is not null)
+        if (state.HasTarget && state.Ship is { Active: true, Alive: true } ship && !state.EngineCommandInFlight)
         {
-            state.TargetX = state.Ship.Position.X;
-            state.TargetY = state.Ship.Position.Y;
+            state.EngineCommandInFlight = true;
+            _ = TurnOffEngineAsync(ship, state);
         }
 
-        state.TargetErrorIntegral = 0f;
-        state.LastAppliedVector = new Vector(float.NaN, float.NaN);
+        state.HasTarget = false;
+        state.LastEngineX = 0d;
+        state.LastEngineY = 0d;
+        state.CachedTrajectory = null;
     }
 
-    public Dictionary<string, object> BuildOverlay(int controllableId)
+    public Dictionary<string, object?> BuildOverlay(int controllableId)
     {
         if (!_states.TryGetValue(controllableId, out var state) || state.Ship is null)
         {
-            return new Dictionary<string, object>
-            {
-                { "active", false },
-            };
+            return new Dictionary<string, object?>();
         }
 
+        var result = new Dictionary<string, object?>();
         var ship = state.Ship;
-        var pointerVector = BuildPointerVector(ship, state, DefaultTickSeconds, false);
 
-        if (!state.HasTarget)
+        if (state.HasTarget)
         {
-            return new Dictionary<string, object>
+            // Compute pointer direction from ship to target
+            var dx = state.TargetX - ship.Position.X;
+            var dy = state.TargetY - ship.Position.Y;
+            var dist = Math.Sqrt(dx * dx + dy * dy);
+
+            if (dist > 0d)
             {
-                { "active", false },
-            };
+                var nx = dx / dist;
+                var ny = dy / dist;
+                result["vectorX"] = nx;
+                result["vectorY"] = ny;
+
+                // Pointer end: ship position + direction * min(dist, 80)
+                var pointerLen = Math.Min(dist, 80d);
+                result["pointerX"] = ship.Position.X + nx * pointerLen;
+                result["pointerY"] = ship.Position.Y + ny * pointerLen;
+            }
         }
 
-        return new Dictionary<string, object>
+        if (state.CachedTrajectory is { Count: > 0 } trajectory)
         {
-            { "active", true },
-            { "targetX", state.TargetX },
-            { "targetY", state.TargetY },
-            { "thrustPercentage", state.ThrustPercentage },
-            { "vectorX", pointerVector.X },
-            { "vectorY", pointerVector.Y },
-            { "pointerX", ship.Position.X + pointerVector.X },
-            { "pointerY", ship.Position.Y + pointerVector.Y },
-        };
-    }
+            var downsampled = new List<Dictionary<string, object?>>();
+            for (var i = 0; i < trajectory.Count; i += TrajectoryDownsample)
+            {
+                downsampled.Add(new Dictionary<string, object?>
+                {
+                    { "x", trajectory[i].X },
+                    { "y", trajectory[i].Y },
+                });
+            }
 
-    private static Vector BuildPointerVector(ClassicShipControllable ship, ManeuverState state, float deltaSeconds, bool updateState)
-    {
-        var desiredVector = state.HasTarget
-            ? new Vector(state.TargetX - ship.Position.X, state.TargetY - ship.Position.Y)
-            : new Vector();
-        var desiredVectorLengthLimit = ship.Engine.Maximum * Clamp01(state.ThrustPercentage);
-        var maximumVectorLength = ship.Engine.Maximum;
+            // Always include last point
+            if ((trajectory.Count - 1) % TrajectoryDownsample != 0)
+            {
+                downsampled.Add(new Dictionary<string, object?>
+                {
+                    { "x", trajectory[^1].X },
+                    { "y", trajectory[^1].Y },
+                });
+            }
 
-        if (maximumVectorLength <= 0f)
-            return new Vector();
-
-        var undesiredMovement = BuildUndesiredMovement(ship.Movement, desiredVector);
-        var counterVector = undesiredMovement * -1f;
-        var targetVector = BuildTargetVector(ship, state, desiredVector, desiredVectorLengthLimit, maximumVectorLength, deltaSeconds, updateState);
-
-        var pointerVector = counterVector + targetVector;
-        if (pointerVector.Length > maximumVectorLength)
-            pointerVector.Length = maximumVectorLength;
-
-        return pointerVector;
-    }
-
-    private static Vector BuildUndesiredMovement(Vector movement, Vector desiredVector)
-    {
-        if (IsNearZero(movement))
-            return new Vector();
-
-        if (IsNearZero(desiredVector))
-            return new Vector(movement);
-
-        var desiredDirection = desiredVector / desiredVector.Length;
-        var alignedLength = movement.X * desiredDirection.X + movement.Y * desiredDirection.Y;
-        var alignedMovement = alignedLength > 0f
-            ? desiredDirection * alignedLength
-            : new Vector();
-
-        return movement - alignedMovement;
-    }
-
-    private static Vector BuildTargetVector(
-        ClassicShipControllable ship,
-        ManeuverState state,
-        Vector desiredVector,
-        float desiredVectorLengthLimit,
-        float maximumVectorLength,
-        float deltaSeconds,
-        bool updateState)
-    {
-        if (!state.HasTarget || IsNearZero(desiredVector))
-        {
-            if (updateState)
-                state.TargetErrorIntegral = 0f;
-
-            return new Vector();
+            result["trajectory"] = downsampled.ToArray();
         }
 
-        var desiredDirection = desiredVector / desiredVector.Length;
-        var distanceError = desiredVector.Length;
-        var closingSpeed = ship.Movement.X * desiredDirection.X + ship.Movement.Y * desiredDirection.Y;
-        var undesiredMovement = BuildUndesiredMovement(ship.Movement, desiredVector);
-        var undesiredSpeed = undesiredMovement.Length;
-        var pidConfig = BuildTargetPidConfig(state.ThrustPercentage, desiredVectorLengthLimit, maximumVectorLength);
-        var targetErrorIntegral = state.TargetErrorIntegral;
+        return result;
+    }
 
-        if (distanceError <= pidConfig.IntegralWindow)
+    public void Handle(FlattiverseEvent @event)
+    {
+        if (@event is not GalaxyTickEvent)
+            return;
+
+        var gravitySources = ExtractGravitySources();
+
+        foreach (var state in _states.Values)
         {
-            targetErrorIntegral = Math.Clamp(
-                targetErrorIntegral + distanceError * deltaSeconds,
-                -pidConfig.IntegralLimit,
-                pidConfig.IntegralLimit);
+            UpdateShip(state, gravitySources);
         }
-        else
-        {
-            targetErrorIntegral = 0f;
-        }
-
-        if (updateState)
-            state.TargetErrorIntegral = targetErrorIntegral;
-
-        var proportionalTerm = distanceError * pidConfig.Kp;
-        var integralTerm = targetErrorIntegral * pidConfig.Ki;
-        var effectiveBrakeDistance = pidConfig.BrakeDistance + undesiredSpeed * pidConfig.DriftBrakeDistanceFactor;
-        var brakeBlend = effectiveBrakeDistance <= 0f
-            ? 1f
-            : Clamp01(1f - distanceError / effectiveBrakeDistance);
-        var effectiveClosingSpeed = Math.Max(0f, closingSpeed) + undesiredSpeed * pidConfig.DriftDerivativeFactor;
-        var derivativeTerm = effectiveClosingSpeed * pidConfig.Kd * brakeBlend;
-        var targetMagnitude = proportionalTerm + integralTerm - derivativeTerm;
-        var targetVector = desiredDirection * targetMagnitude;
-
-        if (targetMagnitude >= 0f)
-        {
-            if (targetVector.Length > desiredVectorLengthLimit)
-                targetVector.Length = desiredVectorLengthLimit;
-
-            return targetVector;
-        }
-
-        if (targetVector.Length > maximumVectorLength)
-            targetVector.Length = maximumVectorLength;
-
-        return targetVector;
     }
 
-    private static TargetPidConfig BuildTargetPidConfig(float thrustPercentage, float desiredVectorLengthLimit, float maximumVectorLength)
-    {
-        var thrustFactor = Clamp01(thrustPercentage);
-        var proportionalDistance = Lerp(140f, 28f, thrustFactor);
-        var integralDistanceSeconds = Lerp(260f, 75f, thrustFactor);
-        var derivativeSpeed = Lerp(5.5f, 1.8f, thrustFactor);
-        var brakeDistance = Lerp(14f, 32f, thrustFactor);
-        var driftBrakeDistanceFactor = Lerp(7f, 18f, thrustFactor);
-        var driftDerivativeFactor = Lerp(0.8f, 1.4f, thrustFactor);
-        var integralWindow = Lerp(70f, 24f, thrustFactor);
-        var integralLimit = Lerp(120f, 320f, thrustFactor);
-
-        return new TargetPidConfig(
-            desiredVectorLengthLimit / proportionalDistance,
-            desiredVectorLengthLimit / integralDistanceSeconds,
-            maximumVectorLength / derivativeSpeed,
-            brakeDistance,
-            driftBrakeDistanceFactor,
-            driftDerivativeFactor,
-            integralWindow,
-            integralLimit);
-    }
-
-    private static float ResolveTickSeconds(GalaxyTickEvent tickEvent)
-    {
-        var totalSeconds = tickEvent.TotalMs / 1000f;
-        if (float.IsNaN(totalSeconds) || float.IsInfinity(totalSeconds) || totalSeconds <= 0f)
-            return DefaultTickSeconds;
-
-        return Math.Clamp(totalSeconds, 0.02f, 0.25f);
-    }
-
-    private static float Lerp(float start, float end, float amount)
-    {
-        return start + (end - start) * amount;
-    }
-
-    private static float Clamp01(float value)
-    {
-        if (float.IsNaN(value) || float.IsInfinity(value))
-            return 0f;
-
-        return Math.Clamp(value, 0f, 1f);
-    }
-
-    private static bool IsNearZero(Vector value)
-    {
-        return value.Length <= 0.0001f;
-    }
-
-    private static bool VectorEquals(Vector left, Vector right)
-    {
-        return Math.Abs(left.X - right.X) <= 0.0001f
-            && Math.Abs(left.Y - right.Y) <= 0.0001f;
-    }
-
-    private void ApplyManeuver(ManeuverState state, float deltaSeconds)
+    private void UpdateShip(ShipState state, List<GravitySource> gravitySources)
     {
         var ship = state.Ship;
-        if (ship is null || !ship.Active || !ship.Engine.Exists)
-            return;
-
-        if (!ship.Alive)
+        if (ship is null || !ship.Active || !ship.Alive || !state.HasTarget)
         {
-            state.LastAppliedVector = new Vector(float.NaN, float.NaN);
+            state.CachedTrajectory = null;
             return;
         }
 
-        if (ControllableRebuildState.IsRebuilding(ship))
+        var shipX = (double)ship.Position.X;
+        var shipY = (double)ship.Position.Y;
+        var velX = (double)ship.Movement.X;
+        var velY = (double)ship.Movement.Y;
+        var engineMax = (double)ship.Engine.Maximum;
+        var speedLimit = DefaultSpeedLimit;
+
+        // Compute the optimal engine vector
+        var (engineX, engineY) = TrajectoryAligner.ComputeEngineVector(
+            shipX, shipY,
+            velX, velY,
+            state.TargetX, state.TargetY,
+            gravitySources,
+            engineMax,
+            state.ThrustPercentage,
+            speedLimit,
+            state.RemainingPath);
+
+        state.LastEngineX = engineX;
+        state.LastEngineY = engineY;
+
+        // Command the engine (fire-and-forget)
+        if (!state.EngineCommandInFlight)
         {
-            state.LastAppliedVector = new Vector(float.NaN, float.NaN);
-            return;
+            state.EngineCommandInFlight = true;
+            _ = SetEngineAsync(ship, state, (float)engineX, (float)engineY);
         }
 
-        var desiredVector = state.HasTarget
-            ? new Vector(state.TargetX - ship.Position.X, state.TargetY - ship.Position.Y)
-            : new Vector();
-        var undesiredMovement = BuildUndesiredMovement(ship.Movement, desiredVector);
-        var pointerVector = BuildPointerVector(ship, state, deltaSeconds, true);
-        LogManeuver(ship, state, desiredVector, undesiredMovement, pointerVector);
-        if (VectorEquals(pointerVector, state.LastAppliedVector))
-            return;
-
-        state.LastAppliedVector = new Vector(pointerVector);
-
-        if (IsNearZero(pointerVector))
-        {
-            TryDispatchControlCommand(() => ship.Engine.Off());
-            return;
-        }
-
-        TryDispatchControlCommand(() => ship.Engine.Set(pointerVector));
+        // Simulate 200-tick trajectory for overlay visualization
+        state.CachedTrajectory = GravitySimulator.SimulateTrajectory(
+            shipX, shipY,
+            velX, velY,
+            engineX, engineY,
+            gravitySources,
+            TrajectoryTicks,
+            speedLimit);
     }
 
-    private static void TryDispatchControlCommand(Func<Task> controlCommand)
+    private List<GravitySource> ExtractGravitySources()
+    {
+        var units = _mappingService.BuildUnitSnapshots();
+        var sources = new List<GravitySource>();
+
+        foreach (var unit in units)
+        {
+            if (unit.Gravity > 0f)
+            {
+                sources.Add(new GravitySource(unit.X, unit.Y, unit.Gravity));
+            }
+        }
+
+        return sources;
+    }
+
+    private static async Task SetEngineAsync(ClassicShipControllable ship, ShipState state, float engineX, float engineY)
     {
         try
         {
-            var task = controlCommand();
-            if (task.IsCompleted)
-            {
-                _ = task.Exception;
-                return;
-            }
-
-            _ = task.ContinueWith(
-                static completedTask => _ = completedTask.Exception,
-                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
+            var vec = new Vector(engineX, engineY);
+            if (vec.Length > ship.Engine.Maximum)
+                vec.Length = ship.Engine.Maximum;
+            await ship.Engine.Set(vec).ConfigureAwait(false);
         }
-        catch (GameException)
+        catch
         {
-            // Command prechecks can race with lifecycle transitions and should not break the tick loop.
+            // Swallow: engine commands can fail when the ship dies or the session disconnects.
+        }
+        finally
+        {
+            state.EngineCommandInFlight = false;
         }
     }
 
-    private static void LogManeuver(
-        ClassicShipControllable ship,
-        ManeuverState state,
-        Vector desiredVector,
-        Vector undesiredMovement,
-        Vector appliedThrust)
+    private static async Task TurnOffEngineAsync(ClassicShipControllable ship, ShipState state)
     {
-        if (!EnableManeuverLogging)
-            return;
-
-        var line = string.Create(
-            CultureInfo.InvariantCulture,
-            $"{DateTime.UtcNow:O} ship={ship.Id} name=\"{ship.Name}\" pos={FormatVector(ship.Position)} movement={FormatVector(ship.Movement)} desired={FormatVector(desiredVector)} undesired={FormatVector(undesiredMovement)} applied={FormatVector(appliedThrust)} target=({state.TargetX:0.###},{state.TargetY:0.###}) thrustPct={state.ThrustPercentage:0.###}{Environment.NewLine}");
-
-        lock (LogFileLock)
-            File.AppendAllText(LogFilePath, line);
-    }
-
-    private static string FormatVector(Vector vector)
-    {
-        return string.Create(
-            CultureInfo.InvariantCulture,
-            $"({vector.X:0.###},{vector.Y:0.###})|len={vector.Length:0.###}");
+        try
+        {
+            await ship.Engine.Off().ConfigureAwait(false);
+        }
+        catch
+        {
+            // Swallow: engine commands can fail when the ship dies or the session disconnects.
+        }
+        finally
+        {
+            state.EngineCommandInFlight = false;
+        }
     }
 }

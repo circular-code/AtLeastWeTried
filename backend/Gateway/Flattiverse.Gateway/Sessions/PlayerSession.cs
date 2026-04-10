@@ -35,7 +35,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     private readonly BuildDisclosure? _buildDisclosure;
     private readonly MappingService _mappingService;
     private readonly ScanningService _scanningService;
-    private readonly ManeuveringService _maneuveringService = new();
+    private readonly ManeuveringService _maneuveringService;
     private readonly PathfindingService _pathfindingService;
     private readonly TacticalService _tacticalService = new();
     private readonly object _autoFireSync = new();
@@ -71,6 +71,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         _logger = logger;
         _mappingService = new MappingService(BuildMappingScopeContext);
         _scanningService = new ScanningService(ResolveScanTarget);
+        _maneuveringService = new ManeuveringService(_mappingService);
         _pathfindingService = new PathfindingService(_mappingService, _maneuveringService, pathfindingLogger, pathfindingOptions);
     }
 
