@@ -285,6 +285,7 @@ export class WorldScene {
     this.container.addEventListener('pointerleave', this.handlePointerLeave);
     this.container.addEventListener('contextmenu', this.handleContextMenu);
     this.container.addEventListener('wheel', this.handleWheel, { passive: false });
+    window.addEventListener('keydown', this.handleKeyDown);
 
     this.resizeObserver = new ResizeObserver(() => {
       this.resize();
@@ -332,6 +333,7 @@ export class WorldScene {
     this.container.removeEventListener('pointerleave', this.handlePointerLeave);
     this.container.removeEventListener('contextmenu', this.handleContextMenu);
     this.container.removeEventListener('wheel', this.handleWheel);
+    window.removeEventListener('keydown', this.handleKeyDown);
     this.disposeBodyMeshes();
     this.disposeVisuals();
     this.disposeTrackedTargetVisuals();
@@ -559,6 +561,22 @@ export class WorldScene {
     const worldAfterZoom = this.clientToWorld(event.clientX, event.clientY);
     this.camera.position.x += worldBeforeZoom.x - worldAfterZoom.x;
     this.camera.position.y += worldBeforeZoom.y - worldAfterZoom.y;
+    this.requestRender();
+  };
+
+  private readonly handleKeyDown = (event: KeyboardEvent) => {
+    if (event.code !== 'Space' || event.repeat || isEditableTarget(event.target)) {
+      return;
+    }
+
+    const targetUnit = this.getFocusSelectionUnit();
+    if (!targetUnit) {
+      return;
+    }
+
+    event.preventDefault();
+    this.camera.position.x = targetUnit.x;
+    this.camera.position.y = -targetUnit.y;
     this.requestRender();
   };
 
@@ -1615,6 +1633,17 @@ function normalizeWheelDelta(event: WheelEvent) {
     default:
       return event.deltaY;
   }
+}
+
+function isEditableTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  return target instanceof HTMLInputElement
+    || target instanceof HTMLTextAreaElement
+    || target instanceof HTMLSelectElement
+    || target.isContentEditable;
 }
 
 export function formatTeamAccent(teamName: string | undefined, teams: TeamSnapshotDto[]) {
