@@ -197,6 +197,8 @@ public sealed class TacticalService : IConnectorEventHandler
 
             if (!ship.Active || !ship.Alive)
                 return false;
+            if (ControllableRebuildState.IsRebuilding(ship))
+                return false;
 
             if (!ship.ShotLauncher.Exists || !ship.ShotMagazine.Exists)
                 return false;
@@ -241,6 +243,8 @@ public sealed class TacticalService : IConnectorEventHandler
         var ship = state.Ship;
 
         if (!ship.Active || !ship.Alive)
+            return false;
+        if (ControllableRebuildState.IsRebuilding(ship))
             return false;
 
         if (!ship.ShotLauncher.Exists || !ship.ShotMagazine.Exists)

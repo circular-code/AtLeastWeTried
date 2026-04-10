@@ -1,3 +1,4 @@
+using Flattiverse.Connector;
 using Flattiverse.Connector.Events;
 using Flattiverse.Connector.GalaxyHierarchy;
 using Flattiverse.Gateway.Connector;
@@ -81,18 +82,21 @@ public sealed class ScanningService : IConnectorEventHandler
         state.TargetLength = scanEvent.TargetLength;
         state.TargetAngle = scanEvent.TargetAngle;
 
+        if (state.Ship is { } rebuildingShip && ControllableRebuildState.IsRebuilding(rebuildingShip))
+            return;
+
         if (state is { Mode: ScannerMode.Forward, Active: true, Ship: { } ship })
         {
             var scanner = ship.MainScanner;
             var width = ResolveWidth(scanner, state);
-            _ = scanner.Set(width, scanner.MaximumLength, ship.Angle);
+            TryDispatchScannerCommand(() => scanner.Set(width, scanner.MaximumLength, ship.Angle));
             return;
         }
 
         if (state is { Mode: ScannerMode.Full, Active: true, Ship: { } fullShip })
         {
             var scanner = fullShip.MainScanner;
-            _ = scanner.Set(ResolveWidth(scanner, state), scanner.MaximumLength, state.CurrentAngle + 20f);
+            TryDispatchScannerCommand(() => scanner.Set(ResolveWidth(scanner, state), scanner.MaximumLength, state.CurrentAngle + 20f));
             return;
         }
 
@@ -104,7 +108,7 @@ public sealed class ScanningService : IConnectorEventHandler
                 state.SweepForward = !state.SweepForward;
 
             var nextLimit = sweepShip.Angle + (state.SweepForward ? SweepHalfArc : -SweepHalfArc);
-            _ = scanner.Set(ResolveWidth(scanner, state), scanner.MaximumLength, nextLimit);
+            TryDispatchScannerCommand(() => scanner.Set(ResolveWidth(scanner, state), scanner.MaximumLength, nextLimit));
             return;
         }
 
@@ -112,7 +116,7 @@ public sealed class ScanningService : IConnectorEventHandler
             && TryResolveTargetedAngle(state, targetedShip, out var targetAngle))
         {
             var scanner = targetedShip.MainScanner;
-            _ = scanner.Set(scanner.MinimumWidth, scanner.MaximumLength, targetAngle);
+            TryDispatchScannerCommand(() => scanner.Set(scanner.MinimumWidth, scanner.MaximumLength, targetAngle));
         }
     }
 
@@ -137,6 +141,8 @@ public sealed class ScanningService : IConnectorEventHandler
             state.DesiredWidth = ResolveDefaultWidth(ship.MainScanner, state.Mode);
 
         if (!ship.Alive)
+            return;
+        if (ControllableRebuildState.IsRebuilding(ship))
             return;
 
         var scanner = ship.MainScanner;
@@ -183,6 +189,8 @@ public sealed class ScanningService : IConnectorEventHandler
 
         if (!ship.Alive)
             return;
+        if (ControllableRebuildState.IsRebuilding(ship))
+            return;
 
         var scanner = ship.MainScanner;
         var targetAngle = ship.Angle;
@@ -206,6 +214,27 @@ public sealed class ScanningService : IConnectorEventHandler
         }
 
         await ApplyAsync(ship, state.Mode, state.DesiredWidth);
+    }
+
+    private static void TryDispatchScannerCommand(Func<Task> scannerCommand)
+    {
+        try
+        {
+            var task = scannerCommand();
+            if (task.IsCompleted)
+            {
+                _ = task.Exception;
+                return;
+            }
+
+            _ = task.ContinueWith(
+                static completedTask => _ = completedTask.Exception,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
+        }
+        catch (GameException)
+        {
+            // Command prechecks can race with lifecycle transitions and should not break the event loop.
+        }
     }
 
     public ScannerMode GetMode(int controllableId)

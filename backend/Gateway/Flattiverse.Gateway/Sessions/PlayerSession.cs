@@ -17,6 +17,9 @@ namespace Flattiverse.Gateway.Sessions;
 
 public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 {
+    private const string ControllableRebuildingErrorCode = "controllable_rebuilding";
+    private const string ControllableRebuildingErrorMessage = "[0x3F] This controllable is currently rebuilding and cannot execute commands.";
+
     private readonly string _apiKey;
     private readonly string? _teamName;
     private readonly ILogger _logger;
@@ -274,6 +277,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         changes["teamName"] = Galaxy?.Player?.Team?.Name ?? "";
         changes["alive"] = controllable.Alive;
         changes["active"] = controllable.Active;
+        changes["isRebuilding"] = ControllableRebuildState.IsRebuilding(controllable);
+        changes["rebuildingRemainingTicks"] = ControllableRebuildState.GetRemainingTicks(controllable);
         changes["subsystems"] = BuildSubsystemOverlay(controllable);
 
         if (controllable is ClassicShipControllable classic)
@@ -328,68 +333,70 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
     private static List<Dictionary<string, object?>> BuildSubsystemOverlay(Controllable controllable)
     {
+        var controllableIsRebuilding = ControllableRebuildState.IsRebuilding(controllable);
         var subsystems = new List<Dictionary<string, object?>>
         {
-            BuildSubsystemEntry(controllable.EnergyBattery),
-            BuildSubsystemEntry(controllable.IonBattery),
-            BuildSubsystemEntry(controllable.NeutrinoBattery),
-            BuildSubsystemEntry(controllable.EnergyCell),
-            BuildSubsystemEntry(controllable.IonCell),
-            BuildSubsystemEntry(controllable.NeutrinoCell),
-            BuildSubsystemEntry(controllable.Hull),
-            BuildSubsystemEntry(controllable.Shield),
-            BuildSubsystemEntry(controllable.Armor),
-            BuildSubsystemEntry(controllable.Repair),
-            BuildSubsystemEntry(controllable.Cargo),
-            BuildSubsystemEntry(controllable.ResourceMiner),
-            BuildSubsystemEntry(controllable.StructureOptimizer)
+            BuildSubsystemEntry(controllable.EnergyBattery, controllableIsRebuilding),
+            BuildSubsystemEntry(controllable.IonBattery, controllableIsRebuilding),
+            BuildSubsystemEntry(controllable.NeutrinoBattery, controllableIsRebuilding),
+            BuildSubsystemEntry(controllable.EnergyCell, controllableIsRebuilding),
+            BuildSubsystemEntry(controllable.IonCell, controllableIsRebuilding),
+            BuildSubsystemEntry(controllable.NeutrinoCell, controllableIsRebuilding),
+            BuildSubsystemEntry(controllable.Hull, controllableIsRebuilding),
+            BuildSubsystemEntry(controllable.Shield, controllableIsRebuilding),
+            BuildSubsystemEntry(controllable.Armor, controllableIsRebuilding),
+            BuildSubsystemEntry(controllable.Repair, controllableIsRebuilding),
+            BuildSubsystemEntry(controllable.Cargo, controllableIsRebuilding),
+            BuildSubsystemEntry(controllable.ResourceMiner, controllableIsRebuilding),
+            BuildSubsystemEntry(controllable.StructureOptimizer, controllableIsRebuilding)
         };
 
         switch (controllable)
         {
             case ClassicShipControllable classic:
-                subsystems.Add(BuildSubsystemEntry(classic.NebulaCollector));
-                subsystems.Add(BuildSubsystemEntry(classic.Engine));
-                subsystems.Add(BuildSubsystemEntry(classic.MainScanner));
-                subsystems.Add(BuildSubsystemEntry(classic.SecondaryScanner));
-                subsystems.Add(BuildSubsystemEntry(classic.ShotLauncher));
-                subsystems.Add(BuildSubsystemEntry(classic.ShotMagazine));
-                subsystems.Add(BuildSubsystemEntry(classic.ShotFabricator));
-                subsystems.Add(BuildSubsystemEntry(classic.InterceptorLauncher));
-                subsystems.Add(BuildSubsystemEntry(classic.InterceptorMagazine));
-                subsystems.Add(BuildSubsystemEntry(classic.InterceptorFabricator));
-                subsystems.Add(BuildSubsystemEntry(classic.Railgun));
-                subsystems.Add(BuildSubsystemEntry(classic.JumpDrive));
+                subsystems.Add(BuildSubsystemEntry(classic.NebulaCollector, controllableIsRebuilding));
+                subsystems.Add(BuildSubsystemEntry(classic.Engine, controllableIsRebuilding));
+                subsystems.Add(BuildSubsystemEntry(classic.MainScanner, controllableIsRebuilding));
+                subsystems.Add(BuildSubsystemEntry(classic.SecondaryScanner, controllableIsRebuilding));
+                subsystems.Add(BuildSubsystemEntry(classic.ShotLauncher, controllableIsRebuilding));
+                subsystems.Add(BuildSubsystemEntry(classic.ShotMagazine, controllableIsRebuilding));
+                subsystems.Add(BuildSubsystemEntry(classic.ShotFabricator, controllableIsRebuilding));
+                subsystems.Add(BuildSubsystemEntry(classic.InterceptorLauncher, controllableIsRebuilding));
+                subsystems.Add(BuildSubsystemEntry(classic.InterceptorMagazine, controllableIsRebuilding));
+                subsystems.Add(BuildSubsystemEntry(classic.InterceptorFabricator, controllableIsRebuilding));
+                subsystems.Add(BuildSubsystemEntry(classic.Railgun, controllableIsRebuilding));
+                subsystems.Add(BuildSubsystemEntry(classic.JumpDrive, controllableIsRebuilding));
                 break;
             case ModernShipControllable modern:
-                subsystems.Add(BuildSubsystemEntry(modern.NebulaCollector));
-                AddSubsystemEntries(subsystems, modern.Engines);
-                AddSubsystemEntries(subsystems, modern.Scanners);
-                AddSubsystemEntries(subsystems, modern.ShotLaunchers);
-                AddSubsystemEntries(subsystems, modern.ShotMagazines);
-                AddSubsystemEntries(subsystems, modern.ShotFabricators);
-                subsystems.Add(BuildSubsystemEntry(modern.InterceptorLauncherE));
-                subsystems.Add(BuildSubsystemEntry(modern.InterceptorLauncherW));
-                subsystems.Add(BuildSubsystemEntry(modern.InterceptorMagazineE));
-                subsystems.Add(BuildSubsystemEntry(modern.InterceptorMagazineW));
-                subsystems.Add(BuildSubsystemEntry(modern.InterceptorFabricatorE));
-                subsystems.Add(BuildSubsystemEntry(modern.InterceptorFabricatorW));
-                AddSubsystemEntries(subsystems, modern.Railguns);
-                subsystems.Add(BuildSubsystemEntry(modern.JumpDrive));
+                subsystems.Add(BuildSubsystemEntry(modern.NebulaCollector, controllableIsRebuilding));
+                AddSubsystemEntries(subsystems, modern.Engines, controllableIsRebuilding);
+                AddSubsystemEntries(subsystems, modern.Scanners, controllableIsRebuilding);
+                AddSubsystemEntries(subsystems, modern.ShotLaunchers, controllableIsRebuilding);
+                AddSubsystemEntries(subsystems, modern.ShotMagazines, controllableIsRebuilding);
+                AddSubsystemEntries(subsystems, modern.ShotFabricators, controllableIsRebuilding);
+                subsystems.Add(BuildSubsystemEntry(modern.InterceptorLauncherE, controllableIsRebuilding));
+                subsystems.Add(BuildSubsystemEntry(modern.InterceptorLauncherW, controllableIsRebuilding));
+                subsystems.Add(BuildSubsystemEntry(modern.InterceptorMagazineE, controllableIsRebuilding));
+                subsystems.Add(BuildSubsystemEntry(modern.InterceptorMagazineW, controllableIsRebuilding));
+                subsystems.Add(BuildSubsystemEntry(modern.InterceptorFabricatorE, controllableIsRebuilding));
+                subsystems.Add(BuildSubsystemEntry(modern.InterceptorFabricatorW, controllableIsRebuilding));
+                AddSubsystemEntries(subsystems, modern.Railguns, controllableIsRebuilding);
+                subsystems.Add(BuildSubsystemEntry(modern.JumpDrive, controllableIsRebuilding));
                 break;
         }
 
         return subsystems;
     }
 
-    private static void AddSubsystemEntries<TSubsystem>(List<Dictionary<string, object?>> entries, IReadOnlyList<TSubsystem> subsystems)
+    private static void AddSubsystemEntries<TSubsystem>(List<Dictionary<string, object?>> entries, IReadOnlyList<TSubsystem> subsystems,
+        bool controllableIsRebuilding)
         where TSubsystem : Subsystem
     {
         foreach (var subsystem in subsystems)
-            entries.Add(BuildSubsystemEntry(subsystem));
+            entries.Add(BuildSubsystemEntry(subsystem, controllableIsRebuilding));
     }
 
-    private static Dictionary<string, object?> BuildSubsystemEntry(Subsystem subsystem)
+    private static Dictionary<string, object?> BuildSubsystemEntry(Subsystem subsystem, bool controllableIsRebuilding)
     {
         var nextTier = ResolveNextTier(subsystem);
         var hasNextTier = nextTier > subsystem.Tier;
@@ -404,10 +411,11 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             ["tier"] = subsystem.Tier,
             ["targetTier"] = subsystem.TargetTier,
             ["remainingTicks"] = subsystem.RemainingTierChangeTicks,
+            ["isRebuilding"] = subsystem.RemainingTierChangeTicks > 0,
             ["status"] = subsystem.Status.ToString(),
             ["upgradeTicks"] = subsystem.TargetTierInfo.UpgradeCost.Ticks,
             ["stats"] = BuildSubsystemStats(subsystem),
-            ["canUpgrade"] = subsystem.RemainingTierChangeTicks == 0 && hasNextTier,
+            ["canUpgrade"] = !controllableIsRebuilding && subsystem.RemainingTierChangeTicks == 0 && hasNextTier,
             ["nextTier"] = hasNextTier ? nextTier : subsystem.Tier,
             ["nextTierCosts"] = hasNextTier ? BuildCostsOverlay(subsystem.TierInfos[nextTier].UpgradeCost) : null,
             ["nextTierPreview"] = hasNextTier ? BuildTierPropertyStats(subsystem.TierInfos[nextTier]) : new List<Dictionary<string, object?>>()
@@ -818,6 +826,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         var controllable = FindControllable(controllableId);
         if (controllable is not ClassicShipControllable classic)
             return Rejected(commandId, "invalid_controllable", "Controllable not found or not a classic ship.");
+        if (RejectIfControllableRebuilding(commandId, classic) is { } rebuildingReject)
+            return rebuildingReject;
 
         _pathfindingService.ClearNavigationGoal(classic.Id);
         _maneuveringService.ClearNavigationTarget(classic.Id);
@@ -855,6 +865,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         var controllable = FindControllable(controllableId);
         if (controllable is not ClassicShipControllable classic)
             return Rejected(commandId, "invalid_controllable", "Controllable not found or not a classic ship.");
+        if (RejectIfControllableRebuilding(commandId, classic) is { } rebuildingReject)
+            return rebuildingReject;
 
         var targetX = payload?.GetProperty("targetX").GetSingle() ?? 0f;
         var targetY = payload?.GetProperty("targetY").GetSingle() ?? 0f;
@@ -893,6 +905,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         var controllable = FindControllable(controllableId);
         if (controllable is not ClassicShipControllable classic)
             return Rejected(commandId, "invalid_controllable", "Controllable not found or not a classic ship.");
+        if (RejectIfControllableRebuilding(commandId, classic) is { } rebuildingReject)
+            return rebuildingReject;
 
         ScanningService.ScannerMode? mode = null;
         if (payload?.TryGetProperty("mode", out var modeEl) == true && modeEl.ValueKind != System.Text.Json.JsonValueKind.Null)
@@ -926,6 +940,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         var controllable = FindControllable(controllableId);
         if (controllable is not ClassicShipControllable classic)
             return Rejected(commandId, "invalid_controllable", "Controllable not found or not a classic ship.");
+        if (RejectIfControllableRebuilding(commandId, classic) is { } rebuildingReject)
+            return rebuildingReject;
 
         float? relativeAngle = null;
         if (payload?.TryGetProperty("relativeAngle", out var angleEl) == true && angleEl.ValueKind != System.Text.Json.JsonValueKind.Null)
@@ -978,6 +994,20 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         var controllable = FindControllable(controllableId);
         if (controllable is not ClassicShipControllable classic)
             return Rejected(commandId, "invalid_controllable", "Controllable not found or not a classic ship.");
+
+        bool tacticalOnlyMode =
+            string.Equals(subsystemId, "Tactical", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(subsystemId, "TacticalModule", StringComparison.OrdinalIgnoreCase);
+        if (tacticalOnlyMode)
+        {
+            if (mode != "off" && RejectIfControllableRebuilding(commandId, classic) is { } rebuildingReject)
+                return rebuildingReject;
+        }
+        else
+        {
+            if (RejectIfControllableRebuilding(commandId, classic) is { } rebuildingReject)
+                return rebuildingReject;
+        }
 
         switch (subsystemId)
         {
@@ -1052,6 +1082,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         var controllable = FindControllable(controllableId);
         if (controllable is null)
             return Rejected(commandId, "invalid_controllable", "Controllable not found.");
+        if (RejectIfControllableRebuilding(commandId, controllable) is { } rebuildingReject)
+            return rebuildingReject;
 
         var subsystem = FindSubsystem(controllable, subsystemId);
         if (subsystem is null)
@@ -1078,6 +1110,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
         if (mode != "enemy" && mode != "target" && mode != "off")
             return Task.FromResult(Rejected(commandId, "invalid_mode", "Tactical mode must be one of: enemy, target, off."));
+        if (mode != "off" && RejectIfControllableRebuilding(commandId, controllable) is { } rebuildingReject)
+            return Task.FromResult(rebuildingReject);
 
         var tacticalMode = mode == "enemy"
             ? TacticalService.TacticalMode.Enemy
@@ -1099,6 +1133,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         var controllable = FindControllable(controllableId);
         if (controllable is null)
             return Rejected(commandId, "invalid_controllable", "Controllable not found.");
+        if (RejectIfControllableRebuilding(commandId, controllable) is { } rebuildingReject)
+            return rebuildingReject;
 
         if (string.IsNullOrWhiteSpace(targetId))
             return Rejected(commandId, "invalid_target", "Target id is required.");
@@ -1449,7 +1485,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                         if (c is ClassicShipControllable respawnedShip && c.Id == continued.ControllableInfo.Id)
                         {
                             _tacticalService.AttachControllable($"p{continued.Player.Id}-c{continued.ControllableInfo.Id}", respawnedShip);
-                            _ = _scanningService.ReapplyModeAsync(respawnedShip);
+                            ObserveBackgroundTask(_scanningService.ReapplyModeAsync(respawnedShip));
                             _maneuveringService.RebindShip(respawnedShip);
                             break;
                         }
@@ -1511,6 +1547,12 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     {
         try
         {
+            if (ControllableRebuildState.IsRebuilding(request.Ship))
+            {
+                _logger.LogDebug("Auto-fire skipped for rebuilding controllable {ControllableId}", request.ControllableId);
+                return;
+            }
+
             await request.Ship.ShotLauncher.Shoot(request.RelativeMovement, request.Ticks, request.Load, request.Damage)
                 .ConfigureAwait(false);
             _tacticalService.RegisterSuccessfulFire(request.ControllableId, request.Tick);
@@ -1572,6 +1614,27 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             Status = "rejected",
             Error = new ErrorInfoDto { Code = code, Message = message, Recoverable = true }
         };
+    }
+
+    private static CommandReplyMessage? RejectIfControllableRebuilding(string commandId, Controllable controllable)
+    {
+        if (!ControllableRebuildState.IsRebuilding(controllable))
+            return null;
+
+        return Rejected(commandId, ControllableRebuildingErrorCode, ControllableRebuildingErrorMessage);
+    }
+
+    private static void ObserveBackgroundTask(Task task)
+    {
+        if (task.IsCompleted)
+        {
+            _ = task.Exception;
+            return;
+        }
+
+        _ = task.ContinueWith(
+            static completedTask => _ = completedTask.Exception,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
     }
 
     public void Dispose()
