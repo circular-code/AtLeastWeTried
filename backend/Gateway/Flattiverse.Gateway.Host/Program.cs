@@ -10,6 +10,7 @@ using Flattiverse.Gateway.Sessions;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.Configure<PathfindingOptions>(builder.Configuration.GetSection(PathfindingOptions.SectionPath));
+builder.Services.Configure<GatewayConnectionOptions>(builder.Configuration.GetSection(GatewayConnectionOptions.SectionPath));
 var configuredWorldStatePath = builder.Configuration["Gateway:WorldStateFilePath"];
 if (!string.IsNullOrWhiteSpace(configuredWorldStatePath) && !Path.IsPathRooted(configuredWorldStatePath))
 {
@@ -19,11 +20,15 @@ MappingService.ConfigurePersistence(configuredWorldStatePath);
 
 builder.Services.AddSingleton(sp =>
 {
-    var config = sp.GetRequiredService<IConfiguration>();
-    var galaxyUrl = config["Gateway:FlattiverseGalaxyUrl"] ?? "wss://www.flattiverse.com/api/universes/0/";
+    var connectionOptions = sp.GetRequiredService<IOptions<GatewayConnectionOptions>>().Value;
     var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
     var pathfindingOptions = sp.GetRequiredService<IOptions<PathfindingOptions>>();
-    return new PlayerSessionPool(galaxyUrl, loggerFactory, pathfindingOptions);
+    return new PlayerSessionPool(
+        connectionOptions.FlattiverseGalaxyUrl,
+        connectionOptions.CreateRuntimeDisclosure(),
+        connectionOptions.CreateBuildDisclosure(),
+        loggerFactory,
+        pathfindingOptions);
 });
 
 builder.Services.AddHostedService<TickService>();

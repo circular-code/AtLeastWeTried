@@ -12,6 +12,8 @@ public sealed class GalaxyConnectionManager : IDisposable
     private readonly string _galaxyUrl;
     private readonly string _apiKey;
     private readonly string? _teamName;
+    private readonly RuntimeDisclosure? _runtimeDisclosure;
+    private readonly BuildDisclosure? _buildDisclosure;
     private readonly ILogger _logger;
 
     private Galaxy? _galaxy;
@@ -25,11 +27,19 @@ public sealed class GalaxyConnectionManager : IDisposable
     /// </summary>
     public event Action? ConnectionLost;
 
-    public GalaxyConnectionManager(string galaxyUrl, string apiKey, string? teamName, ILogger logger)
+    public GalaxyConnectionManager(
+        string galaxyUrl,
+        string apiKey,
+        string? teamName,
+        RuntimeDisclosure? runtimeDisclosure,
+        BuildDisclosure? buildDisclosure,
+        ILogger logger)
     {
         _galaxyUrl = galaxyUrl;
         _apiKey = apiKey;
         _teamName = teamName;
+        _runtimeDisclosure = runtimeDisclosure;
+        _buildDisclosure = buildDisclosure;
         _logger = logger;
     }
 
@@ -38,7 +48,7 @@ public sealed class GalaxyConnectionManager : IDisposable
     /// </summary>
     public async Task ConnectAsync(IReadOnlyList<IConnectorEventHandler> eventHandlers)
     {
-        _galaxy = await Galaxy.Connect(_galaxyUrl, _apiKey, _teamName);
+        _galaxy = await Galaxy.Connect(_galaxyUrl, _apiKey, _teamName, _runtimeDisclosure, _buildDisclosure);
         _logger.LogInformation("Connected to Galaxy as {Player}", _galaxy.Player.Name);
 
         _eventLoop = new ConnectorEventLoop(_galaxy, eventHandlers, _logger);

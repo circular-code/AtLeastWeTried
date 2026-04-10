@@ -28,6 +28,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     private string _displayName = "";
     private bool _connected;
     private string _galaxyUrl;
+    private readonly RuntimeDisclosure? _runtimeDisclosure;
+    private readonly BuildDisclosure? _buildDisclosure;
     private readonly MappingService _mappingService;
     private readonly ScanningService _scanningService;
     private readonly ManeuveringService _maneuveringService = new();
@@ -51,6 +53,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         string apiKey,
         string? teamName,
         string galaxyUrl,
+        RuntimeDisclosure? runtimeDisclosure,
+        BuildDisclosure? buildDisclosure,
         ILogger logger,
         ILogger<PathfindingService> pathfindingLogger,
         IOptions<PathfindingOptions> pathfindingOptions)
@@ -59,6 +63,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         _apiKey = apiKey;
         _teamName = teamName;
         _galaxyUrl = galaxyUrl;
+        _runtimeDisclosure = runtimeDisclosure;
+        _buildDisclosure = buildDisclosure;
         _logger = logger;
         _mappingService = new MappingService(BuildMappingScopeContext);
         _scanningService = new ScanningService(ResolveScanTarget);
@@ -84,7 +90,13 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 _connectionManager.Dispose();
             }
 
-            _connectionManager = new GalaxyConnectionManager(_galaxyUrl, _apiKey, _teamName, _logger);
+            _connectionManager = new GalaxyConnectionManager(
+                _galaxyUrl,
+                _apiKey,
+                _teamName,
+                _runtimeDisclosure,
+                _buildDisclosure,
+                _logger);
             _connectionManager.ConnectionLost += OnConnectionLost;
 
             var handlers = new List<IConnectorEventHandler> { _mappingService, _scanningService, _pathfindingService, _tacticalService, _maneuveringService, this };

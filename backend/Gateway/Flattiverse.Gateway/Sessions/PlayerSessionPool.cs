@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Flattiverse.Connector.GalaxyHierarchy;
 using Flattiverse.Gateway.Options;
 using Flattiverse.Gateway.Services.Navigation;
 using Microsoft.Extensions.Logging;
@@ -12,11 +13,20 @@ public sealed class PlayerSessionPool : IDisposable
     private readonly SemaphoreSlim _createLock = new(1, 1);
     private readonly ILoggerFactory _loggerFactory;
     private readonly string _galaxyUrl;
+    private readonly RuntimeDisclosure? _runtimeDisclosure;
+    private readonly BuildDisclosure? _buildDisclosure;
     private readonly IOptions<PathfindingOptions> _pathfindingOptions;
 
-    public PlayerSessionPool(string galaxyUrl, ILoggerFactory loggerFactory, IOptions<PathfindingOptions> pathfindingOptions)
+    public PlayerSessionPool(
+        string galaxyUrl,
+        RuntimeDisclosure? runtimeDisclosure,
+        BuildDisclosure? buildDisclosure,
+        ILoggerFactory loggerFactory,
+        IOptions<PathfindingOptions> pathfindingOptions)
     {
         _galaxyUrl = galaxyUrl;
+        _runtimeDisclosure = runtimeDisclosure;
+        _buildDisclosure = buildDisclosure;
         _loggerFactory = loggerFactory;
         _pathfindingOptions = pathfindingOptions;
     }
@@ -42,7 +52,16 @@ public sealed class PlayerSessionPool : IDisposable
             var id = $"ps-{Guid.NewGuid():N}";
             var logger = _loggerFactory.CreateLogger<PlayerSession>();
             var pathfindingLogger = _loggerFactory.CreateLogger<PathfindingService>();
-            var session = new PlayerSession(id, apiKey, teamName, _galaxyUrl, logger, pathfindingLogger, _pathfindingOptions);
+            var session = new PlayerSession(
+                id,
+                apiKey,
+                teamName,
+                _galaxyUrl,
+                _runtimeDisclosure,
+                _buildDisclosure,
+                logger,
+                pathfindingLogger,
+                _pathfindingOptions);
             await session.ConnectAsync();
 
             _sessions[apiKey] = session;
