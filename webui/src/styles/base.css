@@ -1279,6 +1279,18 @@ h2 {
   padding-inline: 0.35rem;
 }
 
+.status-bar-toggle {
+  gap: 0.38rem;
+  padding-inline: 0.55rem;
+  cursor: pointer;
+}
+
+.status-bar-toggle input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .status-bar-item-history .status-bar-button {
   max-width: 100%;
 }

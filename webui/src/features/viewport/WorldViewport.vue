@@ -42,6 +42,7 @@ const tacticalTargetUnitId = computed(() => selectedControllableId.value
   : '');
 const trackedUnitColors = computed(() => uiStore.trackedUnitColors);
 const customShipColors = computed(() => uiStore.customShipColors);
+const isTryhardMode = computed(() => uiStore.isTryhardMode);
 const activeOverlayEntry = computed(() => gameStore.overlayEntry(selectedControllableId.value));
 const activeOverlayState = computed(() => {
   const controllableId = selectedControllableId.value;
@@ -278,6 +279,7 @@ onMounted(() => {
   );
   worldScene.setTrackedUnits(trackedUnitColors.value);
   worldScene.setCustomShipColors(customShipColors.value);
+  worldScene.setTryhardMode(isTryhardMode.value);
   syncDisplayedEnergyTelemetry();
   energyTelemetryIntervalId = window.setInterval(() => {
     syncDisplayedEnergyTelemetry();
@@ -305,6 +307,13 @@ watch(
     worldScene?.setCustomShipColors(nextCustomShipColors);
   },
   { deep: true },
+);
+
+watch(
+  isTryhardMode,
+  (nextTryhardMode) => {
+    worldScene?.setTryhardMode(nextTryhardMode);
+  },
 );
 
 let previousOwnedVitalTotals = new Map<string, number>();

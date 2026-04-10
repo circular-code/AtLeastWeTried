@@ -1,4 +1,5 @@
 uniform float time;
+uniform float tryhardMode;
 
 varying vec2 vLocalUv;
 varying float vKind;
@@ -108,27 +109,34 @@ void main() {
     glowMask = maskDiamond(point, vec2(1.0, 1.0)) * (0.08 + prismPulse * 0.08);
   // kind 1: sun
   } else if (kind < 1.5) {
-    float distance = length(point);
-    float angle = atan(point.y, point.x);
-    float turbulence =
-      sin(angle * 6.0 + distance * 11.0 - time * 2.8) * 0.5 +
-      sin(angle * 11.0 - distance * 17.0 + time * 4.1) * 0.3 +
-      cos(point.x * 12.0 - point.y * 9.0 + time * 3.2) * 0.2;
-    float flare = 0.5 + 0.5 * turbulence;
-    float coreMask = maskCircle(point, 0.44);
-    float plasmaMask = maskCircle(point, 0.62 + (flare - 0.5) * 0.1);
-    float coronaMask = 1.0 - smoothstep(0.68 + (flare - 0.5) * 0.18, 1.02, distance);
-    float emberBand = smoothstep(0.52, 0.95, flare) * (1.0 - smoothstep(0.2, 0.72, distance));
+    if (tryhardMode > 0.5) {
+      baseMask = maskCircle(point, 0.7);
+      glowMask = 0.0;
+      color = vec3(1.0, 0.88, 0.2);
+      emissiveBoost = 1.0;
+    } else {
+      float distance = length(point);
+      float angle = atan(point.y, point.x);
+      float turbulence =
+        sin(angle * 6.0 + distance * 11.0 - time * 2.8) * 0.5 +
+        sin(angle * 11.0 - distance * 17.0 + time * 4.1) * 0.3 +
+        cos(point.x * 12.0 - point.y * 9.0 + time * 3.2) * 0.2;
+      float flare = 0.5 + 0.5 * turbulence;
+      float coreMask = maskCircle(point, 0.44);
+      float plasmaMask = maskCircle(point, 0.62 + (flare - 0.5) * 0.1);
+      float coronaMask = 1.0 - smoothstep(0.68 + (flare - 0.5) * 0.18, 1.02, distance);
+      float emberBand = smoothstep(0.52, 0.95, flare) * (1.0 - smoothstep(0.2, 0.72, distance));
 
-    baseMask = max(plasmaMask, coreMask);
-    glowMask = coronaMask * 0.58 + emberBand * 0.28;
+      baseMask = max(plasmaMask, coreMask);
+      glowMask = coronaMask * 0.58 + emberBand * 0.28;
 
-    vec3 emberColor = vec3(1.0, 0.32, 0.06);
-    vec3 flameColor = vec3(1.0, 0.62, 0.14);
-    vec3 coreColor = vec3(1.0, 0.95, 0.74);
-    color = mix(emberColor, flameColor, smoothstep(0.18, 0.72, 1.0 - distance));
-    color = mix(color, coreColor, coreMask * 0.92 + emberBand * 0.24);
-    emissiveBoost = 1.16 + flare * 0.24;
+      vec3 emberColor = vec3(1.0, 0.32, 0.06);
+      vec3 flameColor = vec3(1.0, 0.62, 0.14);
+      vec3 coreColor = vec3(1.0, 0.95, 0.74);
+      color = mix(emberColor, flameColor, smoothstep(0.18, 0.72, 1.0 - distance));
+      color = mix(color, coreColor, coreMask * 0.92 + emberBand * 0.24);
+      emissiveBoost = 1.16 + flare * 0.24;
+    }
   // kinds 2-4: planet, moon, meteoroid
   } else if (kind < 4.5) {
     float distance = length(point);

@@ -6,6 +6,7 @@ import { DEBUG_SUN_COUNT, DEBUG_SUN_BOUNDS_X, DEBUG_SUN_BOUNDS_Y } from './const
 export type UnitShaderMaterial = THREE.ShaderMaterial & {
   uniforms: {
     time: THREE.IUniform<number>;
+    tryhardMode: THREE.IUniform<number>;
   };
 };
 
@@ -26,6 +27,7 @@ export function createUnitBodyMaterial(): UnitShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms: {
       time: { value: 0 },
+      tryhardMode: { value: 0 },
     },
     vertexShader: UNIT_BODY_VERTEX_SHADER,
     fragmentShader: UNIT_BODY_FRAGMENT_SHADER,

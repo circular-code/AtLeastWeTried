@@ -9,6 +9,7 @@ const DEBUG_LOG_OPEN_STORAGE_KEY = 'flattiverse.debugLog.open';
 const DEBUG_LOG_INGAME_STORAGE_KEY = 'flattiverse.debugLog.ingame';
 const DEBUG_LOG_SETTINGS_STORAGE_KEY = 'flattiverse.debugLog.settings';
 const CUSTOM_SHIP_COLORS_STORAGE_KEY = 'flattiverse.customShipColors';
+const TRYHARD_MODE_STORAGE_KEY = 'flattiverse.tryhardMode';
 const TRACKED_UNIT_COLOR_PALETTE = [
   '#6ef2ff',
   '#ff8a5b',
@@ -35,6 +36,7 @@ export const useUiStore = defineStore('ui', {
   state: () => {
     const storedSettings = readStoredDebugLogSettings();
     const storedCustomShipColors = readStoredCustomShipColors();
+    const storedTryhardMode = readBoolean(TRYHARD_MODE_STORAGE_KEY);
 
     return ({
     selectedControllableId: '',
@@ -50,6 +52,7 @@ export const useUiStore = defineStore('ui', {
     visibleUnitIds: [] as string[],
     trackedUnitColors: {} as Record<string, string>,
     customShipColors: storedCustomShipColors,
+    isTryhardMode: storedTryhardMode,
     isManagerPopupOpen: false,
     isChatPopupOpen: false,
     isActivityHistoryOpen: false,
@@ -201,6 +204,10 @@ export const useUiStore = defineStore('ui', {
       delete nextCustomShipColors[normalizedControllableId];
       this.customShipColors = nextCustomShipColors;
       persistCustomShipColors(this.customShipColors);
+    },
+    setTryhardMode(value: boolean) {
+      this.isTryhardMode = value;
+      persistBoolean(TRYHARD_MODE_STORAGE_KEY, value);
     },
     closeAllPopups() {
       this.isManagerPopupOpen = false;

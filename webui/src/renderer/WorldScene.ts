@@ -125,6 +125,7 @@ export class WorldScene {
   private tacticalTargetUnitId: string;
   private trackedUnitColors: Record<string, string>;
   private customShipColors: Record<string, string>;
+  private isTryhardMode: boolean;
   private readonly scannerCones: Map<string, ScannerConeVisual>;
   private animationFrame: number | null;
   private dragStartClient: { x: number; y: number } | null;
@@ -252,6 +253,7 @@ export class WorldScene {
     this.tacticalTargetUnitId = '';
     this.trackedUnitColors = {};
     this.customShipColors = {};
+    this.isTryhardMode = false;
     this.unitVisuals = new Map<string, UnitVisual>();
     this.shipStatusVisuals = new Map<string, ShipStatusVisual>();
     this.teamColors = new Map<string, string>();
@@ -315,6 +317,17 @@ export class WorldScene {
 
     this.customShipColors = { ...customShipColors };
     this.syncUnits();
+    this.requestRender();
+  }
+
+  setTryhardMode(isTryhardMode: boolean) {
+    if (this.isTryhardMode === isTryhardMode) {
+      return;
+    }
+
+    this.isTryhardMode = isTryhardMode;
+    this.unitBodyMaterial.uniforms.tryhardMode.value = isTryhardMode ? 1 : 0;
+    this.unitBodyMaterial.needsUpdate = true;
     this.requestRender();
   }
 

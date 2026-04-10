@@ -469,6 +469,11 @@ function onPlayerSessionChange(event: Event): void {
   gateway.selectPlayerSession(playerSessionId);
 }
 
+function onTryhardModeChange(event: Event): void {
+  const target = event.target as HTMLInputElement | null;
+  uiStore.setTryhardMode(target?.checked ?? false);
+}
+
 function formatPlayerSessionOptionLabel(player: PlayerSessionSummaryDto): string {
   return player.teamName ? `${player.displayName} · ${player.teamName}` : player.displayName;
 }
@@ -839,6 +844,15 @@ function formatPlayerSessionOptionLabel(player: PlayerSessionSummaryDto): string
     </div>
 
     <div class="status-bar-group status-bar-group-right">
+      <label class="status-bar-item status-bar-toggle" title="Simplify sun rendering">
+        <input
+          type="checkbox"
+          :checked="uiStore.isTryhardMode"
+          @change="onTryhardModeChange"
+        />
+        <span class="status-bar-text">Tryhard</span>
+      </label>
+
       <div class="status-bar-item status-bar-item-chat-preview" :title="latestChatEntry ? `${latestChatEntry.senderDisplayName}: ${latestChatEntry.message}` : 'No messages yet'">
         <span class="status-bar-icon" aria-hidden="true">
           <svg viewBox="0 0 16 16" focusable="false">
