@@ -265,8 +265,11 @@ export const useGameStore = defineStore('game', {
         return;
       }
 
-      this.galaxy = applyWorldDeltaToSnapshot(this.galaxy, message);
+      const previousGalaxy = this.galaxy;
+      const nextGalaxy = applyWorldDeltaToSnapshot(previousGalaxy, message);
+      this.galaxy = nextGalaxy;
       rebuildIndexes(this);
+      this.recordTeamScoreActivities(previousGalaxy, nextGalaxy);
     },
     applyOwnerDelta(message: OwnerOverlayDeltaMessage) {
       const currentOverlay = this.overlayBySessionId.get(message.playerSessionId) ?? new Map();
@@ -351,6 +354,25 @@ export const useGameStore = defineStore('game', {
         },
         ...this.activityEntries,
       ].slice(0, activityHistoryLimit);
+    },
+    recordTeamScoreActivities(previousGalaxy: GalaxySnapshotDto, nextGalaxy: GalaxySnapshotDto) {
+      const previousScores = new Map(previousGalaxy.teams.map((team) => [team.id, team.score]));
+
+      for (const team of nextGalaxy.teams) {
+        const previousScore = previousScores.get(team.id);
+        if (previousScore === undefined || team.score <= previousScore) {
+          continue;
+        }
+
+        const pointsScored = team.score - previousScore;
+        this.recordActivity({
+          id: `team-score-${team.id}-${team.score}`,
+          tone: 'success',
+          summary: `${team.name} scored ${pointsScored === 1 ? 'a point' : `${pointsScored} points`}`,
+          detail: `Score ${previousScore} -> ${team.score}`,
+          meta: 'team score',
+        });
+      }
     },
     clearNavigationOverlay(controllableId: string) {
       const nextOverlayBySessionId = new Map(this.overlayBySessionId);
