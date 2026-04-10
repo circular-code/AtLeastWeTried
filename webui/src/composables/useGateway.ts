@@ -16,6 +16,7 @@ import {
   buildSetSubsystemModeCommand,
   buildSetTacticalModeCommand,
   buildUpgradeSubsystemCommand,
+  buildSetTacticalTargetCommand,
 } from '../transport/commands';
 import { createGatewayClient } from '../transport/gateway';
 import { loadSavedConnections, removeSavedConnection, upsertSavedConnection } from '../lib/savedConnections';
@@ -321,6 +322,27 @@ function createGatewayApi() {
     client.send(envelope.message);
   }
 
+  function fireWeaponAt(controllableId: string, worldX: number, worldY: number) {
+    if (!controllableId) {
+      gameStore.recordActivity({
+        tone: 'warn',
+        summary: 'No active ship selected',
+        detail: 'Select one of your controllables before firing.',
+        meta: 'free fire',
+      });
+      return;
+    }
+
+    const targetX = worldX;
+    const targetY = -worldY;
+    const envelope = buildFireWeaponCommand(controllableId, 'shot', undefined, undefined, targetX, targetY);
+    gameStore.trackCommand(envelope.commandId, {
+      label: 'Free fire (ballistic)',
+      subject: `${gameStore.getControllableLabel(controllableId)} -> ${truncateText(`${targetX.toFixed(1)}, ${targetY.toFixed(1)}`, 42)}`,
+    });
+    client.send(envelope.message);
+  }
+
   function setScannerMode(controllableId: string, mode: ScannerMode) {
     if (!controllableId) {
       return;
@@ -378,6 +400,22 @@ function createGatewayApi() {
     gameStore.trackCommand(envelope.commandId, {
       label: `Tactical ${mode}`,
       subject: gameStore.getControllableLabel(controllableId),
+    });
+
+    client.send(envelope.message);
+  }
+
+  function setTacticalTarget(controllableId: string, targetId: string) {
+    if (!controllableId || !targetId || controllableId === targetId) {
+      return;
+    }
+
+    uiStore.setTacticalTarget(controllableId, targetId);
+
+    const envelope = buildSetTacticalTargetCommand(controllableId, targetId);
+    gameStore.trackCommand(envelope.commandId, {
+      label: 'Set target and fire burst',
+      subject: `${gameStore.getControllableLabel(controllableId)} -> ${truncateText(targetId, 40)}`,
     });
 
     client.send(envelope.message);
@@ -451,10 +489,12 @@ function createGatewayApi() {
     removeShip,
     setEngine,
     fireWeapon,
+    fireWeaponAt,
     setScannerMode,
     initiateTargetedScan,
     setScannerWidth,
     setTacticalMode,
+    setTacticalTarget,
     setNavigationTarget,
     clearNavigationTarget,
     upgradeSubsystem,

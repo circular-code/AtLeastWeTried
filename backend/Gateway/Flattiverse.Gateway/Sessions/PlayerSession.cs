@@ -35,6 +35,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     private readonly TacticalService _tacticalService = new();
     private readonly object _autoFireSync = new();
     private readonly HashSet<string> _autoFireInFlight = new();
+    private uint _latestGalaxyTick;
 
     public string Id => _id;
     public string DisplayName => _displayName;
@@ -883,10 +884,29 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         if (payload?.TryGetProperty("relativeAngle", out var angleEl) == true && angleEl.ValueKind != System.Text.Json.JsonValueKind.Null)
             relativeAngle = angleEl.GetSingle();
 
+        float? targetX = null;
+        if (payload?.TryGetProperty("targetX", out var targetXEl) == true && targetXEl.ValueKind != System.Text.Json.JsonValueKind.Null)
+            targetX = targetXEl.GetSingle();
+
+        float? targetY = null;
+        if (payload?.TryGetProperty("targetY", out var targetYEl) == true && targetYEl.ValueKind != System.Text.Json.JsonValueKind.Null)
+            targetY = targetYEl.GetSingle();
+
         switch (weaponId)
         {
             case "shot":
             case "ShotLauncher":
+            case "main_weapon":
+                if (targetX.HasValue && targetY.HasValue)
+                {
+                    if (!_tacticalService.TryBuildPointShotRequest(controllableId, classic, targetX.Value, targetY.Value, _latestGalaxyTick, out var request))
+                        return Rejected(commandId, "no_ballistic_solution", "No valid ballistic trajectory for the selected target point.");
+
+                    await classic.ShotLauncher.Shoot(request.RelativeMovement, request.Ticks, request.Load, request.Damage);
+                    _tacticalService.RegisterSuccessfulFire(controllableId, request.Tick);
+                    break;
+                }
+
                 var angle = relativeAngle ?? 0f;
                 var movement = Vector.FromAngleLength(classic.Angle + angle, 2f);
                 await classic.ShotLauncher.Shoot(movement, 80, 12f, 8f);
@@ -1025,22 +1045,64 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return Task.FromResult(Completed(commandId));
     }
 
-    private Task<CommandReplyMessage> HandleSetTacticalTarget(string commandId, System.Text.Json.JsonElement? payload)
+    private async Task<CommandReplyMessage> HandleSetTacticalTarget(string commandId, System.Text.Json.JsonElement? payload)
     {
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
         var targetId = payload?.GetProperty("targetId").GetString() ?? "";
         var controllable = FindControllable(controllableId);
         if (controllable is null)
-            return Task.FromResult(Rejected(commandId, "invalid_controllable", "Controllable not found."));
+            return Rejected(commandId, "invalid_controllable", "Controllable not found.");
 
         if (string.IsNullOrWhiteSpace(targetId))
-            return Task.FromResult(Rejected(commandId, "invalid_target", "Target id is required."));
+            return Rejected(commandId, "invalid_target", "Target id is required.");
 
         if (controllable is ClassicShipControllable classic)
             _tacticalService.AttachControllable(controllableId, classic);
 
         _tacticalService.SetTarget(controllableId, targetId);
-        return Task.FromResult(Completed(commandId));
+
+        if (controllable is not ClassicShipControllable ship)
+            return Completed(commandId);
+
+        if (!_tacticalService.TryBuildTargetBurstRequest(controllableId, _latestGalaxyTick, out var burstRequest))
+        {
+            return Completed(commandId, new Dictionary<string, object?>
+            {
+                { "action", "set_tactical_target" },
+                { "targetId", targetId },
+                { "calculationSucceeded", false },
+                { "firedShots", 0 }
+            });
+        }
+
+        int shotsPlanned = Math.Max(0, (int)MathF.Floor(ship.ShotMagazine.CurrentShots));
+        int firedShots = 0;
+
+        for (int shotIndex = 0; shotIndex < shotsPlanned; shotIndex++)
+        {
+            try
+            {
+                await ship.ShotLauncher.Shoot(burstRequest.RelativeMovement, burstRequest.Ticks, burstRequest.Load, burstRequest.Damage);
+                firedShots++;
+            }
+            catch (GameException ex)
+            {
+                _logger.LogDebug(ex, "Burst fire interrupted for controllable {ControllableId}", controllableId);
+                break;
+            }
+        }
+
+        if (firedShots > 0)
+            _tacticalService.RegisterSuccessfulFire(controllableId, burstRequest.Tick);
+
+        return Completed(commandId, new Dictionary<string, object?>
+        {
+            { "action", "set_tactical_target" },
+            { "targetId", targetId },
+            { "calculationSucceeded", true },
+            { "shotsPlanned", shotsPlanned },
+            { "firedShots", firedShots }
+        });
     }
 
     private Task<CommandReplyMessage> HandleClearTacticalTarget(string commandId, System.Text.Json.JsonElement? payload)
@@ -1261,8 +1323,9 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     /// </summary>
     public void Handle(FlattiverseEvent @event)
     {
-        if (@event is GalaxyTickEvent)
+        if (@event is GalaxyTickEvent tickEvent)
         {
+            _latestGalaxyTick = tickEvent.Tick;
             DispatchPendingAutoFireRequests();
             return;
         }
@@ -1458,9 +1521,9 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             conn.EnqueueMessage(msg);
     }
 
-    private static CommandReplyMessage Completed(string commandId)
+    private static CommandReplyMessage Completed(string commandId, Dictionary<string, object?>? result = null)
     {
-        return new CommandReplyMessage { CommandId = commandId, Status = "completed" };
+        return new CommandReplyMessage { CommandId = commandId, Status = "completed", Result = result };
     }
 
     private static CommandReplyMessage Rejected(string commandId, string code, string message)

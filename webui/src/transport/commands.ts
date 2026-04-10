@@ -217,7 +217,14 @@ export function buildClearNavigationTargetCommand(controllableId: string): Comma
   };
 }
 
-export function buildFireWeaponCommand(controllableId: string, weaponId: string, relativeAngle?: number, targetId?: string): CommandEnvelope<FireWeaponCommandMessage> {
+export function buildFireWeaponCommand(
+  controllableId: string,
+  weaponId: string,
+  relativeAngle?: number,
+  targetId?: string,
+  targetX?: number,
+  targetY?: number,
+): CommandEnvelope<FireWeaponCommandMessage> {
   const commandId = createCommandId();
   return {
     commandId,
@@ -229,6 +236,8 @@ export function buildFireWeaponCommand(controllableId: string, weaponId: string,
         weaponId,
         relativeAngle,
         targetId,
+        targetX,
+        targetY,
       },
     },
   };

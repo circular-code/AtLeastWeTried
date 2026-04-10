@@ -41,6 +41,7 @@ export const useUiStore = defineStore('ui', {
     scannerMode: 'off' as ScannerMode,
     scannerWidth: 90,
     tacticalMode: 'off' as TacticalMode,
+    tacticalTargetsByControllableId: {} as Record<string, string>,
     lastSelection: null as WorldSceneSelection | null,
     visibleUnitIds: [] as string[],
     trackedUnitColors: {} as Record<string, string>,
@@ -115,6 +116,31 @@ export const useUiStore = defineStore('ui', {
     },
     setTacticalMode(mode: TacticalMode) {
       this.tacticalMode = mode;
+    },
+    setTacticalTarget(controllableId: string, targetId: string) {
+      const normalizedControllableId = controllableId.trim();
+      const normalizedTargetId = targetId.trim();
+      if (!normalizedControllableId || !normalizedTargetId) {
+        return;
+      }
+
+      this.tacticalTargetsByControllableId = {
+        ...this.tacticalTargetsByControllableId,
+        [normalizedControllableId]: normalizedTargetId,
+      };
+    },
+    clearTacticalTarget(controllableId: string) {
+      const normalizedControllableId = controllableId.trim();
+      if (!normalizedControllableId || !this.tacticalTargetsByControllableId[normalizedControllableId]) {
+        return;
+      }
+
+      const nextTacticalTargets = { ...this.tacticalTargetsByControllableId };
+      delete nextTacticalTargets[normalizedControllableId];
+      this.tacticalTargetsByControllableId = nextTacticalTargets;
+    },
+    clearTacticalTargets() {
+      this.tacticalTargetsByControllableId = {};
     },
     setLastSelection(selection: WorldSceneSelection | null) {
       this.lastSelection = selection;

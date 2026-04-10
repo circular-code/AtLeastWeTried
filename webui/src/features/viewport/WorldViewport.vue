@@ -35,6 +35,9 @@ const snapshot = computed(() => gameStore.snapshot);
 const ownerOverlay = computed(() => gameStore.ownerOverlay);
 const selectedControllableId = computed(() => uiStore.selectedControllableId || (gameStore.ownedControllables[0]?.controllableId ?? ''));
 const navigationTarget = computed(() => selectedControllableId.value ? readNavigationTarget(ownerOverlay.value, selectedControllableId.value) : null);
+const tacticalTargetUnitId = computed(() => selectedControllableId.value
+  ? (uiStore.tacticalTargetsByControllableId[selectedControllableId.value] ?? '')
+  : '');
 const trackedUnitColors = computed(() => uiStore.trackedUnitColors);
 const activeOverlayEntry = computed(() => gameStore.overlayEntry(selectedControllableId.value));
 const activeOverlayState = computed(() => {
@@ -196,6 +199,15 @@ function handleWorldNavigate(selection: WorldSceneSelection) {
   );
 }
 
+function handleWorldFreeFire(selection: WorldSceneSelection) {
+  uiStore.setLastSelection(selection);
+  gateway.fireWeaponAt(
+    selectedControllableId.value,
+    selection.worldX,
+    selection.worldY,
+  );
+}
+
 function handleVisibleUnitsChanged(unitIds: string[]) {
   uiStore.setVisibleUnitIds(unitIds);
 }
@@ -221,11 +233,18 @@ onMounted(() => {
   worldScene = new WorldScene(host.value, {
     onSelection: handleWorldSelect,
     onNavigationTargetRequested: handleWorldNavigate,
+    onFreeFireRequested: handleWorldFreeFire,
     onVisibleUnitsChanged: handleVisibleUnitsChanged,
     onFocusSelectionChanged: handleFocusSelectionChanged,
   });
 
-  worldScene.setSnapshot(snapshot.value, ownerOverlay.value, selectedControllableId.value, navigationTarget.value);
+  worldScene.setSnapshot(
+    snapshot.value,
+    ownerOverlay.value,
+    selectedControllableId.value,
+    navigationTarget.value,
+    tacticalTargetUnitId.value,
+  );
   worldScene.setTrackedUnits(trackedUnitColors.value);
   syncDisplayedEnergyTelemetry();
   energyTelemetryIntervalId = window.setInterval(() => {
@@ -234,9 +253,9 @@ onMounted(() => {
 });
 
 watch(
-  () => [snapshot.value, ownerOverlay.value, selectedControllableId.value, navigationTarget.value] as const,
-  ([nextSnapshot, nextOwnerOverlay, nextSelectedControllableId, nextNavigationTarget]) => {
-    worldScene?.setSnapshot(nextSnapshot, nextOwnerOverlay, nextSelectedControllableId, nextNavigationTarget);
+  () => [snapshot.value, ownerOverlay.value, selectedControllableId.value, navigationTarget.value, tacticalTargetUnitId.value] as const,
+  ([nextSnapshot, nextOwnerOverlay, nextSelectedControllableId, nextNavigationTarget, nextTacticalTargetUnitId]) => {
+    worldScene?.setSnapshot(nextSnapshot, nextOwnerOverlay, nextSelectedControllableId, nextNavigationTarget, nextTacticalTargetUnitId);
   },
 );
 
