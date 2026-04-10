@@ -216,6 +216,27 @@ function handleFocusSelectionChanged(isActive: boolean) {
   isFocusSelectionActive.value = isActive;
 }
 
+function handleThrustWheel(delta: number) {
+  const controllableId = selectedControllableId.value;
+  if (!controllableId || !Number.isFinite(delta) || delta === 0) {
+    return;
+  }
+
+  const nextThrust = Math.round(
+    Math.min(
+      1,
+      Math.max(0, uiStore.navigationThrustPercentage - delta * 0.0005),
+    ) * 20,
+  ) / 20;
+
+  if (nextThrust === uiStore.navigationThrustPercentage) {
+    return;
+  }
+
+  uiStore.setNavigationThrustPercentage(nextThrust);
+  gateway.setEngine(controllableId, nextThrust);
+}
+
 function toggleFocusActiveShip() {
   worldScene?.toggleFocusSelection();
 }
@@ -236,6 +257,7 @@ onMounted(() => {
     onFreeFireRequested: handleWorldFreeFire,
     onVisibleUnitsChanged: handleVisibleUnitsChanged,
     onFocusSelectionChanged: handleFocusSelectionChanged,
+    onThrustWheelRequested: handleThrustWheel,
   });
 
   worldScene.setSnapshot(

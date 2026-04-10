@@ -47,6 +47,7 @@ type WorldSceneOptions = {
   onFreeFireRequested?: (selection: WorldSceneSelection) => void;
   onVisibleUnitsChanged?: (unitIds: string[]) => void;
   onFocusSelectionChanged?: (isActive: boolean) => void;
+  onThrustWheelRequested?: (delta: number) => void;
 };
 
 type OwnerOverlayState = Record<string, unknown>;
@@ -83,6 +84,7 @@ export class WorldScene {
   private readonly onFreeFireRequested?: (selection: WorldSceneSelection) => void;
   private readonly onVisibleUnitsChanged?: (unitIds: string[]) => void;
   private readonly onFocusSelectionChanged?: (isActive: boolean) => void;
+  private readonly onThrustWheelRequested?: (delta: number) => void;
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene: THREE.Scene;
   private readonly camera: THREE.OrthographicCamera;
@@ -141,6 +143,7 @@ export class WorldScene {
     this.onFreeFireRequested = options.onFreeFireRequested;
     this.onVisibleUnitsChanged = options.onVisibleUnitsChanged;
     this.onFocusSelectionChanged = options.onFocusSelectionChanged;
+    this.onThrustWheelRequested = options.onThrustWheelRequested;
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setClearColor(0x050811, 1);
@@ -467,7 +470,7 @@ export class WorldScene {
       return;
     }
 
-    if (pointerButton === 0 && event.ctrlKey) {
+    if (pointerButton === 0 && event.shiftKey) {
       const unit = this.findNearestUnit(worldPosition.x, worldPosition.y);
       this.onFreeFireRequested?.({
         worldX: worldPosition.x,
@@ -528,6 +531,12 @@ export class WorldScene {
 
   private readonly handleWheel = (event: WheelEvent) => {
     event.preventDefault();
+
+    if (event.shiftKey) {
+      this.onThrustWheelRequested?.(normalizeWheelDelta(event));
+      return;
+    }
+
     const worldBeforeZoom = this.clientToWorld(event.clientX, event.clientY);
     const zoomFactor = Math.exp(-event.deltaY * 0.0012);
     this.camera.zoom = THREE.MathUtils.clamp(this.camera.zoom * zoomFactor, 0.12, 8);
@@ -1580,6 +1589,17 @@ export class WorldScene {
     };
     this.normalizedUnitsByKey.set(cacheKey, { signature, unit: normalizedUnit });
     return normalizedUnit;
+  }
+}
+
+function normalizeWheelDelta(event: WheelEvent) {
+  switch (event.deltaMode) {
+    case WheelEvent.DOM_DELTA_LINE:
+      return event.deltaY * 16;
+    case WheelEvent.DOM_DELTA_PAGE:
+      return event.deltaY * 160;
+    default:
+      return event.deltaY;
   }
 }
 
