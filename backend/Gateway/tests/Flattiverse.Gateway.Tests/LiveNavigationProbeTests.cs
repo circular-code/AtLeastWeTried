@@ -78,7 +78,7 @@ public sealed class LiveNavigationProbeTests
             var mapping = new MappingService(() => new MappingService.MappingScopeContext(
                 mappingGalaxyId,
                 currentClusterId,
-                galaxy.Player.Team?.Name));
+                galaxy.Player?.Id));
             var maneuvering = new ManeuveringService(mapping);
             Log($"[LiveProbe] MappingService persistence file: {persistencePath}");
             Log($"[LiveProbe] MappingService scope galaxyId={mappingGalaxyId} clusterId={currentClusterId}");

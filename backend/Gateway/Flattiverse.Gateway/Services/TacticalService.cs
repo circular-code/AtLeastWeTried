@@ -32,12 +32,10 @@ public sealed class TacticalService : IConnectorEventHandler
     private const int TargetPredictionTickSearchRadius = 18;
     private const float TargetPredictionMaximumMissDistance = 12f;
     private const float TargetPredictionQualityGate = 4.5f;
-    private const int PointPredictionIterations = 18;
+    private const int PointPredictionIterations = 24;
     private const float PointPredictionMaximumMissDistance = 10f;
     private const float PointPredictionQualityGate = 3.5f;
-    private const float GravityMinimumDistance = 6f;
-    private const float GravityInfluenceRange = 3200f;
-    private const float GravityInfluenceRangeSquared = GravityInfluenceRange * GravityInfluenceRange;
+    private const float PointPredictionHitTolerance = 1.1f;
     private const float ProjectileSpawnPaddingDistance = 2f;
 
     public enum TacticalMode
@@ -74,10 +72,7 @@ public sealed class TacticalService : IConnectorEventHandler
         float PositionY,
         float MovementX,
         float MovementY,
-        float Gravity,
-        float Radius,
-        float GravityWellRadius,
-        float GravityWellForce
+        float Gravity
     );
 
     private readonly record struct ShotProfile(
@@ -94,10 +89,15 @@ public sealed class TacticalService : IConnectorEventHandler
     {
         lock (_sync)
         {
-            if (@event is ControllableInfoEvent infoEvent &&
-                (@event is DestroyedControllableInfoEvent || @event is ClosedControllableInfoEvent))
+            if (@event is ControllableInfoEvent infoEvent && @event is DestroyedControllableInfoEvent)
             {
-                RemoveCore(BuildControllableId(infoEvent.Player.Id, infoEvent.ControllableInfo.Id));
+                MarkShipUnavailableCore(BuildControllableId(infoEvent.Player.Id, infoEvent.ControllableInfo.Id));
+                return;
+            }
+
+            if (@event is ControllableInfoEvent closedInfoEvent && @event is ClosedControllableInfoEvent)
+            {
+                RemoveCore(BuildControllableId(closedInfoEvent.Player.Id, closedInfoEvent.ControllableInfo.Id));
                 return;
             }
 
@@ -322,6 +322,21 @@ public sealed class TacticalService : IConnectorEventHandler
     private void RemoveCore(string controllableId)
     {
         _states.Remove(controllableId);
+
+        if (_pendingAutoFireRequests.Count == 0)
+            return;
+
+        var kept = _pendingAutoFireRequests.Where(request => request.ControllableId != controllableId).ToList();
+        _pendingAutoFireRequests.Clear();
+
+        foreach (var request in kept)
+            _pendingAutoFireRequests.Enqueue(request);
+    }
+
+    private void MarkShipUnavailableCore(string controllableId)
+    {
+        if (_states.TryGetValue(controllableId, out var state))
+            state.Ship = null;
 
         if (_pendingAutoFireRequests.Count == 0)
             return;
@@ -819,6 +834,7 @@ public sealed class TacticalService : IConnectorEventHandler
                     break;
 
                 if (!TryApplyCorrectionStep(ship, gravitySources, ticks, targetX, targetY, relativeX, relativeY, errorX, errorY, currentMiss,
+                        highPrecisionMode: highPrecisionTargeting,
                         out float nextRelativeX, out float nextRelativeY, out float nextMiss))
                 {
                     break;
@@ -890,10 +906,11 @@ public sealed class TacticalService : IConnectorEventHandler
                     converged = true;
                 }
 
-                if (currentMiss <= PredictionHitTolerance)
+                if (currentMiss <= PointPredictionHitTolerance)
                     break;
 
                 if (!TryApplyCorrectionStep(ship, gravitySources, ticks, targetX, targetY, relativeX, relativeY, errorX, errorY, currentMiss,
+                        highPrecisionMode: true,
                         out float nextRelativeX, out float nextRelativeY, out float nextMiss))
                 {
                     break;
@@ -986,25 +1003,33 @@ public sealed class TacticalService : IConnectorEventHandler
     }
 
     private static bool TryApplyCorrectionStep(ClassicShipControllable ship, IReadOnlyList<GravitySource> gravitySources, int ticks, float targetX,
-        float targetY, float currentRelativeX, float currentRelativeY, float errorX, float errorY, float currentMissDistance,
+        float targetY, float currentRelativeX, float currentRelativeY, float errorX, float errorY, float currentMissDistance, bool highPrecisionMode,
         out float nextRelativeX, out float nextRelativeY, out float nextMissDistance)
     {
         nextRelativeX = currentRelativeX;
         nextRelativeY = currentRelativeY;
         nextMissDistance = currentMissDistance;
 
-        var correctionCandidates = new List<(float DeltaX, float DeltaY)>(capacity: 2);
+        var correctionCandidates = new List<(float DeltaX, float DeltaY)>(capacity: 3);
 
         if (TryBuildJacobianCorrection(ship, gravitySources, ticks, targetX, targetY, currentRelativeX, currentRelativeY, errorX, errorY, currentMissDistance,
+                highPrecisionMode,
                 out float jacobianDeltaX, out float jacobianDeltaY))
         {
             correctionCandidates.Add((jacobianDeltaX, jacobianDeltaY));
         }
 
-        float legacyCorrectionScale = 1f / ticks;
+        float legacyCorrectionScale = highPrecisionMode ? 1.35f / ticks : 1f / ticks;
         correctionCandidates.Add((errorX * legacyCorrectionScale, errorY * legacyCorrectionScale));
+        if (highPrecisionMode)
+        {
+            float boostCorrectionScale = 2f / ticks;
+            correctionCandidates.Add((errorX * boostCorrectionScale, errorY * boostCorrectionScale));
+        }
 
-        float[] dampingFactors = { 1f, 0.65f, 0.35f, 0.18f };
+        float[] dampingFactors = highPrecisionMode
+            ? new[] { 1.35f, 1f, 0.7f, 0.4f, 0.2f, 0.1f }
+            : new[] { 1f, 0.65f, 0.35f, 0.18f };
         foreach ((float correctionX, float correctionY) in correctionCandidates)
         {
             foreach (float damping in dampingFactors)
@@ -1036,13 +1061,16 @@ public sealed class TacticalService : IConnectorEventHandler
     }
 
     private static bool TryBuildJacobianCorrection(ClassicShipControllable ship, IReadOnlyList<GravitySource> gravitySources, int ticks, float targetX,
-        float targetY, float currentRelativeX, float currentRelativeY, float errorX, float errorY, float currentMissDistance, out float deltaX,
-        out float deltaY)
+        float targetY, float currentRelativeX, float currentRelativeY, float errorX, float errorY, float currentMissDistance, bool highPrecisionMode,
+        out float deltaX, out float deltaY)
     {
         deltaX = 0f;
         deltaY = 0f;
 
-        float probeStep = MathF.Max(0.02f, MathF.Min(0.2f, (currentMissDistance / MathF.Max(1, ticks)) * 1.8f));
+        float probeScale = highPrecisionMode ? 2.8f : 1.8f;
+        float minProbeStep = highPrecisionMode ? 0.04f : 0.02f;
+        float maxProbeStep = highPrecisionMode ? 0.4f : 0.2f;
+        float probeStep = MathF.Max(minProbeStep, MathF.Min(maxProbeStep, (currentMissDistance / MathF.Max(1, ticks)) * probeScale));
 
         if (!TryComputeMissDistance(ship, currentRelativeX + probeStep, currentRelativeY, ticks, gravitySources, targetX, targetY, out float errorXdx,
                 out float errorYdx, out _))
@@ -1062,7 +1090,7 @@ public sealed class TacticalService : IConnectorEventHandler
         float a22 = (errorYdy - errorY) / probeStep;
         float determinant = a11 * a22 - a12 * a21;
 
-        if (MathF.Abs(determinant) <= 0.0001f)
+        if (MathF.Abs(determinant) <= 0.00005f)
             return false;
 
         float rightSideX = -errorX;
@@ -1073,7 +1101,9 @@ public sealed class TacticalService : IConnectorEventHandler
         if (float.IsNaN(deltaX) || float.IsInfinity(deltaX) || float.IsNaN(deltaY) || float.IsInfinity(deltaY))
             return false;
 
-        float maxCorrectionMagnitude = MathF.Max(0.2f, (currentMissDistance / MathF.Max(1, ticks)) * 2.25f);
+        float maxCorrectionScale = highPrecisionMode ? 4f : 2.25f;
+        float minCorrectionMagnitude = highPrecisionMode ? 0.35f : 0.2f;
+        float maxCorrectionMagnitude = MathF.Max(minCorrectionMagnitude, (currentMissDistance / MathF.Max(1, ticks)) * maxCorrectionScale);
         float correctionMagnitude = MathF.Sqrt(deltaX * deltaX + deltaY * deltaY);
         if (correctionMagnitude <= NumericEpsilon)
             return false;
@@ -1128,10 +1158,26 @@ public sealed class TacticalService : IConnectorEventHandler
         float currentY = startY;
         float currentMovementX = startMovementX;
         float currentMovementY = startMovementY;
+        var simulatorSources = new List<GravitySimulator.GravitySource>(gravitySources.Count);
 
         for (int tick = 0; tick < ticks; tick++)
         {
-            ComputeGravityAcceleration(currentX, currentY, tick, gravitySources, excludedSourceUnit, out float accelerationX, out float accelerationY);
+            simulatorSources.Clear();
+            foreach (GravitySource source in gravitySources)
+            {
+                if (excludedSourceUnit is not null && ReferenceEquals(source.Unit, excludedSourceUnit))
+                    continue;
+
+                simulatorSources.Add(new GravitySimulator.GravitySource(
+                    source.PositionX + source.MovementX * tick,
+                    source.PositionY + source.MovementY * tick,
+                    source.Gravity
+                ));
+            }
+
+            var (gravityX, gravityY) = GravitySimulator.ComputeGravityAcceleration(currentX, currentY, simulatorSources);
+            float accelerationX = (float)gravityX;
+            float accelerationY = (float)gravityY;
             currentMovementX += accelerationX;
             currentMovementY += accelerationY;
             currentX += currentMovementX;
@@ -1140,59 +1186,6 @@ public sealed class TacticalService : IConnectorEventHandler
 
         positionX = currentX;
         positionY = currentY;
-    }
-
-    private static void ComputeGravityAcceleration(float positionX, float positionY, int tick, IReadOnlyList<GravitySource> gravitySources,
-        Unit? excludedSourceUnit, out float accelerationX, out float accelerationY)
-    {
-        accelerationX = 0f;
-        accelerationY = 0f;
-
-        foreach (GravitySource source in gravitySources)
-        {
-            if (excludedSourceUnit is not null && ReferenceEquals(source.Unit, excludedSourceUnit))
-                continue;
-
-            float sourceX = source.PositionX + source.MovementX * tick;
-            float sourceY = source.PositionY + source.MovementY * tick;
-            float deltaX = sourceX - positionX;
-            float deltaY = sourceY - positionY;
-            float distanceSquared = deltaX * deltaX + deltaY * deltaY;
-
-            if (distanceSquared <= NumericEpsilon)
-                continue;
-
-            if (distanceSquared > GravityInfluenceRangeSquared &&
-                (source.GravityWellRadius <= NumericEpsilon || distanceSquared > source.GravityWellRadius * source.GravityWellRadius))
-            {
-                continue;
-            }
-
-            float distance = MathF.Sqrt(distanceSquared);
-            float minimumDistance = MathF.Max(source.Radius, GravityMinimumDistance);
-
-            if (distance < minimumDistance)
-            {
-                distance = minimumDistance;
-                distanceSquared = minimumDistance * minimumDistance;
-            }
-
-            float effectiveGravity = source.Gravity;
-            if (source.GravityWellForce > NumericEpsilon && source.GravityWellRadius > NumericEpsilon && distance < source.GravityWellRadius)
-            {
-                float normalizedDepth = 1f - (distance / source.GravityWellRadius);
-                float softenedWellFactor = normalizedDepth * normalizedDepth;
-                effectiveGravity += source.GravityWellForce * softenedWellFactor;
-            }
-
-            if (effectiveGravity <= NumericEpsilon)
-                continue;
-
-            float inverseDistance = 1f / distance;
-            float attraction = effectiveGravity / distanceSquared;
-            accelerationX += deltaX * inverseDistance * attraction;
-            accelerationY += deltaY * inverseDistance * attraction;
-        }
     }
 
     private static List<GravitySource> GetOrBuildGravitySources(ClassicShipControllable ship, Dictionary<Cluster, List<GravitySource>>? cache)
@@ -1215,16 +1208,7 @@ public sealed class TacticalService : IConnectorEventHandler
         foreach (Unit unit in cluster.Units)
         {
             float gravity = unit.Gravity;
-            float gravityWellRadius = 0f;
-            float gravityWellForce = 0f;
-
-            if (unit is BlackHole blackHole)
-            {
-                gravityWellRadius = blackHole.GravityWellRadius;
-                gravityWellForce = blackHole.GravityWellForce;
-            }
-
-            if (gravity <= NumericEpsilon && gravityWellForce <= NumericEpsilon)
+            if (gravity <= NumericEpsilon)
                 continue;
 
             gravitySources.Add(new GravitySource(
@@ -1233,10 +1217,7 @@ public sealed class TacticalService : IConnectorEventHandler
                 unit.Position.Y,
                 unit.Movement.X,
                 unit.Movement.Y,
-                gravity,
-                MathF.Max(0f, unit.Radius),
-                gravityWellRadius,
-                gravityWellForce
+                gravity
             ));
         }
 

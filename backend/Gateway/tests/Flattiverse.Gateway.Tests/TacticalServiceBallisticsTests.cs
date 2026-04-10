@@ -24,10 +24,6 @@ public sealed class TacticalServiceBallisticsTests
         "SimulateShotWithGravity",
         BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException("SimulateShotWithGravity method not found.");
-    private static readonly MethodInfo ComputeGravityAccelerationMethod = TacticalType.GetMethod(
-        "ComputeGravityAcceleration",
-        BindingFlags.NonPublic | BindingFlags.Static)
-        ?? throw new InvalidOperationException("ComputeGravityAcceleration method not found.");
     private static readonly ConstructorInfo GravitySourceCtor = GravitySourceType.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
                                                                   .Single();
 
@@ -83,10 +79,7 @@ public sealed class TacticalServiceBallisticsTests
                 positionY: -70f,
                 movementX: 0f,
                 movementY: 0f,
-                gravity: 0.7f,
-                radius: 10f,
-                gravityWellRadius: 0f,
-                gravityWellForce: 0f));
+                gravity: 0.7f));
 
         const float targetX = 220f;
         const float targetY = 35f;
@@ -109,36 +102,17 @@ public sealed class TacticalServiceBallisticsTests
     }
 
     [Fact]
-    public void Gravity_well_softening_keeps_edge_influence_small_but_strengthens_deep_inside()
+    public void Gravity_simulator_applies_stronger_pull_when_closer()
     {
-        object noWell = CreateGravitySource(
-            positionX: 0f,
-            positionY: 0f,
-            movementX: 0f,
-            movementY: 0f,
-            gravity: 1f,
-            radius: 5f,
-            gravityWellRadius: 100f,
-            gravityWellForce: 0f);
-        object withWell = CreateGravitySource(
-            positionX: 0f,
-            positionY: 0f,
-            movementX: 0f,
-            movementY: 0f,
-            gravity: 1f,
-            radius: 5f,
-            gravityWellRadius: 100f,
-            gravityWellForce: 9f);
+        var sources = new[]
+        {
+            new GravitySimulator.GravitySource(0d, 0d, 1d)
+        };
 
-        float edgeBaseline = ComputeAccelerationMagnitude(positionX: 99f, positionY: 0f, CreateGravitySourceList(noWell));
-        float edgeWithWell = ComputeAccelerationMagnitude(positionX: 99f, positionY: 0f, CreateGravitySourceList(withWell));
-        float deepBaseline = ComputeAccelerationMagnitude(positionX: 50f, positionY: 0f, CreateGravitySourceList(noWell));
-        float deepWithWell = ComputeAccelerationMagnitude(positionX: 50f, positionY: 0f, CreateGravitySourceList(withWell));
+        float farPull = ComputeAccelerationMagnitude(positionX: 99f, positionY: 0f, sources);
+        float nearPull = ComputeAccelerationMagnitude(positionX: 50f, positionY: 0f, sources);
 
-        // At 99% well radius, softened contribution should be tiny.
-        Assert.InRange(edgeWithWell / edgeBaseline, 1.0f, 1.01f);
-        // Deeper in the well, the additional pull should be clearly noticeable.
-        Assert.True(deepWithWell > deepBaseline * 1.5f);
+        Assert.True(nearPull > farPull * 10f, $"Expected much stronger pull near source. near={nearPull:0.#####}, far={farPull:0.#####}");
     }
 
     private static ClassicShipControllable CreateShip(float positionX, float positionY, float movementX, float movementY)
@@ -149,8 +123,7 @@ public sealed class TacticalServiceBallisticsTests
         return ship;
     }
 
-    private static object CreateGravitySource(float positionX, float positionY, float movementX, float movementY, float gravity, float radius,
-        float gravityWellRadius, float gravityWellForce)
+    private static object CreateGravitySource(float positionX, float positionY, float movementX, float movementY, float gravity)
     {
         var unit = (Unit)RuntimeHelpers.GetUninitializedObject(typeof(Unit));
         return GravitySourceCtor.Invoke(new object[]
@@ -161,9 +134,6 @@ public sealed class TacticalServiceBallisticsTests
             movementX,
             movementY,
             gravity,
-            radius,
-            gravityWellRadius,
-            gravityWellForce,
         });
     }
 
@@ -179,13 +149,13 @@ public sealed class TacticalServiceBallisticsTests
         return list;
     }
 
-    private static float ComputeAccelerationMagnitude(float positionX, float positionY, object gravitySources)
+    private static float ComputeAccelerationMagnitude(
+        float positionX,
+        float positionY,
+        IReadOnlyList<GravitySimulator.GravitySource> gravitySources)
     {
-        object?[] args = { positionX, positionY, 0, gravitySources, null, 0f, 0f };
-        ComputeGravityAccelerationMethod.Invoke(null, args);
-        float ax = (float)args[5]!;
-        float ay = (float)args[6]!;
-        return MathF.Sqrt(ax * ax + ay * ay);
+        var (ax, ay) = GravitySimulator.ComputeGravityAcceleration(positionX, positionY, gravitySources);
+        return (float)Math.Sqrt(ax * ax + ay * ay);
     }
 
     private static void SetInstanceField(object target, string fieldName, object value)
