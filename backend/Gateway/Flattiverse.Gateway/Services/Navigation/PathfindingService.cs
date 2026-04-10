@@ -219,7 +219,7 @@ public sealed class PathfindingService : IConnectorEventHandler
         var arrivalThreshold = ComputeArrivalThreshold(ship);
         if (currentPosition.DistanceTo(state.Goal) <= arrivalThreshold)
         {
-            ClearNavigationGoal(ship.Id);
+            EngageGoalHold(state, ship);
             return;
         }
 
@@ -263,7 +263,7 @@ public sealed class PathfindingService : IConnectorEventHandler
 
         if (followResult.GoalReached)
         {
-            ClearNavigationGoal(ship.Id);
+            EngageGoalHold(state, ship);
             return;
         }
 
@@ -273,6 +273,18 @@ public sealed class PathfindingService : IConnectorEventHandler
             ship,
             (float)followResult.Target.X,
             (float)followResult.Target.Y,
+            state.ThrustPercentage,
+            resetController: false);
+    }
+
+    private void EngageGoalHold(PathState state, ClassicShipControllable ship)
+    {
+        state.CurrentLookahead = state.Goal;
+        state.Status = "holding";
+        _maneuveringService.SetNavigationTarget(
+            ship,
+            (float)state.Goal.X,
+            (float)state.Goal.Y,
             state.ThrustPercentage,
             resetController: false);
     }

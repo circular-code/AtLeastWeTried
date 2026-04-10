@@ -19,6 +19,10 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 {
     private const string ControllableRebuildingErrorCode = "controllable_rebuilding";
     private const string ControllableRebuildingErrorMessage = "[0x3F] This controllable is currently rebuilding and cannot execute commands.";
+    private const double ResourceCollectionClearanceMargin = 8d;
+    private const double StellarResourceCollectionDistanceBonus = 34d;
+    private const double StellarResourceCollectionGravityFactor = 220d;
+    private const float ResourceCollectionNavigationThrust = 0.45f;
 
     private readonly string _apiKey;
     private readonly string? _teamName;
@@ -1072,6 +1076,10 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 if (mode == "on") await classic.InterceptorFabricator.On();
                 else if (mode == "off") await classic.InterceptorFabricator.Off();
                 break;
+            case "ResourceMiner":
+            case "resourceMiner":
+            case "resource_miner":
+                return await HandleResourceMinerMode(commandId, payload, classic, mode);
             case "Tactical":
             case "tactical":
             case "TacticalModule":
@@ -1102,6 +1110,156 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         }
 
         return Completed(commandId);
+    }
+
+    private async Task<CommandReplyMessage> HandleResourceMinerMode(
+        string commandId,
+        System.Text.Json.JsonElement? payload,
+        ClassicShipControllable classic,
+        string mode)
+    {
+        var normalizedMode = mode.Trim().ToLowerInvariant();
+        switch (normalizedMode)
+        {
+            case "off":
+                await classic.ResourceMiner.Off();
+                _pathfindingService.ClearNavigationGoal(classic.Id);
+                _maneuveringService.ClearNavigationTarget(classic.Id);
+                return Completed(commandId, new Dictionary<string, object?>
+                {
+                    { "action", "resource_miner_off" },
+                    { "controllableId", $"p{Galaxy!.Player.Id}-c{classic.Id}" },
+                });
+            case "on":
+                await classic.ResourceMiner.Set(classic.ResourceMiner.MaximumRate);
+                return Completed(commandId, new Dictionary<string, object?>
+                {
+                    { "action", "resource_miner_on" },
+                    { "controllableId", $"p{Galaxy!.Player.Id}-c{classic.Id}" },
+                    { "rate", classic.ResourceMiner.MaximumRate },
+                });
+            case "set":
+            {
+                var requestedRate = payload?.TryGetProperty("value", out var valueElement) == true
+                                    && valueElement.ValueKind != System.Text.Json.JsonValueKind.Null
+                    ? valueElement.GetSingle()
+                    : classic.ResourceMiner.MaximumRate;
+                var clampedRate = Math.Clamp(requestedRate, classic.ResourceMiner.MinimumRate, classic.ResourceMiner.MaximumRate);
+                await classic.ResourceMiner.Set(clampedRate);
+                return Completed(commandId, new Dictionary<string, object?>
+                {
+                    { "action", "resource_miner_set" },
+                    { "controllableId", $"p{Galaxy!.Player.Id}-c{classic.Id}" },
+                    { "rate", clampedRate },
+                });
+            }
+            case "collect":
+                return await HandleCollectResources(commandId, payload, classic);
+            default:
+                return Rejected(commandId, "invalid_mode", $"Unknown ResourceMiner mode: {mode}");
+        }
+    }
+
+    private async Task<CommandReplyMessage> HandleCollectResources(
+        string commandId,
+        System.Text.Json.JsonElement? payload,
+        ClassicShipControllable classic)
+    {
+        var targetUnitId = payload?.TryGetProperty("targetId", out var targetElement) == true
+            ? targetElement.GetString()
+            : null;
+        if (string.IsNullOrWhiteSpace(targetUnitId))
+            return Rejected(commandId, "missing_target", "targetId is required for collect mode.");
+
+        var shipClusterId = classic.Cluster?.Id ?? 0;
+        if (!TryResolveResourceCollectionTarget(targetUnitId, out var targetUnit))
+            return Rejected(commandId, "invalid_target", "Target unit was not found in the mapping cache.");
+
+        if (!IsResourceCollectionTargetKind(targetUnit.Kind))
+            return Rejected(commandId, "invalid_target_kind", "Resource collection target must be a planet or sun.");
+
+        if (targetUnit.ClusterId != shipClusterId)
+            return Rejected(commandId, "target_out_of_cluster", "Resource collection target is not in the same cluster as the selected ship.");
+
+        if (!targetUnit.IsSeen)
+            return Rejected(commandId, "target_not_visible", "Resource collection target must be visible before starting collection.");
+
+        var (approachX, approachY, desiredDistance) = BuildResourceCollectionApproachTarget(classic, targetUnit);
+        _pathfindingService.SetNavigationGoal(classic, approachX, approachY, ResourceCollectionNavigationThrust);
+        await classic.ResourceMiner.Set(classic.ResourceMiner.MaximumRate);
+
+        return Completed(commandId, new Dictionary<string, object?>
+        {
+            { "action", "collect_resources" },
+            { "controllableId", $"p{Galaxy!.Player.Id}-c{classic.Id}" },
+            { "targetId", targetUnitId },
+            { "targetKind", NormalizeResourceCollectionTargetKind(targetUnit.Kind) },
+            { "approachX", approachX },
+            { "approachY", approachY },
+            { "standoffDistance", desiredDistance },
+            { "rate", classic.ResourceMiner.MaximumRate },
+        });
+    }
+
+    private bool TryResolveResourceCollectionTarget(string targetUnitId, out UnitSnapshotDto targetUnit)
+    {
+        targetUnit = null!;
+        if (_mappingService.TryGetUnitSnapshot(targetUnitId, out var snapshot) && snapshot is not null)
+        {
+            targetUnit = snapshot;
+            return true;
+        }
+
+        targetUnit = _mappingService.BuildUnitSnapshots()
+            .FirstOrDefault(unit => string.Equals(unit.UnitId, targetUnitId, StringComparison.Ordinal))!;
+        return targetUnit is not null;
+    }
+
+    private static bool IsResourceCollectionTargetKind(string? kind)
+    {
+        var normalizedKind = NormalizeResourceCollectionTargetKind(kind);
+        return normalizedKind is "planet" or "sun";
+    }
+
+    private static bool IsStellarResourceCollectionTarget(string? kind)
+    {
+        return NormalizeResourceCollectionTargetKind(kind) == "sun";
+    }
+
+    private static string NormalizeResourceCollectionTargetKind(string? kind)
+    {
+        if (string.IsNullOrWhiteSpace(kind))
+            return string.Empty;
+
+        return kind.Trim().ToLowerInvariant() switch
+        {
+            "star" => "sun",
+            "start" => "sun",
+            _ => kind.Trim().ToLowerInvariant(),
+        };
+    }
+
+    private static (float X, float Y, float DesiredDistance) BuildResourceCollectionApproachTarget(
+        ClassicShipControllable ship,
+        UnitSnapshotDto targetUnit)
+    {
+        var isStellar = IsStellarResourceCollectionTarget(targetUnit.Kind);
+        var shipPosition = new NavigationPoint(ship.Position.X, ship.Position.Y);
+        var targetPosition = new NavigationPoint(targetUnit.X, targetUnit.Y);
+        var baseKeepOutRadius = Math.Max(0d, targetUnit.Radius) + Math.Max(0d, ship.Size) + ResourceCollectionClearanceMargin;
+        var gravityMargin = isStellar ? Math.Max(0d, targetUnit.Gravity) * StellarResourceCollectionGravityFactor : 0d;
+        var standoffPadding = isStellar
+            ? Math.Clamp(ship.Size * 1.1d + StellarResourceCollectionDistanceBonus, 28d, 66d)
+            : Math.Clamp(ship.Size * 0.25d, 2d, 6d);
+        var keepOutRadius = baseKeepOutRadius + gravityMargin;
+        var desiredDistance = keepOutRadius + standoffPadding;
+
+        var approachDirection = shipPosition - targetPosition;
+        if (approachDirection.Length <= NavigationMath.Epsilon)
+            approachDirection = new NavigationPoint(1d, 0d);
+
+        var approachTarget = targetPosition + approachDirection.Normalized() * desiredDistance;
+        return ((float)approachTarget.X, (float)approachTarget.Y, (float)desiredDistance);
     }
 
     private async Task<CommandReplyMessage> HandleUpgradeSubsystem(string commandId, System.Text.Json.JsonElement? payload)

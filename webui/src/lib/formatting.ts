@@ -153,6 +153,9 @@ export function formatCommandReplyDetail(
   const result = message.result ?? {};
   const action = typeof result.action === 'string' ? result.action : undefined;
   const controllableId = typeof result.controllableId === 'string' ? result.controllableId : undefined;
+  const targetId = typeof result.targetId === 'string' ? result.targetId : undefined;
+  const targetKind = typeof result.targetKind === 'string' ? result.targetKind : undefined;
+  const standoffDistance = typeof result.standoffDistance === 'number' ? result.standoffDistance : undefined;
   const mode = typeof result.mode === 'string' ? result.mode : undefined;
   const scope = typeof result.scope === 'string' ? result.scope : undefined;
   const thrustValue = typeof result.thrust === 'number' ? result.thrust : undefined;
@@ -167,6 +170,16 @@ export function formatCommandReplyDetail(
 
   if (action === 'continued' && controllableId) {
     return `${getControllableLabel(controllableId)} resumed operations.`;
+  }
+
+  if (action === 'collect_resources' || action === 'collect_planet_resources') {
+    const kindLabel = targetKind ? humanizeCode(targetKind).toLowerCase() : 'target';
+    const targetLabel = targetId ? truncateText(targetId, 36) : 'selection';
+    if (standoffDistance !== undefined) {
+      return `Collecting from ${kindLabel} ${targetLabel}. Standoff ${formatMetric(standoffDistance)}.`;
+    }
+
+    return `Collecting from ${kindLabel} ${targetLabel}.`;
   }
 
   if (mode) {

@@ -242,6 +242,15 @@ public sealed class ManeuveringService : IConnectorEventHandler
         var effectiveClosingSpeed = Math.Max(0f, closingSpeed) + undesiredSpeed * pidConfig.DriftDerivativeFactor;
         var derivativeTerm = effectiveClosingSpeed * pidConfig.Kd * brakeBlend;
         var targetMagnitude = proportionalTerm + integralTerm - derivativeTerm;
+        targetMagnitude = ApplyStoppingBrake(
+            targetMagnitude,
+            distanceError,
+            closingSpeed,
+            undesiredSpeed,
+            desiredVectorLengthLimit,
+            maximumVectorLength,
+            pidConfig.BrakeDistance,
+            pidConfig.DriftBrakeDistanceFactor);
         var targetVector = desiredDirection * targetMagnitude;
 
         if (targetMagnitude >= 0f)
@@ -256,6 +265,45 @@ public sealed class ManeuveringService : IConnectorEventHandler
             targetVector.Length = maximumVectorLength;
 
         return targetVector;
+    }
+
+    internal static float ApplyStoppingBrake(
+        float targetMagnitude,
+        float distanceError,
+        float closingSpeed,
+        float undesiredSpeed,
+        float desiredVectorLengthLimit,
+        float maximumVectorLength,
+        float brakeDistance,
+        float driftBrakeDistanceFactor)
+    {
+        if (distanceError <= 0f || closingSpeed <= 0f || maximumVectorLength <= 0f)
+        {
+            return targetMagnitude;
+        }
+
+        var availableDeceleration = Math.Max(maximumVectorLength, desiredVectorLengthLimit);
+        var stoppingDistance = ComputeStoppingDistance(closingSpeed, availableDeceleration);
+        var brakeBuffer = Math.Max(1f, brakeDistance * 1.35f + undesiredSpeed * driftBrakeDistanceFactor * 0.6f);
+        if (distanceError > stoppingDistance + brakeBuffer)
+        {
+            return targetMagnitude;
+        }
+
+        var requiredDeceleration = (closingSpeed * closingSpeed) / (2f * Math.Max(distanceError, 0.5f));
+        var brakingMagnitude = Math.Clamp(requiredDeceleration * 1.2f, 0f, maximumVectorLength);
+        var brakingTargetMagnitude = -brakingMagnitude;
+        return Math.Min(targetMagnitude, brakingTargetMagnitude);
+    }
+
+    internal static float ComputeStoppingDistance(float speed, float deceleration)
+    {
+        if (speed <= 0f || deceleration <= 0f)
+        {
+            return 0f;
+        }
+
+        return (speed * speed) / (2f * deceleration);
     }
 
     private static TargetPidConfig BuildTargetPidConfig(float thrustPercentage, float desiredVectorLengthLimit, float maximumVectorLength)

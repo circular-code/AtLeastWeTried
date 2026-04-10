@@ -456,6 +456,20 @@ function createGatewayApi() {
     client.send(envelope.message);
   }
 
+  function collectResources(controllableId: string, targetUnitId: string) {
+    if (!controllableId || !targetUnitId) {
+      return;
+    }
+
+    const envelope = buildSetSubsystemModeCommand(controllableId, 'resourceMiner', 'collect', undefined, targetUnitId);
+    gameStore.trackCommand(envelope.commandId, {
+      label: 'Collect resources',
+      subject: `${gameStore.getControllableLabel(controllableId)} -> ${truncateText(targetUnitId, 40)}`,
+    });
+
+    client.send(envelope.message);
+  }
+
   function upgradeSubsystem(controllableId: string, subsystemId: string) {
     if (!controllableId || !subsystemId) {
       return;
@@ -497,6 +511,8 @@ function createGatewayApi() {
     setTacticalTarget,
     setNavigationTarget,
     clearNavigationTarget,
+    collectResources,
+    collectPlanetResources: collectResources,
     upgradeSubsystem,
   };
 }

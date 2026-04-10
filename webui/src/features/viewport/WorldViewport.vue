@@ -14,6 +14,13 @@ type EnergyTelemetrySnapshot = {
   deltaTone: 'positive' | 'negative' | 'neutral';
 };
 
+type ResourceMinerTelemetrySnapshot = {
+  status: string;
+  yield: string;
+  rate: string;
+  yieldTone: 'positive' | 'negative' | 'neutral';
+};
+
 const gameStore = useGameStore();
 const uiStore = useUiStore();
 const gateway = useGateway();
@@ -102,6 +109,28 @@ const energyTelemetry = computed<EnergyTelemetrySnapshot>(() => {
     deltaTone: delta === null ? 'neutral' : delta >= 0 ? 'positive' : 'negative',
   };
 });
+const resourceMinerTelemetry = computed<ResourceMinerTelemetrySnapshot>(() => {
+  const miner = findSubsystemEntry(activeSubsystems.value, 'Resource Miner');
+  if (!miner) {
+    return {
+      status: 'Unavailable',
+      yield: '0',
+      rate: '0',
+      yieldTone: 'neutral',
+    };
+  }
+
+  const yieldValue = readSubsystemStatValue(miner, ['Yield']) ?? '0';
+  const rateValue = readSubsystemStatValue(miner, ['Rate']) ?? '0';
+  const yieldMetric = readLeadingMetric(yieldValue);
+
+  return {
+    status: humanizeSubsystemName(miner.status || 'off'),
+    yield: yieldValue,
+    rate: rateValue,
+    yieldTone: yieldMetric === null ? 'neutral' : yieldMetric > 0 ? 'positive' : yieldMetric < 0 ? 'negative' : 'neutral',
+  };
+});
 
 function syncDisplayedEnergyTelemetry() {
   displayedEnergyTelemetry.value = energyTelemetry.value;
@@ -114,6 +143,7 @@ type ShipSubsystemStat = {
 
 type ShipSubsystemEntry = {
   name: string;
+  status: string;
   stats: ShipSubsystemStat[];
 };
 
@@ -127,6 +157,7 @@ function readSubsystemEntries(value: unknown): ShipSubsystemEntry[] {
     .filter((entry): entry is Record<string, unknown> => !!entry)
     .map((entry) => ({
       name: humanizeSubsystemName(readText(entry.name, readText(entry.slot, 'Subsystem'))),
+      status: readText(entry.status, ''),
       stats: readSubsystemStats(entry.stats),
     }));
 }
@@ -147,13 +178,21 @@ function readSubsystemStats(value: unknown): ShipSubsystemStat[] {
 }
 
 function readSubsystemResourceValue(subsystemsToRead: ShipSubsystemEntry[], subsystemName: string, statLabels: string[]) {
-  const subsystem = subsystemsToRead.find((entry) => entry.name === subsystemName);
+  const subsystem = findSubsystemEntry(subsystemsToRead, subsystemName);
   const stat = subsystem?.stats.find((entry) => statLabels.includes(entry.label));
   if (!stat) {
     return null;
   }
 
   return readLeadingMetric(stat.value);
+}
+
+function findSubsystemEntry(subsystemsToRead: ShipSubsystemEntry[], subsystemName: string) {
+  return subsystemsToRead.find((entry) => entry.name === subsystemName);
+}
+
+function readSubsystemStatValue(subsystem: ShipSubsystemEntry, labels: string[]) {
+  return subsystem.stats.find((entry) => labels.includes(entry.label))?.value;
 }
 
 function readLeadingMetric(value: string) {
@@ -360,6 +399,23 @@ onBeforeUnmount(() => {
         <div class="viewport-energy-stat">
           <span class="viewport-command-label">Delta</span>
           <strong :class="`is-${displayedEnergyTelemetry.deltaTone}`">{{ displayedEnergyTelemetry.delta }}</strong>
+        </div>
+      </div>
+
+      <span class="dock-sep viewport-command-sep" aria-hidden="true"></span>
+
+      <div class="viewport-command-group viewport-command-group--energy">
+        <div class="viewport-energy-stat">
+          <span class="viewport-command-label">Miner</span>
+          <strong>{{ resourceMinerTelemetry.status }}</strong>
+        </div>
+        <div class="viewport-energy-stat">
+          <span class="viewport-command-label">Yield</span>
+          <strong :class="`is-${resourceMinerTelemetry.yieldTone}`">{{ resourceMinerTelemetry.yield }}</strong>
+        </div>
+        <div class="viewport-energy-stat">
+          <span class="viewport-command-label">Rate</span>
+          <strong>{{ resourceMinerTelemetry.rate }}</strong>
         </div>
       </div>
 

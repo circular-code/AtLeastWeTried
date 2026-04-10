@@ -187,6 +187,17 @@ export const useGameStore = defineStore('game', {
       const nextOverlayBySessionId = new Map(this.overlayBySessionId);
       nextOverlayBySessionId.set(message.playerSessionId, new Map(Object.entries(next) as Array<[string, ControllableOverlayState]>));
       this.overlayBySessionId = nextOverlayBySessionId;
+
+      const resourceCollectionStarts = detectResourceCollectionStarts(currentOverlay, next, message);
+      for (const collectionStart of resourceCollectionStarts) {
+        const sourceLabel = collectionStart.source === 'solar' ? 'Solar collection' : 'Miner yield';
+        this.recordActivity({
+          tone: 'success',
+          summary: `${this.getControllableLabel(collectionStart.controllableId)} collected resources`,
+          detail: `${sourceLabel}: ${formatMetric(collectionStart.rate)}/tick`,
+          meta: collectionStart.source === 'solar' ? 'sun harvesting' : 'planet mining',
+        });
+      }
     },
     syncAttachedPlayerSessions(playerSessions: PlayerSessionSummaryDto[]) {
       this.overlayBySessionId = pruneOverlaySessions(this.overlayBySessionId, playerSessions);
@@ -771,6 +782,156 @@ function hasSunTelemetry(unit: UnitSnapshotDto | null | undefined) {
 
 function hasPlanetTelemetry(unit: UnitSnapshotDto | null | undefined) {
   return !!unit && [unit.planetMetal, unit.planetCarbon, unit.planetHydrogen, unit.planetSilicon].some((value) => typeof value === 'number');
+}
+
+type ResourceCollectionStart = {
+  controllableId: string;
+  source: 'miner' | 'solar';
+  rate: number;
+};
+
+type ResourceCollectionSnapshot = {
+  minerRate: number;
+  solarRate: number;
+  totalRate: number;
+};
+
+function detectResourceCollectionStarts(
+  currentOverlay: Map<string, ControllableOverlayState>,
+  nextOverlay: Record<string, unknown>,
+  message: OwnerOverlayDeltaMessage,
+) {
+  const starts: ResourceCollectionStart[] = [];
+  const seenControllableIds = new Set<string>();
+
+  for (const event of message.events) {
+    if (!event.changes || seenControllableIds.has(event.controllableId)) {
+      continue;
+    }
+
+    seenControllableIds.add(event.controllableId);
+
+    const previousOverlay = objectValue(currentOverlay.get(event.controllableId));
+    const nextOverlayEntry = objectValue(nextOverlay[event.controllableId]);
+    if (!nextOverlayEntry) {
+      continue;
+    }
+
+    const previousSnapshot = readResourceCollectionSnapshot(previousOverlay);
+    const nextSnapshot = readResourceCollectionSnapshot(nextOverlayEntry);
+    if (nextSnapshot.totalRate <= 0 || previousSnapshot.totalRate > 0) {
+      continue;
+    }
+
+    if (nextSnapshot.minerRate > 0) {
+      starts.push({
+        controllableId: event.controllableId,
+        source: 'miner',
+        rate: nextSnapshot.minerRate,
+      });
+      continue;
+    }
+
+    if (nextSnapshot.solarRate > 0) {
+      starts.push({
+        controllableId: event.controllableId,
+        source: 'solar',
+        rate: nextSnapshot.solarRate,
+      });
+    }
+  }
+
+  return starts;
+}
+
+function readResourceCollectionSnapshot(overlayEntry: Record<string, unknown> | undefined): ResourceCollectionSnapshot {
+  const minerRate = readSubsystemRate(overlayEntry, 'resourceminer', ['yield']);
+  const solarRate = readSubsystemRate(overlayEntry, 'energycell', ['collected']);
+
+  return {
+    minerRate,
+    solarRate,
+    totalRate: minerRate + solarRate,
+  };
+}
+
+function readSubsystemRate(
+  overlayEntry: Record<string, unknown> | undefined,
+  subsystemToken: string,
+  statTokens: string[],
+) {
+  const subsystem = readSubsystemEntryByToken(overlayEntry, subsystemToken);
+  if (!subsystem) {
+    return 0;
+  }
+
+  const stats = Array.isArray(subsystem.stats) ? subsystem.stats : [];
+  for (const statEntry of stats) {
+    const record = objectValue(statEntry);
+    if (!record) {
+      continue;
+    }
+
+    const label = normalizeSubsystemToken(stringValue(record.label, ''));
+    if (!statTokens.includes(label)) {
+      continue;
+    }
+
+    const value = parseLeadingMetric(stringValue(record.value, ''));
+    if (value !== null) {
+      return value;
+    }
+  }
+
+  return 0;
+}
+
+function readSubsystemEntryByToken(
+  overlayEntry: Record<string, unknown> | undefined,
+  subsystemToken: string,
+) {
+  if (!overlayEntry) {
+    return undefined;
+  }
+
+  const rawSubsystems = overlayEntry.subsystems ?? overlayEntry.modules;
+  if (!Array.isArray(rawSubsystems)) {
+    return undefined;
+  }
+
+  for (const subsystemEntry of rawSubsystems) {
+    const record = objectValue(subsystemEntry);
+    if (!record) {
+      continue;
+    }
+
+    const identifiers = [
+      stringValue(record.id, ''),
+      stringValue(record.name, ''),
+      stringValue(record.slot, ''),
+      stringValue(record.kind, ''),
+    ].map((token) => normalizeSubsystemToken(token));
+
+    if (identifiers.includes(subsystemToken)) {
+      return record;
+    }
+  }
+
+  return undefined;
+}
+
+function normalizeSubsystemToken(value: string) {
+  return value.trim().toLowerCase().replace(/[\s_-]+/g, '');
+}
+
+function parseLeadingMetric(value: string) {
+  const match = value.match(/-?\d+(?:[.,]\d+)?/);
+  if (!match) {
+    return null;
+  }
+
+  const parsed = Number(match[0].replace(',', '.'));
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function deriveScannerMode(scannerState: Record<string, unknown> | undefined): ScannerMode {

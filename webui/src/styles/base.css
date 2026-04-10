@@ -2347,6 +2347,13 @@ h2 {
   letter-spacing: 0.05em;
 }
 
+.selection-runtime-status {
+  color: var(--secondary);
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+  text-align: right;
+}
+
 .selection-detail-groups {
   display: grid;
   gap: 0.45rem;
