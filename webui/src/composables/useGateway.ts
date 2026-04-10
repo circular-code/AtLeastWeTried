@@ -470,6 +470,20 @@ function createGatewayApi() {
     client.send(envelope.message);
   }
 
+  function setSubsystemMode(controllableId: string, subsystemId: string, mode: string, value?: number, targetId?: string) {
+    if (!controllableId || !subsystemId || !mode) {
+      return;
+    }
+
+    const envelope = buildSetSubsystemModeCommand(controllableId, subsystemId, mode, value, targetId);
+    gameStore.trackCommand(envelope.commandId, {
+      label: `Set ${subsystemId} ${mode}`,
+      subject: gameStore.getControllableLabel(controllableId),
+    });
+
+    client.send(envelope.message);
+  }
+
   return {
     savedConnections,
     pendingAttachments,
@@ -498,5 +512,6 @@ function createGatewayApi() {
     setNavigationTarget,
     clearNavigationTarget,
     upgradeSubsystem,
+    setSubsystemMode,
   };
 }

@@ -1015,6 +1015,13 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         var controllable = FindControllable(controllableId);
         if (controllable is not ClassicShipControllable classic)
             return Rejected(commandId, "invalid_controllable", "Controllable not found or not a classic ship.");
+        var subsystem = string.IsNullOrWhiteSpace(subsystemId)
+            ? null
+            : FindSubsystem(controllable, subsystemId);
+        if (subsystem is DynamicShotFabricatorSubsystem)
+            subsystemId = "ShotFabricator";
+        else if (subsystem is DynamicInterceptorFabricatorSubsystem)
+            subsystemId = "InterceptorFabricator";
 
         bool tacticalOnlyMode =
             string.Equals(subsystemId, "Tactical", StringComparison.OrdinalIgnoreCase) ||
@@ -1065,13 +1072,33 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 break;
             case "ShotFabricator":
             case "shotFabricator":
+            case "Shot Fabricator":
                 if (mode == "on") await classic.ShotFabricator.On();
                 else if (mode == "off") await classic.ShotFabricator.Off();
+                else if (mode == "set")
+                {
+                    if (payload?.TryGetProperty("value", out var rateEl) != true || rateEl.ValueKind == System.Text.Json.JsonValueKind.Null)
+                        return Rejected(commandId, "missing_value", "value is required when setting a shot fabricator rate.");
+
+                    await classic.ShotFabricator.Set(rateEl.GetSingle());
+                }
+                else
+                    return Rejected(commandId, "invalid_mode", $"Unsupported shot fabricator mode: {mode}");
                 break;
             case "InterceptorFabricator":
             case "interceptorFabricator":
+            case "Interceptor Fabricator":
                 if (mode == "on") await classic.InterceptorFabricator.On();
                 else if (mode == "off") await classic.InterceptorFabricator.Off();
+                else if (mode == "set")
+                {
+                    if (payload?.TryGetProperty("value", out var rateEl) != true || rateEl.ValueKind == System.Text.Json.JsonValueKind.Null)
+                        return Rejected(commandId, "missing_value", "value is required when setting an interceptor fabricator rate.");
+
+                    await classic.InterceptorFabricator.Set(rateEl.GetSingle());
+                }
+                else
+                    return Rejected(commandId, "invalid_mode", $"Unsupported interceptor fabricator mode: {mode}");
                 break;
             case "Tactical":
             case "tactical":
@@ -1100,6 +1127,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                     }
                 }
                 break;
+            default:
+                return Rejected(commandId, subsystem is null ? "invalid_subsystem" : "unsupported_subsystem", $"Unsupported subsystem mode control for: {subsystemId}");
         }
 
         return Completed(commandId);
