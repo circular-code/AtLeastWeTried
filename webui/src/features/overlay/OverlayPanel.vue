@@ -22,7 +22,6 @@ const entries = computed(() => gameStore.ownedControllables
 const statIcons: Record<string, string> = {
   Ammo: `<svg viewBox="0 0 16 16" focusable="false"><circle cx="8" cy="8" r="2.8" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 2v2.4M8 11.6V14M2 8h2.4M11.6 8H14" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>`,
   Speed: `<svg viewBox="0 0 16 16" focusable="false"><path d="M2.8 12.5A5.5 5.5 0 1 1 13.2 12.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M8 9.8 10.5 7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="8" cy="9.8" r="1.1" fill="currentColor"/></svg>`,
-  Heading: `<svg viewBox="0 0 16 16" focusable="false"><path d="M8 2v12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M5.2 5 8 2.2l2.8 2.8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   Drive: `<svg viewBox="0 0 16 16" focusable="false"><path d="M6.5 4Q8 2 9.5 4l2 6H4.5z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M5.5 10.5 8 14.5 10.5 10.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 10.5v2" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" opacity="0.55"/></svg>`,
 };
 
@@ -60,10 +59,6 @@ function updateShipColor(controllableId: string, event: Event) {
   uiStore.setCustomShipColor(controllableId, color);
 }
 
-function resetShipColor(controllableId: string) {
-  uiStore.clearCustomShipColor(controllableId);
-}
-
 function handleLifecycleAction(controllableId: string, alive: boolean) {
   if (!alive) {
     gateway.continueShip(controllableId);
@@ -72,6 +67,32 @@ function handleLifecycleAction(controllableId: string, alive: boolean) {
 
   uiStore.setSelectedControllable(controllableId);
   uiStore.requestViewportJump(controllableId);
+}
+
+function visibleBadges(entry: NonNullable<ReturnType<typeof gameStore.overlayEntry>>) {
+  return entry.badges.filter((badge) => badge.label.toLowerCase() !== 'selected');
+}
+
+function visibleStats(entry: NonNullable<ReturnType<typeof gameStore.overlayEntry>>) {
+  const filteredStats = entry.stats.filter((stat) => stat.label !== 'Heading');
+  const telemetry = energyTelemetry(entry.id);
+
+  return [
+    ...filteredStats,
+    {
+      label: 'Delta',
+      value: telemetry.delta,
+    },
+  ];
+}
+
+function statLabelText(stat: { label: string }) {
+  return stat.label === 'Delta' ? '±' : stat.label;
+}
+
+function compactClusterLabel(clusterLabel: string) {
+  const match = clusterLabel.match(/C\d+/i);
+  return match?.[0]?.toUpperCase() ?? 'C0';
 }
 
 function toggleSubsystems(controllableId: string) {
@@ -255,85 +276,73 @@ function humanizeSubsystemName(value: string) {
         @click="selectControllable(entry.id)"
       >
         <div class="owner-overlay-summary">
-          <div class="owner-overlay-head">
-            <div class="owner-overlay-title">
-              <h3>{{ entry.displayName }}</h3>
-              <p>{{ entry.kind }}</p>
-            </div>
-            <div class="owner-overlay-head-actions">
-              <label class="ship-color-control" title="Ship color">
-                <span class="ship-color-control-label">Color</span>
-                <input
-                  class="ship-color-input"
-                  type="color"
-                  :value="shipColorValue(entry.id)"
-                  @click.stop
-                  @input.stop="updateShipColor(entry.id, $event)"
-                />
-              </label>
-              <button
-                v-if="customShipColors[entry.id]"
-                class="button-ghost button-compact ship-color-reset"
-                type="button"
-                title="Reset ship color"
-                @click.stop="resetShipColor(entry.id)"
-              >
-                Reset
-              </button>
-              <div class="owner-overlay-badges">
-              <span v-for="badge in entry.badges" :key="badge.label" class="overlay-badge" :class="`is-${badge.tone}`">{{ badge.label }}</span>
+            <div class="owner-overlay-head">
+              <div class="owner-overlay-title-topline">
+                <h3>{{ entry.displayName }}</h3>
+                <span class="owner-overlay-inline-meta owner-overlay-inline-meta--type">{{ entry.kind }}</span>
+                <span class="owner-overlay-inline-meta">{{ compactClusterLabel(entry.clusterLabel) }}</span>
+                <span class="owner-overlay-inline-meta">{{ entry.statusLabel }}</span>
+              </div>
+              <div class="owner-overlay-head-actions">
+                <div class="owner-overlay-badges">
+              <span v-for="badge in visibleBadges(entry)" :key="badge.label" class="overlay-badge" :class="`is-${badge.tone}`">{{ badge.label }}</span>
               </div>
             </div>
-          </div>
-          <div class="owner-overlay-meta">
-            <span>{{ entry.clusterLabel }}</span>
-            <span>{{ entry.statusLabel }}</span>
           </div>
         </div>
 
         <div class="owner-overlay-gauges">
           <GaugeMeter v-for="meter in entry.meters" :key="meter.label" :meter="meter" />
+          <div class="owner-overlay-energy owner-overlay-energy--stack">
+            <div class="owner-overlay-energy-stat">
+              <span class="owner-overlay-energy-label">Collect</span>
+              <strong class="is-positive">{{ energyTelemetry(entry.id).collection }}</strong>
+            </div>
+            <div class="owner-overlay-energy-stat">
+              <span class="owner-overlay-energy-label">Drain</span>
+              <strong class="is-negative">{{ energyTelemetry(entry.id).drain }}</strong>
+            </div>
+          </div>
         </div>
 
         <dl class="overlay-stat-grid owner-overlay-stats">
-          <div v-for="stat in entry.stats" :key="stat.label" :title="stat.label">
+          <div v-for="stat in visibleStats(entry)" :key="stat.label" :title="stat.label" :class="{ 'is-delta': stat.label === 'Delta' }">
             <dt>
               <span v-if="statIcons[stat.label]" class="stat-icon" v-html="statIcons[stat.label]" aria-hidden="true" />
-              <template v-else>{{ stat.label }}</template>
+              <template v-else>{{ statLabelText(stat) }}</template>
             </dt>
-            <dd>{{ stat.value }}</dd>
+            <dd :class="{ 'is-positive': stat.label === 'Delta' && stat.value.startsWith('+'), 'is-negative': stat.label === 'Delta' && stat.value.startsWith('-') }">{{ stat.value }}</dd>
           </div>
         </dl>
-
-        <div class="owner-overlay-energy">
-          <div class="owner-overlay-energy-stat">
-            <span class="owner-overlay-energy-label">Collect</span>
-            <strong class="is-positive">{{ energyTelemetry(entry.id).collection }}</strong>
-          </div>
-          <div class="owner-overlay-energy-stat">
-            <span class="owner-overlay-energy-label">Drain</span>
-            <strong class="is-negative">{{ energyTelemetry(entry.id).drain }}</strong>
-          </div>
-          <div class="owner-overlay-energy-stat">
-            <span class="owner-overlay-energy-label">Delta</span>
-            <strong :class="`is-${energyTelemetry(entry.id).deltaTone}`">{{ energyTelemetry(entry.id).delta }}</strong>
-          </div>
-        </div>
 
         <div class="actions-compact">
           <button v-if="!entry.alive" class="button-secondary button-compact" type="button" @click.stop="handleLifecycleAction(entry.id, entry.alive)">
             Spawn
           </button>
           <button v-else class="button-ghost button-compact" type="button" @click.stop="gateway.destroyShip(entry.id)">Destroy</button>
-          <button class="button-danger button-compact" type="button" @click.stop="gateway.removeShip(entry.id)">Remove</button>
           <button
             class="button-secondary button-compact owner-overlay-action-button"
             :class="{ 'is-ready': hasAvailableSubsystemUpgrade(entry.id) }"
             type="button"
+            :title="openSubsystemsForId === entry.id ? 'Hide modules' : 'Show modules'"
+            aria-label="Modules"
             @click.stop="toggleSubsystems(entry.id)"
           >
-            Modules
+            <svg viewBox="0 0 16 16" focusable="false" aria-hidden="true">
+              <path d="M6.6 1.9h2.8l.35 1.6c.33.11.65.25.94.43l1.45-.77 1.4 1.4-.77 1.45c.18.29.32.61.43.94l1.6.35v2.8l-1.6.35a4.6 4.6 0 0 1-.43.94l.77 1.45-1.4 1.4-1.45-.77c-.29.18-.61.32-.94.43l-.35 1.6H6.6l-.35-1.6a4.6 4.6 0 0 1-.94-.43l-1.45.77-1.4-1.4.77-1.45a4.6 4.6 0 0 1-.43-.94l-1.6-.35V6.6l1.6-.35c.11-.33.25-.65.43-.94l-.77-1.45 1.4-1.4 1.45.77c.29-.18.61-.32.94-.43z" fill="none" stroke="currentColor" stroke-linejoin="round" stroke-width="1.1"></path>
+              <circle cx="8" cy="8" r="2.05" fill="none" stroke="currentColor" stroke-width="1.1"></circle>
+            </svg>
           </button>
+          <label class="button-secondary button-compact ship-color-control" title="Ship color">
+            <input
+              class="ship-color-input"
+              type="color"
+              :value="shipColorValue(entry.id)"
+              @click.stop
+              @input.stop="updateShipColor(entry.id, $event)"
+            />
+          </label>
+          <button class="button-danger button-compact" type="button" @click.stop="gateway.removeShip(entry.id)">Remove</button>
         </div>
       </button>
 
@@ -356,30 +365,25 @@ function humanizeSubsystemName(value: string) {
   align-items: center;
   justify-content: flex-end;
   gap: 0.35rem;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  flex: 0 0 auto;
 }
 
 .ship-color-control {
   display: inline-flex;
   align-items: center;
-  gap: 0.32rem;
-  padding: 0.18rem 0.38rem;
+  justify-content: center;
+  width: 2rem;
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
   cursor: pointer;
 }
 
-.ship-color-control-label {
-  color: var(--text-muted);
-  font-size: 0.54rem;
-  line-height: 1;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
 .ship-color-input {
-  width: 1.1rem;
-  height: 1.1rem;
+  width: 1.05rem;
+  height: 1.05rem;
   padding: 0;
   border: none;
   border-radius: 999px;
@@ -401,14 +405,18 @@ function humanizeSubsystemName(value: string) {
   border-radius: 999px;
 }
 
-.ship-color-reset {
-  padding-inline: 0.46rem;
-  font-size: 0.58rem;
+.owner-overlay-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  min-width: 2rem;
+  padding-inline: 0;
 }
 
-.owner-overlay-action-button {
-  font-size: 0.64rem;
-  padding-inline: 0.52rem;
+.owner-overlay-action-button svg {
+  width: 0.95rem;
+  height: 0.95rem;
 }
 
 .owner-overlay-action-button.is-ready {
@@ -417,16 +425,83 @@ function humanizeSubsystemName(value: string) {
   background: rgba(52, 138, 92, 0.28);
 }
 
+.owner-overlay-item.is-selected {
+  border-color: rgba(239, 191, 132, 0.72);
+  box-shadow:
+    0 18px 38px rgba(0, 0, 0, 0.24),
+    inset 0 0 0 2px rgba(239, 191, 132, 0.42),
+    0 0 0 1px rgba(239, 191, 132, 0.18);
+}
+
+.owner-overlay-summary {
+  gap: 0;
+}
+
+.owner-overlay-head {
+  align-items: flex-start;
+  min-height: 24px;
+}
+
+.owner-overlay-title-topline {
+  display: flex;
+  align-items: baseline;
+  gap: 0.32rem;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.owner-overlay-title-block h3 {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1 1 auto;
+}
+
+.owner-overlay-inline-meta {
+  flex: 0 0 auto;
+  max-width: 4.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 0.56rem;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.owner-overlay-inline-meta--type {
+  max-width: 7rem;
+}
+
+.owner-overlay-badges {
+  flex-wrap: nowrap;
+}
+
+.owner-overlay-badges:empty {
+  display: none;
+}
+
 .owner-overlay-energy {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.35rem;
 }
 
+.owner-overlay-energy--stack {
+  grid-template-columns: 1fr;
+  gap: 0.22rem;
+  align-self: center;
+}
+
 .owner-overlay-energy-stat {
   display: grid;
   gap: 0.08rem;
-  padding: 0.34rem 0.42rem;
+  padding: 0.28rem 0.34rem;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.04);
 }

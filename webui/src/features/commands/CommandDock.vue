@@ -284,12 +284,21 @@ function humanizeSubsystemName(value: string) {
 
 <template>
   <section v-if="activeControllableId" class="command-dock panel-glass">
-    <div class="dock-group">
-      <span class="dock-label">Thrust</span>
-      <input v-model.number="thrust" class="dock-slider" type="range" min="0" max="1" step="0.05" />
-      <span class="dock-value">{{ thrust.toFixed(2) }}</span>
-      <button class="dock-btn" type="button" @click="gateway.fireWeapon(activeControllableId)">Fire</button>
-    </div>
+        <div class="dock-group-stack dock-group-stack--combat">
+          <div class="dock-group">
+            <span class="dock-label">Tactical</span>
+            <button class="dock-btn" :class="{ active: tacticalMode === 'enemy' }" type="button" @click="setTactical('enemy')">Auto</button>
+            <button class="dock-btn" :class="{ active: tacticalMode === 'target' }" type="button" @click="setTactical('target')">Target</button>
+            <button class="dock-btn" :class="{ active: tacticalMode === 'off' }" type="button" @click="setTactical('off')">Off</button>
+          </div>
+          <span class="dock-sep dock-sep--horizontal" aria-hidden="true"></span>
+          <div class="dock-group">
+            <span class="dock-label">Thrust</span>
+            <input v-model.number="thrust" class="dock-slider" type="range" min="0" max="1" step="0.05" />
+            <span class="dock-value">{{ thrust.toFixed(2) }}</span>
+            <!-- <button class="dock-btn" type="button" @click="gateway.fireWeapon(activeControllableId)">Fire</button> -->
+          </div>
+        </div>
 
     <span class="dock-sep" aria-hidden="true"></span>
 
@@ -334,10 +343,6 @@ function humanizeSubsystemName(value: string) {
     <span class="dock-sep" aria-hidden="true"></span>
 
     <div class="dock-group">
-      <span class="dock-label">Tactical</span>
-      <button class="dock-btn" :class="{ active: tacticalMode === 'enemy' }" type="button" @click="setTactical('enemy')">Auto</button>
-      <button class="dock-btn" :class="{ active: tacticalMode === 'target' }" type="button" @click="setTactical('target')">Target</button>
-      <button class="dock-btn" :class="{ active: tacticalMode === 'off' }" type="button" @click="setTactical('off')">Off</button>
       <button class="dock-btn" type="button" @click="gateway.clearNavigationTarget(activeControllableId)">Clear Nav</button>
       <button v-if="shotFabricator" class="dock-btn" :class="{ active: shotFabricatorRunning }" type="button" @click="toggleShotRegeneration">
         {{ shotFabricatorRunning ? 'Stop Regen' : 'Regen Shots' }}

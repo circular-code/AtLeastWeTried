@@ -180,7 +180,7 @@ h2 {
   align-items: center;
   justify-content: center;
   gap: 0.22rem;
-  width: min(220px, calc(100% - 1.5rem));
+  width: min(320px, calc(100% - 1.5rem));
   padding: 0.18rem 0.22rem;
   transform: translateX(-50%);
   pointer-events: auto;
@@ -190,17 +190,17 @@ h2 {
 .score-strip-team {
   display: flex;
   align-items: center;
-  gap: 0.28rem;
+  gap: 0.4rem;
   min-width: 0;
   flex: 1 1 0;
-  padding: 0.18rem 0.32rem;
+  padding: 0.24rem 0.42rem;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.04);
 }
 
 .score-strip-swatch {
-  width: 0.45rem;
-  height: 0.45rem;
+  width: 0.68rem;
+  height: 0.68rem;
   border-radius: 999px;
   flex: 0 0 auto;
   background: var(--team-color, #808080);
@@ -214,7 +214,7 @@ h2 {
 
 .score-strip-copy strong,
 .score-strip-value {
-  font-size: 0.62rem;
+  font-size: 0.93rem;
   line-height: 1;
   color: #f4ecda;
 }
@@ -229,7 +229,7 @@ h2 {
 
 .score-strip-value {
   flex: 0 0 auto;
-  min-width: 0.7rem;
+  min-width: 1.1rem;
   text-align: right;
   font-weight: 700;
 }
@@ -466,15 +466,15 @@ h2 {
 .owner-overlay-gauges {
   grid-area: gauges;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.42rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(56px, 0.9fr);
+  gap: 0.3rem;
   align-items: start;
 }
 
 .owner-overlay-gauge-shell {
   display: grid;
   justify-items: center;
-  gap: 0.2rem;
+  gap: 0.12rem;
   min-width: 0;
 }
 
@@ -486,9 +486,9 @@ h2 {
   --gauge-ratio: 0;
   --gauge-fill: var(--accent);
   position: relative;
-  width: 58px;
+  width: 48px;
   aspect-ratio: 1;
-  padding: 5px;
+  padding: 4px;
   border-radius: 50%;
   background: conic-gradient(var(--gauge-fill) calc(var(--gauge-ratio) * 1turn), rgba(255, 255, 255, 0.08) 0turn);
   box-shadow:
@@ -499,7 +499,7 @@ h2 {
 .owner-overlay-gauge::before {
   content: '';
   position: absolute;
-  inset: 4px;
+  inset: 3px;
   border-radius: inherit;
   background: rgba(4, 7, 9, 0.88);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
@@ -510,31 +510,35 @@ h2 {
   z-index: 1;
   display: grid;
   place-items: center;
+  align-content: center;
+  gap: 0;
   height: 100%;
   border-radius: inherit;
   text-align: center;
 }
 
 .owner-overlay-gauge-core strong {
-  font-size: 0.72rem;
+  font-size: 0.64rem;
   line-height: 1;
   font-weight: 700;
+  display: block;
 }
 
 .owner-overlay-gauge-core span {
-  margin-top: 0.12rem;
+  margin-top: 0.02rem;
   color: var(--text-muted);
-  font-size: 0.52rem;
+  font-size: 0.46rem;
   line-height: 1;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+  display: block;
 }
 
 .owner-overlay-gauge-shell small {
   display: block;
   max-width: 100%;
   color: var(--text-muted);
-  font-size: 0.52rem;
+  font-size: 0.46rem;
   line-height: 1.1;
   text-align: center;
   word-break: break-word;
@@ -556,18 +560,24 @@ h2 {
   grid-area: stats;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.2rem 0.45rem;
+  gap: 0.2rem 0.35rem;
 }
 
 .overlay-stat-grid.owner-overlay-stats div {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.4rem;
-  padding: 0.34rem 0.42rem;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.03);
+  justify-content: center;
+  gap: 0.3rem;
+  min-height: 1.8rem;
+  padding: 0.34rem 0.34rem;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
   min-width: 0;
+}
+
+.overlay-stat-grid.owner-overlay-stats div.is-delta {
+  justify-content: center;
+  gap: 0.24rem;
 }
 
 .overlay-stat-grid.owner-overlay-stats dt {
@@ -577,9 +587,10 @@ h2 {
   line-height: 1.1;
   text-transform: uppercase;
   letter-spacing: 0.07em;
-  white-space: nowrap;
   display: flex;
   align-items: center;
+  gap: 0.16rem;
+  white-space: nowrap;
 }
 
 .overlay-stat-grid.owner-overlay-stats dd {
@@ -588,8 +599,16 @@ h2 {
   line-height: 1.1;
   color: #f4ecda;
   font-weight: 600;
-  text-align: right;
+  text-align: center;
   white-space: nowrap;
+}
+
+.overlay-stat-grid.owner-overlay-stats dd.is-positive {
+  color: #9ff3bc;
+}
+
+.overlay-stat-grid.owner-overlay-stats dd.is-negative {
+  color: #ff9e94;
 }
 
 .overlay-stat-grid.owner-overlay-stats .stat-icon {
@@ -1255,6 +1274,11 @@ h2 {
   gap: 0.24rem;
 }
 
+.dock-group-stack--combat {
+  gap: 0.24rem;
+  margin-right: 0.45rem;
+}
+
 .dock-group--scanner-metrics {
   gap: 0.55rem;
   flex-wrap: nowrap;
@@ -1319,6 +1343,11 @@ h2 {
   height: 1.2rem;
   background: rgba(124, 179, 221, 0.18);
   flex-shrink: 0;
+}
+
+.dock-sep--horizontal {
+  width: 100%;
+  height: 1px;
 }
 
 .panel {
@@ -2119,7 +2148,7 @@ h2 {
   .score-strip {
     left: 0.75rem;
     right: 0.75rem;
-    width: min(220px, calc(100% - 1.5rem));
+    width: min(320px, calc(100% - 1.5rem));
     transform: none;
     margin-inline: auto;
   }
