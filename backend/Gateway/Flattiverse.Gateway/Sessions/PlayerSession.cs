@@ -1001,35 +1001,35 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             case "main_weapon":
                 if (targetX.HasValue && targetY.HasValue)
                 {
-                    const float ultraMegaCuteSparkleRelativeSpeed = 2f;
-                    const ushort ultraMegaCuteSparkleTicks = 80;
-                    const float ultraMegaCuteSparkleLoad = 12f;
-                    const float ultraMegaCuteSparkleDamage = 8f;
+                    const float cosmicMochiBlasterRelativeSpeed = 2f;
+                    const ushort cosmicMochiBlasterTicks = 80;
+                    const float cosmicMochiBlasterLoad = 12f;
+                    const float cosmicMochiBlasterDamage = 8f;
 
-                    float deltaX = targetX.Value - classic.Position.X;
-                    float deltaY = targetY.Value - classic.Position.Y;
-                    Vector ultraMegaCuteSparkleMovement = MathF.Abs(deltaX) < 0.0001f && MathF.Abs(deltaY) < 0.0001f
-                        ? Vector.FromAngleLength(classic.Angle, ultraMegaCuteSparkleRelativeSpeed)
-                        : Vector.FromAngleLength(MathF.Atan2(deltaY, deltaX), ultraMegaCuteSparkleRelativeSpeed);
+                    float puffDeltaX = targetX.Value - classic.Position.X;
+                    float puffDeltaY = targetY.Value - classic.Position.Y;
+                    Vector cosmicMochiBlasterMovement = MathF.Abs(puffDeltaX) < 0.0001f && MathF.Abs(puffDeltaY) < 0.0001f
+                        ? Vector.FromAngleLength(classic.Angle, cosmicMochiBlasterRelativeSpeed)
+                        : Vector.FromAngleLength(MathF.Atan2(puffDeltaY, puffDeltaX), cosmicMochiBlasterRelativeSpeed);
 
-                    await classic.ShotLauncher.Shoot(ultraMegaCuteSparkleMovement, ultraMegaCuteSparkleTicks, ultraMegaCuteSparkleLoad, ultraMegaCuteSparkleDamage);
+                    await classic.ShotLauncher.Shoot(cosmicMochiBlasterMovement, cosmicMochiBlasterTicks, cosmicMochiBlasterLoad, cosmicMochiBlasterDamage);
                     _tacticalService.RegisterSuccessfulFire(controllableId, _latestGalaxyTick);
                     result = new Dictionary<string, object?>
                     {
                         { "mode", "direct" },
                         { "targetX", targetX.Value },
                         { "targetY", targetY.Value },
-                        { "ticks", ultraMegaCuteSparkleTicks },
+                        { "ticks", cosmicMochiBlasterTicks },
                         {
                             "relativeMovement", new Dictionary<string, object?>
                             {
-                                { "x", ultraMegaCuteSparkleMovement.X },
-                                { "y", ultraMegaCuteSparkleMovement.Y },
-                                { "length", ultraMegaCuteSparkleMovement.Length }
+                                { "x", cosmicMochiBlasterMovement.X },
+                                { "y", cosmicMochiBlasterMovement.Y },
+                                { "length", cosmicMochiBlasterMovement.Length }
                             }
                         },
-                        { "load", ultraMegaCuteSparkleLoad },
-                        { "damage", ultraMegaCuteSparkleDamage }
+                        { "load", cosmicMochiBlasterLoad },
+                        { "damage", cosmicMochiBlasterDamage }
                     };
                     break;
                 }
