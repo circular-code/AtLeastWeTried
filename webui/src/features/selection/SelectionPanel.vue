@@ -13,12 +13,21 @@ const selectionEntry = computed(() => gameStore.selectionEntry(uiStore.lastSelec
 const activeControllableId = computed(() => uiStore.selectedControllableId || (gameStore.ownedControllables[0]?.controllableId ?? ''));
 const scannerMode = computed(() => gameStore.scannerModeFor(activeControllableId.value));
 const scannerTargetId = computed(() => gameStore.scannerTargetFor(activeControllableId.value) ?? '');
+const trackedUnitColors = computed(() => uiStore.trackedUnitColors);
+const tacticalMode = computed(() => uiStore.tacticalMode);
 const canInitiateTargetedScan = computed(() => {
   if (!selectionEntry.value || !activeControllableId.value) {
     return false;
   }
 
   return selectionEntry.value.id !== activeControllableId.value;
+});
+const canSetAsTarget = computed(() => {
+  if (!selectionEntry.value || !activeControllableId.value) {
+    return false;
+  }
+
+  return tacticalMode.value === 'target' && selectionEntry.value.id !== activeControllableId.value;
 });
 
 function initiateTargetedScan() {
@@ -27,6 +36,31 @@ function initiateTargetedScan() {
   }
 
   gateway.initiateTargetedScan(activeControllableId.value, selectionEntry.value.id);
+}
+
+function toggleTrackedSelection() {
+  if (!selectionEntry.value) {
+    return;
+  }
+
+  uiStore.toggleTrackedUnit(selectionEntry.value.id);
+}
+
+function isUnitTracked(unitId: string) {
+  return !!trackedUnitColors.value[unitId];
+}
+
+function trackedUnitButtonStyle(unitId: string) {
+  const color = trackedUnitColors.value[unitId];
+  return color ? { '--track-color': color } : undefined;
+}
+
+function setAsTarget() {
+  if (!selectionEntry.value || !activeControllableId.value) {
+    return;
+  }
+
+  gateway.setTacticalTarget(activeControllableId.value, selectionEntry.value.id);
 }
 </script>
 
@@ -55,9 +89,29 @@ function initiateTargetedScan() {
       </div>
 
       <div class="selection-scan-actions">
-        <button class="button-secondary button-compact" type="button" :disabled="!canInitiateTargetedScan" @click="initiateTargetedScan">
-          Initiate Scan
-        </button>
+        <div class="actions-tight">
+          <button class="button-secondary button-compact" type="button" :disabled="!canInitiateTargetedScan" @click="initiateTargetedScan">
+            Initiate Scan
+          </button>
+          <button
+            class="button-secondary button-compact"
+            :class="{ 'is-active': isUnitTracked(selectionEntry.id) }"
+            :style="trackedUnitButtonStyle(selectionEntry.id)"
+            type="button"
+            @click="toggleTrackedSelection"
+          >
+            {{ isUnitTracked(selectionEntry.id) ? 'Tracked' : 'Track' }}
+          </button>
+          <button
+            v-if="tacticalMode === 'target'"
+            class="button-secondary button-compact"
+            type="button"
+            :disabled="!canSetAsTarget"
+            @click="setAsTarget"
+          >
+            Set as Target
+          </button>
+        </div>
         <span v-if="scannerMode === 'targeted' && scannerTargetId === selectionEntry.id" class="selection-scan-status">Target scan active</span>
       </div>
 

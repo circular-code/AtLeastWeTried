@@ -1,16 +1,19 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { useGateway } from '../../composables/useGateway';
 import { useGameStore } from '../../stores/game';
 import { useUiStore } from '../../stores/ui';
 import GaugeMeter from '../../shared/GaugeMeter.vue';
+import ShipSubsystemPopover from './ShipSubsystemPopover.vue';
 import ShipCreator from './ShipCreator.vue';
 
 const gameStore = useGameStore();
 const uiStore = useUiStore();
 const gateway = useGateway();
+const openSubsystemsForId = ref('');
 
 const activeControllableId = computed(() => uiStore.selectedControllableId || (gameStore.ownedControllables[0]?.controllableId ?? ''));
+const ownerOverlay = computed(() => gameStore.ownerOverlay as Record<string, Record<string, unknown> | undefined>);
 const entries = computed(() => gameStore.ownedControllables
   .map((entry) => gameStore.overlayEntry(entry.controllableId))
   .filter((entry): entry is NonNullable<ReturnType<typeof gameStore.overlayEntry>> => !!entry));
@@ -24,6 +27,150 @@ const statIcons: Record<string, string> = {
 
 function selectControllable(controllableId: string) {
   uiStore.setSelectedControllable(controllableId);
+}
+
+function handleLifecycleAction(controllableId: string, alive: boolean) {
+  if (!alive) {
+    gateway.continueShip(controllableId);
+    return;
+  }
+
+  uiStore.setSelectedControllable(controllableId);
+  uiStore.requestViewportJump(controllableId);
+}
+
+function toggleSubsystems(controllableId: string) {
+  openSubsystemsForId.value = openSubsystemsForId.value === controllableId ? '' : controllableId;
+}
+
+function hasAvailableSubsystemUpgrade(controllableId: string) {
+  const overlayState = ownerOverlay.value[controllableId];
+  const rawSubsystems = overlayState?.subsystems ?? overlayState?.modules;
+  if (!Array.isArray(rawSubsystems)) {
+    return false;
+  }
+
+  const availableResources = readAvailableUpgradeResources(rawSubsystems);
+  return rawSubsystems.some((entry) => {
+    if (!entry || typeof entry !== 'object') {
+      return false;
+    }
+
+    const subsystem = entry as Record<string, unknown>;
+    if (subsystem.canUpgrade !== true) {
+      return false;
+    }
+
+    const costRecord = readRecord(subsystem.nextTierCosts);
+    if (!costRecord) {
+      return false;
+    }
+
+    const costs = {
+      energy: readNumeric(costRecord.energy) ?? 0,
+      metal: readNumeric(costRecord.metal) ?? 0,
+      carbon: readNumeric(costRecord.carbon) ?? 0,
+      hydrogen: readNumeric(costRecord.hydrogen) ?? 0,
+      silicon: readNumeric(costRecord.silicon) ?? 0,
+      ions: readNumeric(costRecord.ions) ?? 0,
+      neutrinos: readNumeric(costRecord.neutrinos) ?? 0,
+    };
+
+    return Object.entries(costs).every(([resource, required]) => {
+      if (required <= 0) {
+        return true;
+      }
+
+      const available = availableResources[resource as keyof typeof availableResources];
+      return available !== null && available >= required;
+    });
+  });
+}
+
+function readAvailableUpgradeResources(rawSubsystems: unknown[]) {
+  return {
+    energy: readSubsystemResourceValue(rawSubsystems, 'Energy Battery', 'Charge'),
+    metal: readSubsystemResourceValue(rawSubsystems, 'Cargo', 'Metal'),
+    carbon: readSubsystemResourceValue(rawSubsystems, 'Cargo', 'Carbon'),
+    hydrogen: readSubsystemResourceValue(rawSubsystems, 'Cargo', 'Hydrogen'),
+    silicon: readSubsystemResourceValue(rawSubsystems, 'Cargo', 'Silicon'),
+    ions: readSubsystemResourceValue(rawSubsystems, 'Ion Battery', 'Charge'),
+    neutrinos: readSubsystemResourceValue(rawSubsystems, 'Neutrino Battery', 'Charge'),
+  };
+}
+
+function readSubsystemResourceValue(rawSubsystems: unknown[], subsystemName: string, statLabel: string) {
+  const subsystem = rawSubsystems.find((entry) => {
+    const record = readRecord(entry);
+    if (!record) {
+      return false;
+    }
+
+    return humanizeSubsystemName(readText(record.name, readText(record.slot, ''))) === subsystemName;
+  });
+  const subsystemRecord = readRecord(subsystem);
+  if (!subsystemRecord || !Array.isArray(subsystemRecord.stats)) {
+    return null;
+  }
+
+  const stat = subsystemRecord.stats.find((entry) => {
+    const record = readRecord(entry);
+    return record ? readText(record.label) === statLabel : false;
+  });
+  const statRecord = readRecord(stat);
+  if (!statRecord) {
+    return null;
+  }
+
+  return readLeadingMetric(readText(statRecord.value));
+}
+
+function readLeadingMetric(value: string) {
+  const match = value.match(/-?\d+(?:[.,]\d+)?/);
+  if (!match) {
+    return null;
+  }
+
+  const normalized = match[0].replace(',', '.');
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function readNumeric(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+}
+
+function readText(value: unknown, fallback = '') {
+  return typeof value === 'string' ? value : fallback;
+}
+
+function readRecord(value: unknown) {
+  return typeof value === 'object' && value !== null
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function humanizeSubsystemName(value: string) {
+  const normalized = value
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .trim();
+
+  if (!normalized) {
+    return 'Unknown subsystem';
+  }
+
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 </script>
 
@@ -69,13 +216,44 @@ function selectControllable(controllableId: string) {
         </dl>
 
         <div class="actions-compact">
-          <button class="button-secondary button-compact" type="button" @click.stop="gateway.continueShip(entry.id)">Spawn</button>
-          <button class="button-ghost button-compact" type="button" @click.stop="gateway.destroyShip(entry.id)">Destroy</button>
+          <button v-if="!entry.alive" class="button-secondary button-compact" type="button" @click.stop="handleLifecycleAction(entry.id, entry.alive)">
+            Spawn
+          </button>
+          <button v-else class="button-ghost button-compact" type="button" @click.stop="gateway.destroyShip(entry.id)">Destroy</button>
           <button class="button-danger button-compact" type="button" @click.stop="gateway.removeShip(entry.id)">Remove</button>
+          <button
+            class="button-secondary button-compact owner-overlay-action-button"
+            :class="{ 'is-ready': hasAvailableSubsystemUpgrade(entry.id) }"
+            type="button"
+            @click.stop="toggleSubsystems(entry.id)"
+          >
+            Modules
+          </button>
         </div>
       </button>
 
       <ShipCreator @create="gateway.createShip($event)" />
     </section>
+
+    <ShipSubsystemPopover
+      v-if="openSubsystemsForId"
+      :controllable-id="openSubsystemsForId"
+      :display-name="entries.find((entry) => entry.id === openSubsystemsForId)?.displayName ?? 'Ship'"
+      :overlay-state="ownerOverlay[openSubsystemsForId]"
+      @close="openSubsystemsForId = ''"
+    />
   </aside>
 </template>
+
+<style scoped>
+.owner-overlay-action-button {
+  font-size: 0.64rem;
+  padding-inline: 0.52rem;
+}
+
+.owner-overlay-action-button.is-ready {
+  border-color: rgba(125, 255, 178, 0.9);
+  color: #dfffe8;
+  background: rgba(52, 138, 92, 0.28);
+}
+</style>

@@ -48,6 +48,15 @@ export type ClearTacticalTargetCommandMessage = {
   };
 };
 
+export type UpgradeSubsystemCommandMessage = {
+  type: 'command.upgrade_subsystem';
+  commandId: string;
+  payload: {
+    controllableId: string;
+    subsystemId: string;
+  };
+};
+
 export function buildAttachConnectionMessage(apiKey: string, teamName?: string): AttachConnectionMessage {
   return {
     type: 'connection.attach',
@@ -208,7 +217,14 @@ export function buildClearNavigationTargetCommand(controllableId: string): Comma
   };
 }
 
-export function buildFireWeaponCommand(controllableId: string, weaponId: string, relativeAngle?: number, targetId?: string): CommandEnvelope<FireWeaponCommandMessage> {
+export function buildFireWeaponCommand(
+  controllableId: string,
+  weaponId: string,
+  relativeAngle?: number,
+  targetId?: string,
+  targetX?: number,
+  targetY?: number,
+): CommandEnvelope<FireWeaponCommandMessage> {
   const commandId = createCommandId();
   return {
     commandId,
@@ -220,6 +236,8 @@ export function buildFireWeaponCommand(controllableId: string, weaponId: string,
         weaponId,
         relativeAngle,
         targetId,
+        targetX,
+        targetY,
       },
     },
   };
@@ -238,6 +256,21 @@ export function buildSetSubsystemModeCommand(controllableId: string, subsystemId
         mode,
         value,
         targetId,
+      },
+    },
+  };
+}
+
+export function buildUpgradeSubsystemCommand(controllableId: string, subsystemId: string): CommandEnvelope<UpgradeSubsystemCommandMessage> {
+  const commandId = createCommandId();
+  return {
+    commandId,
+    message: {
+      type: 'command.upgrade_subsystem',
+      commandId,
+      payload: {
+        controllableId,
+        subsystemId,
       },
     },
   };

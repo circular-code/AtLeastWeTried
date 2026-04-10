@@ -126,6 +126,8 @@ export interface FireWeaponCommandPayloadDto {
   weaponId: string;
   relativeAngle?: number | null;
   targetId?: string;
+  targetX?: number | null;
+  targetY?: number | null;
 }
 
 export interface GalaxySnapshotDto {

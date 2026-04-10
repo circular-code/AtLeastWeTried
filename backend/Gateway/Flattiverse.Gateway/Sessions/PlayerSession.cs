@@ -1,3 +1,4 @@
+using System.Globalization;
 using Flattiverse.Connector;
 using Flattiverse.Connector.Events;
 using Flattiverse.Connector.GalaxyHierarchy;
@@ -34,6 +35,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     private readonly TacticalService _tacticalService = new();
     private readonly object _autoFireSync = new();
     private readonly HashSet<string> _autoFireInFlight = new();
+    private uint _latestGalaxyTick;
 
     public string Id => _id;
     public string DisplayName => _displayName;
@@ -260,6 +262,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         changes["teamName"] = Galaxy?.Player?.Team?.Name ?? "";
         changes["alive"] = controllable.Alive;
         changes["active"] = controllable.Active;
+        changes["subsystems"] = BuildSubsystemOverlay(controllable);
 
         if (controllable is ClassicShipControllable classic)
         {
@@ -311,6 +314,374 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         };
     }
 
+    private static List<Dictionary<string, object?>> BuildSubsystemOverlay(Controllable controllable)
+    {
+        var subsystems = new List<Dictionary<string, object?>>
+        {
+            BuildSubsystemEntry(controllable.EnergyBattery),
+            BuildSubsystemEntry(controllable.IonBattery),
+            BuildSubsystemEntry(controllable.NeutrinoBattery),
+            BuildSubsystemEntry(controllable.EnergyCell),
+            BuildSubsystemEntry(controllable.IonCell),
+            BuildSubsystemEntry(controllable.NeutrinoCell),
+            BuildSubsystemEntry(controllable.Hull),
+            BuildSubsystemEntry(controllable.Shield),
+            BuildSubsystemEntry(controllable.Armor),
+            BuildSubsystemEntry(controllable.Repair),
+            BuildSubsystemEntry(controllable.Cargo),
+            BuildSubsystemEntry(controllable.ResourceMiner),
+            BuildSubsystemEntry(controllable.StructureOptimizer)
+        };
+
+        switch (controllable)
+        {
+            case ClassicShipControllable classic:
+                subsystems.Add(BuildSubsystemEntry(classic.NebulaCollector));
+                subsystems.Add(BuildSubsystemEntry(classic.Engine));
+                subsystems.Add(BuildSubsystemEntry(classic.MainScanner));
+                subsystems.Add(BuildSubsystemEntry(classic.SecondaryScanner));
+                subsystems.Add(BuildSubsystemEntry(classic.ShotLauncher));
+                subsystems.Add(BuildSubsystemEntry(classic.ShotMagazine));
+                subsystems.Add(BuildSubsystemEntry(classic.ShotFabricator));
+                subsystems.Add(BuildSubsystemEntry(classic.InterceptorLauncher));
+                subsystems.Add(BuildSubsystemEntry(classic.InterceptorMagazine));
+                subsystems.Add(BuildSubsystemEntry(classic.InterceptorFabricator));
+                subsystems.Add(BuildSubsystemEntry(classic.Railgun));
+                subsystems.Add(BuildSubsystemEntry(classic.JumpDrive));
+                break;
+            case ModernShipControllable modern:
+                subsystems.Add(BuildSubsystemEntry(modern.NebulaCollector));
+                AddSubsystemEntries(subsystems, modern.Engines);
+                AddSubsystemEntries(subsystems, modern.Scanners);
+                AddSubsystemEntries(subsystems, modern.ShotLaunchers);
+                AddSubsystemEntries(subsystems, modern.ShotMagazines);
+                AddSubsystemEntries(subsystems, modern.ShotFabricators);
+                subsystems.Add(BuildSubsystemEntry(modern.InterceptorLauncherE));
+                subsystems.Add(BuildSubsystemEntry(modern.InterceptorLauncherW));
+                subsystems.Add(BuildSubsystemEntry(modern.InterceptorMagazineE));
+                subsystems.Add(BuildSubsystemEntry(modern.InterceptorMagazineW));
+                subsystems.Add(BuildSubsystemEntry(modern.InterceptorFabricatorE));
+                subsystems.Add(BuildSubsystemEntry(modern.InterceptorFabricatorW));
+                AddSubsystemEntries(subsystems, modern.Railguns);
+                subsystems.Add(BuildSubsystemEntry(modern.JumpDrive));
+                break;
+        }
+
+        return subsystems;
+    }
+
+    private static void AddSubsystemEntries<TSubsystem>(List<Dictionary<string, object?>> entries, IReadOnlyList<TSubsystem> subsystems)
+        where TSubsystem : Subsystem
+    {
+        foreach (var subsystem in subsystems)
+            entries.Add(BuildSubsystemEntry(subsystem));
+    }
+
+    private static Dictionary<string, object?> BuildSubsystemEntry(Subsystem subsystem)
+    {
+        var nextTier = ResolveNextTier(subsystem);
+        var hasNextTier = nextTier > subsystem.Tier;
+
+        return new Dictionary<string, object?>
+        {
+            ["id"] = subsystem.Name,
+            ["name"] = subsystem.Name,
+            ["slot"] = subsystem.Slot.ToString(),
+            ["kind"] = subsystem.Kind.ToString(),
+            ["exists"] = subsystem.Exists,
+            ["tier"] = subsystem.Tier,
+            ["targetTier"] = subsystem.TargetTier,
+            ["remainingTicks"] = subsystem.RemainingTierChangeTicks,
+            ["status"] = subsystem.Status.ToString(),
+            ["upgradeTicks"] = subsystem.TargetTierInfo.UpgradeCost.Ticks,
+            ["stats"] = BuildSubsystemStats(subsystem),
+            ["canUpgrade"] = subsystem.RemainingTierChangeTicks == 0 && hasNextTier,
+            ["nextTier"] = hasNextTier ? nextTier : subsystem.Tier,
+            ["nextTierCosts"] = hasNextTier ? BuildCostsOverlay(subsystem.TierInfos[nextTier].UpgradeCost) : null,
+            ["nextTierPreview"] = hasNextTier ? BuildTierPropertyStats(subsystem.TierInfos[nextTier]) : new List<Dictionary<string, object?>>()
+        };
+    }
+
+    private static List<Dictionary<string, object?>> BuildSubsystemStats(Subsystem subsystem)
+    {
+        if (!subsystem.Exists)
+            return BuildTierPropertyStats(ResolvePreviewTierInfo(subsystem));
+
+        var stats = subsystem switch
+        {
+            BatterySubsystem battery => BuildBatteryStats(battery),
+            CargoSubsystem cargo => BuildCargoStats(cargo),
+            ShieldSubsystem shield => BuildShieldStats(shield),
+            HullSubsystem hull => BuildHullStats(hull),
+            ArmorSubsystem armor => BuildArmorStats(armor),
+            RepairSubsystem repair => BuildRepairStats(repair),
+            ResourceMinerSubsystem miner => BuildResourceMinerStats(miner),
+            NebulaCollectorSubsystem collector => BuildNebulaCollectorStats(collector),
+            StructureOptimizerSubsystem optimizer => BuildStructureOptimizerStats(optimizer),
+            ClassicShipEngineSubsystem engine => BuildClassicEngineStats(engine),
+            ModernShipEngineSubsystem engine => BuildModernEngineStats(engine),
+            StaticScannerSubsystem scanner => BuildStaticScannerStats(scanner),
+            DynamicScannerSubsystem scanner => BuildDynamicScannerStats(scanner),
+            DynamicShotMagazineSubsystem magazine => BuildShotMagazineStats(magazine),
+            DynamicShotFabricatorSubsystem fabricator => BuildShotFabricatorStats(fabricator),
+            DynamicShotLauncherSubsystem launcher => BuildShotLauncherStats(launcher),
+            ClassicRailgunSubsystem railgun => BuildRailgunStats(railgun),
+            JumpDriveSubsystem jumpDrive => BuildJumpDriveStats(jumpDrive),
+            EnergyCellSubsystem cell => BuildEnergyCellStats(cell),
+            _ => new List<Dictionary<string, object?>>()
+        };
+
+        return stats.Count > 0 ? stats : BuildTierPropertyStats(subsystem.TierInfo);
+    }
+
+    private static List<Dictionary<string, object?>> BuildBatteryStats(BatterySubsystem battery)
+    {
+        var stats = new List<Dictionary<string, object?>>();
+        AddRatioStat(stats, "Charge", battery.Current, battery.Maximum);
+        AddStat(stats, "Free", FormatFloat(battery.Free));
+        AddRateStat(stats, "Drain", battery.ConsumedThisTick);
+        return stats;
+    }
+
+    private static List<Dictionary<string, object?>> BuildCargoStats(CargoSubsystem cargo)
+    {
+        var stats = new List<Dictionary<string, object?>>();
+        AddRatioStat(stats, "Metal", cargo.CurrentMetal, cargo.MaximumMetal);
+        AddRatioStat(stats, "Carbon", cargo.CurrentCarbon, cargo.MaximumCarbon);
+        AddRatioStat(stats, "Hydrogen", cargo.CurrentHydrogen, cargo.MaximumHydrogen);
+        AddRatioStat(stats, "Silicon", cargo.CurrentSilicon, cargo.MaximumSilicon);
+        AddRatioStat(stats, "Nebula", cargo.CurrentNebula, cargo.MaximumNebula);
+        return stats;
+    }
+
+    private static List<Dictionary<string, object?>> BuildShieldStats(ShieldSubsystem shield)
+    {
+        var stats = new List<Dictionary<string, object?>>();
+        AddRatioStat(stats, "Integrity", shield.Current, shield.Maximum);
+        AddPerTickRatioStat(stats, "Rate", shield.Rate, shield.MaximumRate);
+        AddStat(stats, "Mode", shield.Active ? "Active" : "Idle");
+        return stats;
+    }
+
+    private static List<Dictionary<string, object?>> BuildHullStats(HullSubsystem hull)
+    {
+        var stats = new List<Dictionary<string, object?>>();
+        AddRatioStat(stats, "Integrity", hull.Current, hull.Maximum);
+        return stats;
+    }
+
+    private static List<Dictionary<string, object?>> BuildArmorStats(ArmorSubsystem armor)
+    {
+        var stats = new List<Dictionary<string, object?>>();
+        AddStat(stats, "Reduction", FormatFloat(armor.Reduction));
+        AddRateStat(stats, "Blocked", armor.BlockedTotalThisTick);
+        return stats;
+    }
+
+    private static List<Dictionary<string, object?>> BuildRepairStats(RepairSubsystem repair)
+    {
+        var stats = new List<Dictionary<string, object?>>();
+        AddPerTickRatioStat(stats, "Rate", repair.Rate, repair.MaximumRate);
+        AddRateStat(stats, "Repair", repair.RepairedHullThisTick);
+        return stats;
+    }
+
+    private static List<Dictionary<string, object?>> BuildResourceMinerStats(ResourceMinerSubsystem miner)
+    {
+        var stats = new List<Dictionary<string, object?>>();
+        AddPerTickRatioStat(stats, "Rate", miner.Rate, miner.MaximumRate);
+        AddRateStat(stats, "Yield", miner.MinedMetalThisTick + miner.MinedCarbonThisTick + miner.MinedHydrogenThisTick + miner.MinedSiliconThisTick);
+        AddRateStat(stats, "Silicon", miner.MinedSiliconThisTick);
+        return stats;
+    }
+
+    private static List<Dictionary<string, object?>> BuildNebulaCollectorStats(NebulaCollectorSubsystem collector)
+    {
+        var stats = new List<Dictionary<string, object?>>();
+        AddPerTickRatioStat(stats, "Rate", collector.Rate, collector.MaximumRate);
+        AddRateStat(stats, "Yield", collector.CollectedThisTick);
+        AddStat(stats, "Hue", FormatFloat(collector.CollectedHueThisTick));
+        return stats;
+    }
+
+    private static List<Dictionary<string, object?>> BuildStructureOptimizerStats(StructureOptimizerSubsystem optimizer)
+    {
+        var stats = new List<Dictionary<string, object?>>();
+        AddStat(stats, "Reduction", FormatFloat(optimizer.ReductionPercent, "%"));
+        return stats;
+    }
+
+    private static List<Dictionary<string, object?>> BuildClassicEngineStats(ClassicShipEngineSubsystem engine)
+    {
+        var stats = new List<Dictionary<string, object?>>();
+        AddStat(stats, "Max impulse", FormatFloat(engine.Maximum));
+        AddStat(stats, "Current", FormatFloat(engine.Current.Length));
+        AddStat(stats, "Target", FormatFloat(engine.Target.Length));
+        return stats;
+    }
+
+    private static List<Dictionary<string, object?>> BuildModernEngineStats(ModernShipEngineSubsystem engine)
+    {
+        var stats = new List<Dictionary<string, object?>>();
+        AddRatioStat(stats, "Thrust", engine.CurrentThrust, engine.MaximumThrust);
+        AddStat(stats, "Target", FormatFloat(engine.TargetThrust));
+        AddRateStat(stats, "Response", engine.MaximumThrustChangePerTick);
+        return stats;
+    }
+
+    private static List<Dictionary<string, object?>> BuildStaticScannerStats(StaticScannerSubsystem scanner)
+    {
+        var stats = new List<Dictionary<string, object?>>();
+        AddRatioStat(stats, "Width", scanner.CurrentWidth, scanner.MaximumWidth, "deg");
+        AddRatioStat(stats, "Length", scanner.CurrentLength, scanner.MaximumLength);
+        AddRatioStat(stats, "Offset", scanner.CurrentAngleOffset, scanner.MaximumAngleOffset, "deg");
+        return stats;
+    }
+
+    private static List<Dictionary<string, object?>> BuildDynamicScannerStats(DynamicScannerSubsystem scanner)
+    {
+        var stats = new List<Dictionary<string, object?>>();
+        AddRatioStat(stats, "Width", scanner.CurrentWidth, scanner.MaximumWidth, "deg");
+        AddRatioStat(stats, "Length", scanner.CurrentLength, scanner.MaximumLength);
+        AddStat(stats, "Angle", FormatFloat(scanner.CurrentAngle, "deg"));
+        return stats;
+    }
+
+    private static List<Dictionary<string, object?>> BuildShotMagazineStats(DynamicShotMagazineSubsystem magazine)
+    {
+        var stats = new List<Dictionary<string, object?>>();
+        AddRatioStat(stats, "Shots", magazine.CurrentShots, magazine.MaximumShots);
+        return stats;
+    }
+
+    private static List<Dictionary<string, object?>> BuildShotFabricatorStats(DynamicShotFabricatorSubsystem fabricator)
+    {
+        var stats = new List<Dictionary<string, object?>>();
+        AddPerTickRatioStat(stats, "Rate", fabricator.Rate, fabricator.MaximumRate);
+        AddStat(stats, "Mode", fabricator.Active ? "Active" : "Idle");
+        return stats;
+    }
+
+    private static List<Dictionary<string, object?>> BuildShotLauncherStats(DynamicShotLauncherSubsystem launcher)
+    {
+        var stats = new List<Dictionary<string, object?>>();
+        AddRatioStat(stats, "Speed", launcher.RelativeMovement.Length, launcher.MaximumRelativeMovement);
+        AddStat(stats, "Lifetime", $"{launcher.Ticks} / {launcher.MaximumTicks} ticks");
+        AddRatioStat(stats, "Damage", launcher.Damage, launcher.MaximumDamage);
+        AddRatioStat(stats, "Load", launcher.Load, launcher.MaximumLoad);
+        return stats;
+    }
+
+    private static List<Dictionary<string, object?>> BuildRailgunStats(ClassicRailgunSubsystem railgun)
+    {
+        var stats = new List<Dictionary<string, object?>>();
+        AddStat(stats, "Speed", FormatFloat(railgun.ProjectileSpeed));
+        AddStat(stats, "Lifetime", $"{railgun.ProjectileLifetime} ticks");
+        AddStat(stats, "Energy", FormatFloat(railgun.EnergyCost));
+        AddStat(stats, "Metal", FormatFloat(railgun.MetalCost));
+        return stats;
+    }
+
+    private static List<Dictionary<string, object?>> BuildJumpDriveStats(JumpDriveSubsystem jumpDrive)
+    {
+        var stats = new List<Dictionary<string, object?>>();
+        AddStat(stats, "Jump cost", FormatFloat(jumpDrive.EnergyCost));
+        return stats;
+    }
+
+    private static List<Dictionary<string, object?>> BuildEnergyCellStats(EnergyCellSubsystem cell)
+    {
+        var stats = new List<Dictionary<string, object?>>();
+        AddStat(stats, "Efficiency", FormatFloat(cell.Efficiency));
+        AddRateStat(stats, "Collected", cell.CollectedThisTick);
+        return stats;
+    }
+
+    private static List<Dictionary<string, object?>> BuildTierPropertyStats(SubsystemTierInfo tierInfo)
+    {
+        var stats = new List<Dictionary<string, object?>>();
+
+        foreach (var property in tierInfo.Properties)
+        {
+            var value = MathF.Abs(property.MinimumValue - property.MaximumValue) <= 0.0001f
+                ? FormatFloat(property.MaximumValue, property.Unit)
+                : $"{FormatFloat(property.MinimumValue, property.Unit)} - {FormatFloat(property.MaximumValue, property.Unit)}";
+            AddStat(stats, property.Label, value);
+        }
+
+        return stats;
+    }
+
+    private static SubsystemTierInfo ResolvePreviewTierInfo(Subsystem subsystem)
+    {
+        if (subsystem.TargetTier > 0)
+            return subsystem.TargetTierInfo;
+
+        var tierInfos = subsystem.TierInfos;
+        return tierInfos.Count > 1 ? tierInfos[1] : subsystem.TierInfo;
+    }
+
+    private static byte ResolveNextTier(Subsystem subsystem)
+    {
+        var tierInfos = subsystem.TierInfos;
+        if (tierInfos.Count == 0)
+            return subsystem.Tier;
+
+        var maxTier = (byte)(tierInfos.Count - 1);
+        return subsystem.Tier >= maxTier ? subsystem.Tier : (byte)(subsystem.Tier + 1);
+    }
+
+    private static Dictionary<string, object?> BuildCostsOverlay(Costs costs)
+    {
+        return new Dictionary<string, object?>
+        {
+            ["ticks"] = costs.Ticks,
+            ["energy"] = costs.Energy,
+            ["metal"] = costs.Metal,
+            ["carbon"] = costs.Carbon,
+            ["hydrogen"] = costs.Hydrogen,
+            ["silicon"] = costs.Silicon,
+            ["ions"] = costs.Ions,
+            ["neutrinos"] = costs.Neutrinos
+        };
+    }
+
+    private static void AddRatioStat(List<Dictionary<string, object?>> stats, string label, float current, float maximum, string unit = "")
+    {
+        AddStat(stats, label, $"{FormatFloat(current, unit)} / {FormatFloat(maximum, unit)}");
+    }
+
+    private static void AddPerTickRatioStat(List<Dictionary<string, object?>> stats, string label, float current, float maximum)
+    {
+        AddStat(stats, label, $"{FormatFloat(current)} / {FormatFloat(maximum)} per tick");
+    }
+
+    private static void AddRateStat(List<Dictionary<string, object?>> stats, string label, float value)
+    {
+        AddStat(stats, label, $"{FormatFloat(value)}/tick");
+    }
+
+    private static void AddStat(List<Dictionary<string, object?>> stats, string label, string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return;
+
+        stats.Add(new Dictionary<string, object?>
+        {
+            ["label"] = label,
+            ["value"] = value
+        });
+    }
+
+    private static string FormatFloat(float value, string unit = "")
+    {
+        var formatted = value.ToString("0.##", CultureInfo.InvariantCulture);
+        if (string.IsNullOrWhiteSpace(unit))
+            return formatted;
+
+        return unit == "%" ? $"{formatted}{unit}" : $"{formatted} {unit}";
+    }
+
     private Dictionary<string, object?> BuildNavigationOverlay(int controllableId)
     {
         var overlay = _maneuveringService.BuildOverlay(controllableId)
@@ -344,6 +715,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 "command.clear_tactical_target" => await HandleClearTacticalTarget(commandId, payload),
                 "command.fire_weapon" => await HandleFireWeapon(commandId, payload),
                 "command.set_subsystem_mode" => await HandleSetSubsystemMode(commandId, payload),
+                "command.upgrade_subsystem" => await HandleUpgradeSubsystem(commandId, payload),
                 "command.destroy_ship" => await HandleDestroyShip(commandId, payload),
                 "command.continue_ship" => await HandleContinueShip(commandId, payload),
                 "command.remove_ship" => HandleRemoveShip(commandId, payload),
@@ -547,10 +919,29 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         if (payload?.TryGetProperty("relativeAngle", out var angleEl) == true && angleEl.ValueKind != System.Text.Json.JsonValueKind.Null)
             relativeAngle = angleEl.GetSingle();
 
+        float? targetX = null;
+        if (payload?.TryGetProperty("targetX", out var targetXEl) == true && targetXEl.ValueKind != System.Text.Json.JsonValueKind.Null)
+            targetX = targetXEl.GetSingle();
+
+        float? targetY = null;
+        if (payload?.TryGetProperty("targetY", out var targetYEl) == true && targetYEl.ValueKind != System.Text.Json.JsonValueKind.Null)
+            targetY = targetYEl.GetSingle();
+
         switch (weaponId)
         {
             case "shot":
             case "ShotLauncher":
+            case "main_weapon":
+                if (targetX.HasValue && targetY.HasValue)
+                {
+                    if (!_tacticalService.TryBuildPointShotRequest(controllableId, classic, targetX.Value, targetY.Value, _latestGalaxyTick, out var request))
+                        return Rejected(commandId, "no_ballistic_solution", "No valid ballistic trajectory for the selected target point.");
+
+                    await classic.ShotLauncher.Shoot(request.RelativeMovement, request.Ticks, request.Load, request.Damage);
+                    _tacticalService.RegisterSuccessfulFire(controllableId, request.Tick);
+                    break;
+                }
+
                 var angle = relativeAngle ?? 0f;
                 var movement = Vector.FromAngleLength(classic.Angle + angle, 2f);
                 await classic.ShotLauncher.Shoot(movement, 80, 12f, 8f);
@@ -642,6 +1033,29 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return Completed(commandId);
     }
 
+    private async Task<CommandReplyMessage> HandleUpgradeSubsystem(string commandId, System.Text.Json.JsonElement? payload)
+    {
+        var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
+        var subsystemId = payload?.GetProperty("subsystemId").GetString() ?? "";
+        var controllable = FindControllable(controllableId);
+        if (controllable is null)
+            return Rejected(commandId, "invalid_controllable", "Controllable not found.");
+
+        var subsystem = FindSubsystem(controllable, subsystemId);
+        if (subsystem is null)
+            return Rejected(commandId, "invalid_subsystem", $"Subsystem not found: {subsystemId}");
+
+        if (subsystem.RemainingTierChangeTicks > 0)
+            return Rejected(commandId, "subsystem_busy", "Subsystem is already changing tier.");
+
+        var nextTier = ResolveNextTier(subsystem);
+        if (nextTier <= subsystem.Tier)
+            return Rejected(commandId, "max_tier", "Subsystem is already at maximum tier.");
+
+        await subsystem.Upgrade();
+        return Completed(commandId);
+    }
+
     private Task<CommandReplyMessage> HandleSetTacticalMode(string commandId, System.Text.Json.JsonElement? payload)
     {
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
@@ -666,22 +1080,64 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return Task.FromResult(Completed(commandId));
     }
 
-    private Task<CommandReplyMessage> HandleSetTacticalTarget(string commandId, System.Text.Json.JsonElement? payload)
+    private async Task<CommandReplyMessage> HandleSetTacticalTarget(string commandId, System.Text.Json.JsonElement? payload)
     {
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
         var targetId = payload?.GetProperty("targetId").GetString() ?? "";
         var controllable = FindControllable(controllableId);
         if (controllable is null)
-            return Task.FromResult(Rejected(commandId, "invalid_controllable", "Controllable not found."));
+            return Rejected(commandId, "invalid_controllable", "Controllable not found.");
 
         if (string.IsNullOrWhiteSpace(targetId))
-            return Task.FromResult(Rejected(commandId, "invalid_target", "Target id is required."));
+            return Rejected(commandId, "invalid_target", "Target id is required.");
 
         if (controllable is ClassicShipControllable classic)
             _tacticalService.AttachControllable(controllableId, classic);
 
         _tacticalService.SetTarget(controllableId, targetId);
-        return Task.FromResult(Completed(commandId));
+
+        if (controllable is not ClassicShipControllable ship)
+            return Completed(commandId);
+
+        if (!_tacticalService.TryBuildTargetBurstRequest(controllableId, _latestGalaxyTick, out var burstRequest))
+        {
+            return Completed(commandId, new Dictionary<string, object?>
+            {
+                { "action", "set_tactical_target" },
+                { "targetId", targetId },
+                { "calculationSucceeded", false },
+                { "firedShots", 0 }
+            });
+        }
+
+        int shotsPlanned = Math.Max(0, (int)MathF.Floor(ship.ShotMagazine.CurrentShots));
+        int firedShots = 0;
+
+        for (int shotIndex = 0; shotIndex < shotsPlanned; shotIndex++)
+        {
+            try
+            {
+                await ship.ShotLauncher.Shoot(burstRequest.RelativeMovement, burstRequest.Ticks, burstRequest.Load, burstRequest.Damage);
+                firedShots++;
+            }
+            catch (GameException ex)
+            {
+                _logger.LogDebug(ex, "Burst fire interrupted for controllable {ControllableId}", controllableId);
+                break;
+            }
+        }
+
+        if (firedShots > 0)
+            _tacticalService.RegisterSuccessfulFire(controllableId, burstRequest.Tick);
+
+        return Completed(commandId, new Dictionary<string, object?>
+        {
+            { "action", "set_tactical_target" },
+            { "targetId", targetId },
+            { "calculationSucceeded", true },
+            { "shotsPlanned", shotsPlanned },
+            { "firedShots", firedShots }
+        });
     }
 
     private Task<CommandReplyMessage> HandleClearTacticalTarget(string commandId, System.Text.Json.JsonElement? payload)
@@ -742,6 +1198,66 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         }
 
         return null;
+    }
+
+    private static Subsystem? FindSubsystem(Controllable controllable, string subsystemId)
+    {
+        return EnumerateSubsystems(controllable)
+            .FirstOrDefault(subsystem =>
+                string.Equals(subsystem.Name, subsystemId, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(subsystem.Slot.ToString(), subsystemId, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(subsystem.Kind.ToString(), subsystemId, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static IEnumerable<Subsystem> EnumerateSubsystems(Controllable controllable)
+    {
+        yield return controllable.EnergyBattery;
+        yield return controllable.IonBattery;
+        yield return controllable.NeutrinoBattery;
+        yield return controllable.EnergyCell;
+        yield return controllable.IonCell;
+        yield return controllable.NeutrinoCell;
+        yield return controllable.Hull;
+        yield return controllable.Shield;
+        yield return controllable.Armor;
+        yield return controllable.Repair;
+        yield return controllable.Cargo;
+        yield return controllable.ResourceMiner;
+        yield return controllable.StructureOptimizer;
+
+        switch (controllable)
+        {
+            case ClassicShipControllable classic:
+                yield return classic.NebulaCollector;
+                yield return classic.Engine;
+                yield return classic.MainScanner;
+                yield return classic.SecondaryScanner;
+                yield return classic.ShotLauncher;
+                yield return classic.ShotMagazine;
+                yield return classic.ShotFabricator;
+                yield return classic.InterceptorLauncher;
+                yield return classic.InterceptorMagazine;
+                yield return classic.InterceptorFabricator;
+                yield return classic.Railgun;
+                yield return classic.JumpDrive;
+                break;
+            case ModernShipControllable modern:
+                yield return modern.NebulaCollector;
+                foreach (var subsystem in modern.Engines) yield return subsystem;
+                foreach (var subsystem in modern.Scanners) yield return subsystem;
+                foreach (var subsystem in modern.ShotLaunchers) yield return subsystem;
+                foreach (var subsystem in modern.ShotMagazines) yield return subsystem;
+                foreach (var subsystem in modern.ShotFabricators) yield return subsystem;
+                yield return modern.InterceptorLauncherE;
+                yield return modern.InterceptorLauncherW;
+                yield return modern.InterceptorMagazineE;
+                yield return modern.InterceptorMagazineW;
+                yield return modern.InterceptorFabricatorE;
+                yield return modern.InterceptorFabricatorW;
+                foreach (var subsystem in modern.Railguns) yield return subsystem;
+                yield return modern.JumpDrive;
+                break;
+        }
     }
 
     private static bool TryParseControllableLocalId(string controllableId, out int localControllableId)
@@ -842,8 +1358,9 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     /// </summary>
     public void Handle(FlattiverseEvent @event)
     {
-        if (@event is GalaxyTickEvent)
+        if (@event is GalaxyTickEvent tickEvent)
         {
+            _latestGalaxyTick = tickEvent.Tick;
             DispatchPendingAutoFireRequests();
             return;
         }
@@ -1030,9 +1547,9 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             conn.EnqueueMessage(msg);
     }
 
-    private static CommandReplyMessage Completed(string commandId)
+    private static CommandReplyMessage Completed(string commandId, Dictionary<string, object?>? result = null)
     {
-        return new CommandReplyMessage { CommandId = commandId, Status = "completed" };
+        return new CommandReplyMessage { CommandId = commandId, Status = "completed", Result = result };
     }
 
     private static CommandReplyMessage Rejected(string commandId, string code, string message)
