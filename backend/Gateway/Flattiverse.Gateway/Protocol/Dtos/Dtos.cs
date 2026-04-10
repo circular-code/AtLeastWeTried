@@ -17,6 +17,12 @@ public sealed class ClusterSnapshotDto
     public bool Respawns { get; set; }
 }
 
+public sealed class TrajectoryPointDto
+{
+    public float X { get; set; }
+    public float Y { get; set; }
+}
+
 public sealed class UnitSnapshotDto
 {
     public string UnitId { get; set; } = "";
@@ -32,12 +38,16 @@ public sealed class UnitSnapshotDto
     public uint LastSeenTick { get; set; }
     public float X { get; set; }
     public float Y { get; set; }
+    public float? MovementX { get; set; }
+    public float? MovementY { get; set; }
     public float Angle { get; set; }
     public float Radius { get; set; }
     /// <summary>
     /// Connector gravity strength; used for navigation clearance (higher → stay farther). Omitted in legacy JSON deserializes as 0.
     /// </summary>
     public float Gravity { get; set; }
+    public float? SpeedLimit { get; set; }
+    public List<TrajectoryPointDto>? PredictedTrajectory { get; set; }
     public string? TeamName { get; set; }
     public float? SunEnergy { get; set; }
     public float? SunIons { get; set; }

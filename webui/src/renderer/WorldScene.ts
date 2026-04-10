@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { GalaxySnapshotDto, PublicControllableSnapshotDto, TeamSnapshotDto } from '../types/generated';
+import type { GalaxySnapshotDto, PublicControllableSnapshotDto, TeamSnapshotDto, TrajectoryPointDto } from '../types/generated';
 import { DEFAULT_VIEW_HALF_HEIGHT, DEBUG_SUN_COUNT, MIN_PICK_RADIUS_PX, PICK_RADIUS_PADDING_PX } from './constants';
 import { type NormalizedUnit, type UnitShaderMaterial, type UnitBodyMesh, createUnitBodyMaterial, createUnitBodyMesh, createDebugSuns } from './unitBody';
 import { type UnitVisual, normalizeKind, getRenderRadius, getFallbackRenderRadius, getRenderScale, getColorForUnit, getShaderKindCode, getOpacityForUnit, toSceneRotation, isDirectionalKind, isShipKind, getHeadingPoints, shouldPersistTraceForUnit, isUnseenDynamicUnit } from './unitVisuals';
@@ -103,6 +103,7 @@ export class WorldScene {
   private readonly navigationPathPreview: THREE.Line;
   private readonly navigationSearchPreview: THREE.LineSegments;
   private readonly trajectoryPreview: THREE.Line;
+  private readonly unseenTrajectoryPreview: THREE.LineSegments;
   private readonly unitBodyMaterial: UnitShaderMaterial;
   private readonly resizeObserver: ResizeObserver;
   private readonly unitVisuals: Map<string, UnitVisual>;
@@ -219,6 +220,16 @@ export class WorldScene {
         depthWrite: false,
       }),
     );
+    this.unseenTrajectoryPreview = new THREE.LineSegments(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({
+        color: 0xb7d8ff,
+        transparent: true,
+        opacity: 0.54,
+        depthTest: false,
+        depthWrite: false,
+      }),
+    );
     this.navigationPathPreview.visible = false;
     this.navigationPathPreview.frustumCulled = false;
     this.navigationPathPreview.renderOrder = 39;
@@ -228,6 +239,9 @@ export class WorldScene {
     this.trajectoryPreview.visible = false;
     this.trajectoryPreview.frustumCulled = false;
     this.trajectoryPreview.renderOrder = 42;
+    this.unseenTrajectoryPreview.visible = false;
+    this.unseenTrajectoryPreview.frustumCulled = false;
+    this.unseenTrajectoryPreview.renderOrder = 37;
     this.scannerCones = new Map();
     this.scene.add(this.grid);
     this.scene.add(this.gravityStrengthGrid.group);
@@ -242,6 +256,7 @@ export class WorldScene {
     this.root.add(this.navigationPointer);
     this.root.add(this.navigationSearchPreview);
     this.root.add(this.navigationPathPreview);
+    this.root.add(this.unseenTrajectoryPreview);
     this.root.add(this.trajectoryPreview);
 
     this.snapshot = null;
@@ -687,6 +702,7 @@ export class WorldScene {
     this.updateNavigationPointer();
     this.updateNavigationPathPreview();
     this.updateNavigationSearchPreview();
+    this.updateUnseenTrajectoryPreview();
     this.updateTrajectoryPreview();
     this.updateScannerCones();
     this.updateTrackedTargets();
@@ -1195,6 +1211,34 @@ export class WorldScene {
     this.trajectoryPreview.visible = true;
   }
 
+  private updateUnseenTrajectoryPreview() {
+    if (!this.snapshot) {
+      this.unseenTrajectoryPreview.visible = false;
+      this.setDynamicLinePoints(this.unseenTrajectoryPreview, []);
+      return;
+    }
+
+    const points: THREE.Vector3[] = [];
+    for (const unit of this.snapshot.units) {
+      if (unit.isStatic || unit.isSeen || !Array.isArray(unit.predictedTrajectory) || unit.predictedTrajectory.length < 2) {
+        continue;
+      }
+
+      appendDottedTrajectory(points, unit.predictedTrajectory, 3.05, 16, 10);
+    }
+
+    if (points.length === 0) {
+      this.unseenTrajectoryPreview.visible = false;
+      this.setDynamicLinePoints(this.unseenTrajectoryPreview, []);
+      return;
+    }
+
+    this.unseenTrajectoryPreview.renderOrder = 37;
+    this.unseenTrajectoryPreview.frustumCulled = false;
+    this.setDynamicLinePoints(this.unseenTrajectoryPreview, points);
+    this.unseenTrajectoryPreview.visible = true;
+  }
+
   private updateNavigationSearchPreview() {
     const searchEdges = readNavigationSearch(this.ownerOverlay, this.selectedControllableId);
     if (!searchEdges || searchEdges.length === 0) {
@@ -1483,6 +1527,8 @@ export class WorldScene {
     (this.navigationPathPreview.material as THREE.Material).dispose();
     this.navigationSearchPreview.geometry.dispose();
     (this.navigationSearchPreview.material as THREE.Material).dispose();
+    this.unseenTrajectoryPreview.geometry.dispose();
+    (this.unseenTrajectoryPreview.material as THREE.Material).dispose();
     this.trajectoryPreview.geometry.dispose();
     (this.trajectoryPreview.material as THREE.Material).dispose();
   }
@@ -1958,4 +2004,52 @@ function roundTo(value: number, precision: number) {
   }
 
   return Math.round(value / precision) * precision;
+}
+
+function appendDottedTrajectory(
+  target: THREE.Vector3[],
+  trajectory: TrajectoryPointDto[],
+  z: number,
+  dashLength: number,
+  gapLength: number,
+) {
+  let draw = true;
+  let remaining = dashLength;
+
+  for (let index = 0; index < trajectory.length - 1; index++) {
+    const start = trajectory[index];
+    const end = trajectory[index + 1];
+    let segmentLength = Math.hypot(end.x - start.x, end.y - start.y);
+    if (segmentLength <= 0.0001) {
+      continue;
+    }
+
+    const unitX = (end.x - start.x) / segmentLength;
+    const unitY = (end.y - start.y) / segmentLength;
+    let cursorX = start.x;
+    let cursorY = start.y;
+
+    while (segmentLength > 0.0001) {
+      const step = Math.min(remaining, segmentLength);
+      const nextX = cursorX + unitX * step;
+      const nextY = cursorY + unitY * step;
+
+      if (draw) {
+        target.push(
+          new THREE.Vector3(cursorX, -cursorY, z),
+          new THREE.Vector3(nextX, -nextY, z),
+        );
+      }
+
+      cursorX = nextX;
+      cursorY = nextY;
+      segmentLength -= step;
+      remaining -= step;
+
+      if (remaining <= 0.0001) {
+        draw = !draw;
+        remaining = draw ? dashLength : gapLength;
+      }
+    }
+  }
 }

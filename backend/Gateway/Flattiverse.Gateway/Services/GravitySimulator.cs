@@ -99,6 +99,34 @@ public static class GravitySimulator
         int ticks,
         double speedLimit)
     {
+        return SimulateTrajectory(
+            startX,
+            startY,
+            velX,
+            velY,
+            engineX,
+            engineY,
+            (shipX, shipY) => ComputeGravityAcceleration(shipX, shipY, sources),
+            ticks,
+            speedLimit);
+    }
+
+    /// <summary>
+    /// Forward-simulate position for <paramref name="ticks"/> ticks using a gravity sampler callback.
+    /// Returns a list of simulated points starting with the initial position.
+    /// </summary>
+    public static List<TrajectoryPoint> SimulateTrajectory(
+        double startX,
+        double startY,
+        double velX,
+        double velY,
+        double engineX,
+        double engineY,
+        Func<double, double, (double Ax, double Ay)> gravitySampler,
+        int ticks,
+        double speedLimit,
+        Func<TrajectoryPoint, bool>? shouldStop = null)
+    {
         var points = new List<TrajectoryPoint>(ticks + 1);
 
         var x = startX;
@@ -115,7 +143,7 @@ public static class GravitySimulator
             vy += engineY;
 
             // 2. Apply gravity
-            var (gx, gy) = ComputeGravityAcceleration(x, y, sources);
+            var (gx, gy) = gravitySampler(x, y);
             vx += gx;
             vy += gy;
 
@@ -126,7 +154,10 @@ public static class GravitySimulator
             x += vx;
             y += vy;
 
-            points.Add(new TrajectoryPoint(x, y));
+            var point = new TrajectoryPoint(x, y);
+            points.Add(point);
+            if (shouldStop?.Invoke(point) == true)
+                break;
         }
 
         return points;

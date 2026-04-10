@@ -5,6 +5,7 @@ using Flattiverse.Gateway.Protocol.Dtos;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using static Flattiverse.Gateway.Services.GravitySimulator;
 
 namespace Flattiverse.Gateway.Services;
 
@@ -15,6 +16,10 @@ namespace Flattiverse.Gateway.Services;
 public sealed class MappingService : IConnectorEventHandler
 {
     private const int MaxStoredDeltasPerScope = 4096;
+    private const int HiddenTrajectoryLookaheadTicks = 20;
+    private const int HiddenTrajectoryMaximumTicks = 72;
+    private const int HiddenTrajectoryDownsample = 2;
+    private const double HiddenTrajectoryMinimumPointDistance = 0.35d;
 
     // Mapped units are shared across sessions by scope (Galaxy + Cluster).
     private static readonly Dictionary<MappingScopeKey, ScopeState> _scopeStates = new();
@@ -339,6 +344,7 @@ public sealed class MappingService : IConnectorEventHandler
 
             existing.IsStatic = false;
             existing.IsSeen = false;
+            existing.PredictedTrajectory = BuildHiddenTrajectory(existing, scopeState.Units.Values, GetCurrentTick(scopeKey.Value.GalaxyId));
 
             AppendDeltaUnsafe(scopeState, new WorldDeltaDto
             {
@@ -435,9 +441,12 @@ public sealed class MappingService : IConnectorEventHandler
             IsSolid = unit.IsSolid,
             X = unit.Position.X,
             Y = unit.Position.Y,
+            MovementX = unit.Movement.X,
+            MovementY = unit.Movement.Y,
             Angle = unit.Angle,
             Radius = unit.Radius,
             Gravity = unit.Gravity,
+            SpeedLimit = unit.SpeedLimit > 0f ? unit.SpeedLimit : null,
             TeamName = unit.Team?.Name
         };
 
@@ -521,9 +530,13 @@ public sealed class MappingService : IConnectorEventHandler
             { "lastSeenTick", unit.LastSeenTick },
             { "x", unit.X },
             { "y", unit.Y },
+            { "movementX", unit.MovementX },
+            { "movementY", unit.MovementY },
             { "angle", unit.Angle },
             { "radius", unit.Radius },
-            { "gravity", unit.Gravity }
+            { "gravity", unit.Gravity },
+            { "speedLimit", unit.SpeedLimit },
+            { "predictedTrajectory", unit.PredictedTrajectory?.Select(CloneTrajectoryPoint).ToArray() }
         };
 
         if (unit.TeamName is not null)
@@ -590,7 +603,175 @@ public sealed class MappingService : IConnectorEventHandler
             return;
 
         lock (_stateLock)
+        {
             _latestTickByGalaxy[scopeKey.Value.GalaxyId] = tickEvent.Tick;
+            EnsureGalaxyLoadedUnsafe(scopeKey.Value.GalaxyId);
+            if (_scopeStates.TryGetValue(scopeKey.Value, out var scopeState))
+                UpdateHiddenTrajectoryPredictionsUnsafe(scopeKey.Value, scopeState, tickEvent.Tick);
+        }
+    }
+
+    private static void UpdateHiddenTrajectoryPredictionsUnsafe(MappingScopeKey scopeKey, ScopeState scopeState, uint currentTick)
+    {
+        foreach (var unit in scopeState.Units.Values)
+        {
+            if (unit.ClusterId != scopeKey.ClusterId)
+                continue;
+
+            if (unit.IsSeen || unit.IsStatic)
+            {
+                if (unit.PredictedTrajectory is null)
+                    continue;
+
+                unit.PredictedTrajectory = null;
+                AppendDeltaUnsafe(scopeState, new WorldDeltaDto
+                {
+                    EventType = "unit.updated",
+                    EntityId = unit.UnitId,
+                    Changes = UnitToChanges(unit)
+                });
+                continue;
+            }
+
+            var nextPrediction = BuildHiddenTrajectory(unit, scopeState.Units.Values, currentTick);
+            if (TrajectoryMatches(unit.PredictedTrajectory, nextPrediction))
+                continue;
+
+            unit.PredictedTrajectory = nextPrediction;
+            AppendDeltaUnsafe(scopeState, new WorldDeltaDto
+            {
+                EventType = "unit.updated",
+                EntityId = unit.UnitId,
+                Changes = UnitToChanges(unit)
+            });
+        }
+    }
+
+    internal static List<TrajectoryPointDto>? BuildHiddenTrajectory(
+        UnitSnapshotDto unit,
+        IEnumerable<UnitSnapshotDto> scopeUnits,
+        uint currentTick)
+    {
+        if (unit.IsStatic || unit.IsSeen)
+            return null;
+
+        var relevantUnits = scopeUnits
+            .Where(candidate => candidate.ClusterId == unit.ClusterId)
+            .ToArray();
+
+        var elapsedTicks = currentTick > unit.LastSeenTick
+            ? (int)Math.Min(currentTick - unit.LastSeenTick, HiddenTrajectoryMaximumTicks)
+            : 0;
+        var totalTicks = Math.Min(HiddenTrajectoryMaximumTicks, elapsedTicks + HiddenTrajectoryLookaheadTicks);
+        if (totalTicks <= 0)
+            return null;
+
+        var gravitySources = relevantUnits
+            .Where(source =>
+                !string.Equals(source.UnitId, unit.UnitId, StringComparison.Ordinal) &&
+                source.Gravity > 0f &&
+                (source.IsStatic || source.IsSeen))
+            .Select(source => new GravitySource(source.X, source.Y, source.Gravity))
+            .ToArray();
+
+        var blockingDisks = relevantUnits
+            .Where(obstacle =>
+                !string.Equals(obstacle.UnitId, unit.UnitId, StringComparison.Ordinal) &&
+                obstacle.IsSolid != false &&
+                obstacle.Radius > 0f &&
+                (obstacle.IsStatic || obstacle.IsSeen))
+            .Select(obstacle => new PredictionObstacle(obstacle.X, obstacle.Y, obstacle.Radius))
+            .ToArray();
+
+        var speedLimit = unit.SpeedLimit.GetValueOrDefault();
+        var simulated = SimulateTrajectory(
+            startX: unit.X,
+            startY: unit.Y,
+            velX: unit.MovementX.GetValueOrDefault(),
+            velY: unit.MovementY.GetValueOrDefault(),
+            engineX: 0d,
+            engineY: 0d,
+            gravitySampler: (x, y) => ComputeGravityAcceleration(x, y, gravitySources),
+            ticks: totalTicks,
+            speedLimit: speedLimit > 0f ? speedLimit : double.PositiveInfinity,
+            shouldStop: point => IntersectsPredictionObstacle(point, unit.Radius, blockingDisks));
+
+        if (simulated.Count < 2)
+            return null;
+
+        var predicted = new List<TrajectoryPointDto>();
+        AppendTrajectoryPoint(predicted, simulated[0]);
+
+        var presentIndex = Math.Min(elapsedTicks, simulated.Count - 1);
+        if (presentIndex > 0)
+            AppendTrajectoryPoint(predicted, simulated[presentIndex]);
+
+        for (var index = presentIndex + HiddenTrajectoryDownsample; index < simulated.Count; index += HiddenTrajectoryDownsample)
+            AppendTrajectoryPoint(predicted, simulated[index]);
+
+        AppendTrajectoryPoint(predicted, simulated[^1]);
+        return predicted.Count >= 2 ? predicted : null;
+    }
+
+    private static bool IntersectsPredictionObstacle(
+        TrajectoryPoint point,
+        float unitRadius,
+        IReadOnlyList<PredictionObstacle> blockingDisks)
+    {
+        var safeRadius = Math.Max(0f, unitRadius);
+        foreach (var disk in blockingDisks)
+        {
+            var dx = point.X - disk.X;
+            var dy = point.Y - disk.Y;
+            var minimumDistance = safeRadius + disk.Radius;
+            if ((dx * dx) + (dy * dy) <= minimumDistance * minimumDistance)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static void AppendTrajectoryPoint(List<TrajectoryPointDto> points, TrajectoryPoint candidate)
+    {
+        if (points.Count > 0)
+        {
+            var previous = points[^1];
+            var dx = candidate.X - previous.X;
+            var dy = candidate.Y - previous.Y;
+            if ((dx * dx) + (dy * dy) < HiddenTrajectoryMinimumPointDistance * HiddenTrajectoryMinimumPointDistance)
+                return;
+        }
+
+        points.Add(new TrajectoryPointDto
+        {
+            X = (float)candidate.X,
+            Y = (float)candidate.Y
+        });
+    }
+
+    private static bool TrajectoryMatches(
+        IReadOnlyList<TrajectoryPointDto>? left,
+        IReadOnlyList<TrajectoryPointDto>? right)
+    {
+        if (ReferenceEquals(left, right))
+            return true;
+
+        if (left is null || right is null)
+            return left is null && right is null;
+
+        if (left.Count != right.Count)
+            return false;
+
+        for (var index = 0; index < left.Count; index++)
+        {
+            if (Math.Abs(left[index].X - right[index].X) > 0.01f ||
+                Math.Abs(left[index].Y - right[index].Y) > 0.01f)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static uint GetCurrentTick(string galaxyId)
@@ -855,9 +1036,13 @@ public sealed class MappingService : IConnectorEventHandler
             LastSeenTick = source.LastSeenTick,
             X = source.X,
             Y = source.Y,
+            MovementX = source.MovementX,
+            MovementY = source.MovementY,
             Angle = source.Angle,
             Radius = source.Radius,
             Gravity = source.Gravity,
+            SpeedLimit = source.SpeedLimit,
+            PredictedTrajectory = source.PredictedTrajectory?.Select(CloneTrajectoryPoint).ToList(),
             TeamName = source.TeamName,
             SunEnergy = source.SunEnergy,
             SunIons = source.SunIons,
@@ -868,6 +1053,15 @@ public sealed class MappingService : IConnectorEventHandler
             PlanetCarbon = source.PlanetCarbon,
             PlanetHydrogen = source.PlanetHydrogen,
             PlanetSilicon = source.PlanetSilicon
+        };
+    }
+
+    private static TrajectoryPointDto CloneTrajectoryPoint(TrajectoryPointDto source)
+    {
+        return new TrajectoryPointDto
+        {
+            X = source.X,
+            Y = source.Y
         };
     }
 
@@ -909,6 +1103,8 @@ public sealed class MappingService : IConnectorEventHandler
         public long NextSequence { get; set; } = 1;
         public long FirstSequence { get; set; } = 1;
     }
+
+    private readonly record struct PredictionObstacle(float X, float Y, float Radius);
 
     private sealed class WorldStateFile
     {

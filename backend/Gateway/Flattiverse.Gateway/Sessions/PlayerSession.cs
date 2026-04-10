@@ -1110,7 +1110,23 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                     if (string.IsNullOrWhiteSpace(targetUnitId))
                         return Rejected(commandId, "missing_target", "targetId is required for scanner target mode.");
 
-                    await _scanningService.ApplyTargetModeAsync(classic, targetUnitId);
+                    float? width = null;
+                    if (payload?.TryGetProperty("width", out var widthEl) == true &&
+                        widthEl.ValueKind != System.Text.Json.JsonValueKind.Null &&
+                        widthEl.ValueKind != System.Text.Json.JsonValueKind.Undefined)
+                    {
+                        width = widthEl.GetSingle();
+                    }
+
+                    float? length = null;
+                    if (payload?.TryGetProperty("length", out var lengthEl) == true &&
+                        lengthEl.ValueKind != System.Text.Json.JsonValueKind.Null &&
+                        lengthEl.ValueKind != System.Text.Json.JsonValueKind.Undefined)
+                    {
+                        length = lengthEl.GetSingle();
+                    }
+
+                    await _scanningService.ApplyTargetModeAsync(classic, targetUnitId, width, length);
                 }
                 break;
             case "ShotFabricator":

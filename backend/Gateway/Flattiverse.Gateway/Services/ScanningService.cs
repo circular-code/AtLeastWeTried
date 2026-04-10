@@ -117,7 +117,7 @@ public sealed class ScanningService : IConnectorEventHandler
             && TryResolveTargetedAngle(state, targetedShip, out var targetAngle))
         {
             var scanner = targetedShip.MainScanner;
-            TryDispatchScannerCommand(() => scanner.Set(scanner.MinimumWidth, ResolveLength(scanner, state), targetAngle));
+            TryDispatchScannerCommand(() => scanner.Set(ResolveWidth(scanner, state), ResolveLength(scanner, state), targetAngle));
         }
     }
 
@@ -181,7 +181,7 @@ public sealed class ScanningService : IConnectorEventHandler
         await ApplyAsync(ship, mode, null);
     }
 
-    public async Task ApplyTargetModeAsync(ClassicShipControllable ship, string targetUnitId)
+    public async Task ApplyTargetModeAsync(ClassicShipControllable ship, string targetUnitId, float? width = null, float? length = null)
     {
         var state = GetOrCreateState(ship);
         if (!string.Equals(state.TargetUnitId, targetUnitId, StringComparison.Ordinal))
@@ -189,7 +189,14 @@ public sealed class ScanningService : IConnectorEventHandler
 
         state.Mode = ScannerMode.Targeted;
         state.TargetUnitId = targetUnitId;
-        state.DesiredWidth = ClampWidth(ship.MainScanner, Math.Min(90f, ship.MainScanner.MaximumWidth));
+
+        if (width.HasValue && float.IsFinite(width.Value))
+            state.DesiredWidth = ClampWidth(ship.MainScanner, width.Value);
+        else if (state.DesiredWidth <= 0f)
+            state.DesiredWidth = ClampWidth(ship.MainScanner, Math.Min(90f, ship.MainScanner.MaximumWidth));
+
+        if (length.HasValue && float.IsFinite(length.Value))
+            state.DesiredLength = ClampLength(ship.MainScanner, length.Value);
 
         if (!ship.Alive)
             return;

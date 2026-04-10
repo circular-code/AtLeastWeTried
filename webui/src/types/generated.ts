@@ -260,6 +260,8 @@ export interface SetSubsystemModeCommandPayloadDto {
   mode: string;
   value?: number | null;
   targetId?: string;
+  width?: number | null;
+  length?: number | null;
 }
 
 export interface SnapshotMessage {
@@ -275,6 +277,11 @@ export interface TeamSnapshotDto {
   playable: boolean;
 }
 
+export interface TrajectoryPointDto {
+  x: number;
+  y: number;
+}
+
 export interface UnitSnapshotDto {
   unitId: string;
   clusterId: number;
@@ -287,10 +294,14 @@ export interface UnitSnapshotDto {
   lastSeenTick: number;
   x: number;
   y: number;
+  movementX?: number | null;
+  movementY?: number | null;
   angle: number;
   radius: number;
   /** Connector gravity; higher values imply larger navigation standoff. */
   gravity?: number;
+  speedLimit?: number | null;
+  predictedTrajectory?: TrajectoryPointDto[] | null;
   teamName?: string;
   sunEnergy?: number | null;
   sunIons?: number | null;

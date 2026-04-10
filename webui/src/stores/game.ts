@@ -20,6 +20,7 @@ import {
   optionalStringValue,
   stringValue,
 } from '../lib/validation';
+import { isShortLivedProjectileKind } from '../lib/unitKinds';
 import type { WorldSceneSelection } from '../renderer/WorldScene';
 import type {
   ChatEntryDto,
@@ -32,6 +33,7 @@ import type {
   ServerStatusMessage,
   SnapshotMessage,
   TeamSnapshotDto,
+  TrajectoryPointDto,
   UnitSnapshotDto,
   WorldDeltaMessage,
 } from '../types/generated';
@@ -437,7 +439,7 @@ function cloneSnapshot(source: GalaxySnapshotDto): GalaxySnapshotDto {
       playable: booleanValue(team.playable, true),
     })),
     clusters: source.clusters.map((cluster) => ({ ...cluster })),
-    units: dedupeUnitsById(source.units.map((unit) => ({
+    units: pruneTransientHiddenUnits(dedupeUnitsById(source.units.map((unit) => ({
       ...unit,
       fullStateKnown: booleanValue(unit.fullStateKnown, false),
       isStatic: booleanValue(unit.isStatic, false),
@@ -445,7 +447,11 @@ function cloneSnapshot(source: GalaxySnapshotDto): GalaxySnapshotDto {
       isSeen: booleanValue(unit.isSeen, true),
       lastSeenTick: numberValue(unit.lastSeenTick, 0),
       gravity: numberValue(unit.gravity, 0),
-    }))),
+      movementX: optionalNumberValue(unit.movementX),
+      movementY: optionalNumberValue(unit.movementY),
+      speedLimit: optionalNumberValue(unit.speedLimit),
+      predictedTrajectory: normalizeTrajectoryPoints(unit.predictedTrajectory),
+    })))),
     controllables: source.controllables.map((controllable) => ({ ...controllable })),
   };
 }
@@ -540,7 +546,7 @@ function applyWorldDeltaToSnapshot(current: GalaxySnapshotDto, message: WorldDel
     }
   }
 
-  next.units = dedupeUnitsById(next.units);
+  next.units = pruneTransientHiddenUnits(dedupeUnitsById(next.units));
   return next;
 }
 
@@ -556,9 +562,13 @@ function createUnitFromChanges(unitId: string, changes: Record<string, unknown>)
     lastSeenTick: 0,
     x: 0,
     y: 0,
+    movementX: undefined,
+    movementY: undefined,
     angle: 0,
     radius: 3,
     gravity: 0,
+    speedLimit: undefined,
+    predictedTrajectory: undefined,
     teamName: undefined,
     sunEnergy: undefined,
     sunIons: undefined,
@@ -585,9 +595,21 @@ function applyUnitChanges(unit: UnitSnapshotDto, changes: Record<string, unknown
   unit.lastSeenTick = numberValue(changes.lastSeenTick, unit.lastSeenTick);
   unit.x = numberValue(changes.x, unit.x);
   unit.y = numberValue(changes.y, unit.y);
+  if (hasRecordKey(changes, 'movementX')) {
+    unit.movementX = optionalNumberValue(changes.movementX);
+  }
+  if (hasRecordKey(changes, 'movementY')) {
+    unit.movementY = optionalNumberValue(changes.movementY);
+  }
   unit.angle = numberValue(changes.angle, unit.angle);
   unit.radius = numberValue(changes.radius, unit.radius);
   unit.gravity = numberValue(changes.gravity, numberValue(unit.gravity, 0));
+  if (hasRecordKey(changes, 'speedLimit')) {
+    unit.speedLimit = optionalNumberValue(changes.speedLimit);
+  }
+  if (hasRecordKey(changes, 'predictedTrajectory')) {
+    unit.predictedTrajectory = normalizeTrajectoryPoints(changes.predictedTrajectory);
+  }
   unit.teamName = hasRecordKey(changes, 'teamName') ? optionalStringValue(changes.teamName) : unit.teamName;
   applyOptionalUnitMetric(unit, 'sunEnergy', changes.sunEnergy);
   applyOptionalUnitMetric(unit, 'sunIons', changes.sunIons);
@@ -607,6 +629,14 @@ function dedupeUnitsById(units: UnitSnapshotDto[]) {
   }
 
   return Array.from(unitsById.values());
+}
+
+function pruneTransientHiddenUnits(units: UnitSnapshotDto[]) {
+  return units.filter((unit) => !shouldDropTransientHiddenUnit(unit));
+}
+
+function shouldDropTransientHiddenUnit(unit: UnitSnapshotDto) {
+  return !unit.isSeen && isShortLivedProjectileKind(unit.kind);
 }
 
 function applyOwnerOverlay(current: Record<string, unknown>, message: OwnerOverlayDeltaMessage) {
@@ -687,6 +717,22 @@ function applyOptionalUnitMetric(
   }
 
   unit[key] = optionalNumberValue(value);
+}
+
+function normalizeTrajectoryPoints(value: unknown): TrajectoryPointDto[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const points = value
+    .map((entry) => objectValue(entry))
+    .filter((entry): entry is Record<string, unknown> => entry !== undefined)
+    .map((entry) => ({
+      x: numberValue(entry.x, 0),
+      y: numberValue(entry.y, 0),
+    }));
+
+  return points.length > 0 ? points : undefined;
 }
 
 function getControllableAliveState(

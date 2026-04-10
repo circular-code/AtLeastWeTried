@@ -367,7 +367,15 @@ function createGatewayApi() {
       return;
     }
 
-    const envelope = buildSetSubsystemModeCommand(controllableId, 'scanner', 'target', undefined, targetId);
+    const envelope = buildSetSubsystemModeCommand(
+      controllableId,
+      'scanner',
+      'target',
+      undefined,
+      targetId,
+      gameStore.scannerWidthFor(controllableId),
+      gameStore.scannerLengthFor(controllableId),
+    );
     gameStore.trackCommand(envelope.commandId, {
       label: 'Initiate target scan',
       subject: `${gameStore.getControllableLabel(controllableId)} -> ${truncateText(targetId, 40)}`,

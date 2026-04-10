@@ -246,7 +246,15 @@ export function buildFireWeaponCommand(
   };
 }
 
-export function buildSetSubsystemModeCommand(controllableId: string, subsystemId: string, mode: string, value?: number, targetId?: string): CommandEnvelope<SetSubsystemModeCommandMessage> {
+export function buildSetSubsystemModeCommand(
+  controllableId: string,
+  subsystemId: string,
+  mode: string,
+  value?: number,
+  targetId?: string,
+  width?: number,
+  length?: number,
+): CommandEnvelope<SetSubsystemModeCommandMessage> {
   const commandId = createCommandId();
   return {
     commandId,
@@ -259,6 +267,8 @@ export function buildSetSubsystemModeCommand(controllableId: string, subsystemId
         mode,
         value,
         targetId,
+        width,
+        length,
       },
     },
   };
