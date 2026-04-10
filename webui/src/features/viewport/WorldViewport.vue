@@ -35,6 +35,7 @@ let energyTelemetryIntervalId: number | null = null;
 const snapshot = computed(() => gameStore.snapshot);
 const ownerOverlay = computed(() => gameStore.ownerOverlay);
 const selectedControllableId = computed(() => uiStore.selectedControllableId || (gameStore.ownedControllables[0]?.controllableId ?? ''));
+const ownedControllableIds = computed(() => new Set(gameStore.ownedControllables.map((entry) => entry.controllableId)));
 const navigationTarget = computed(() => selectedControllableId.value ? readNavigationTarget(ownerOverlay.value, selectedControllableId.value) : null);
 const tacticalTargetUnitId = computed(() => selectedControllableId.value
   ? (uiStore.tacticalTargetsByControllableId[selectedControllableId.value] ?? '')
@@ -187,6 +188,11 @@ function humanizeSubsystemName(value: string) {
 }
 
 function handleWorldSelect(selection: WorldSceneSelection) {
+  const clickedControllableId = selection.unitId ?? '';
+  if (clickedControllableId && ownedControllableIds.value.has(clickedControllableId)) {
+    uiStore.setSelectedControllable(clickedControllableId);
+  }
+
   uiStore.setLastSelection(selection);
 }
 

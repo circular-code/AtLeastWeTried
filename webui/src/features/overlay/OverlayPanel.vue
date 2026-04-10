@@ -27,6 +27,7 @@ const statIcons: Record<string, string> = {
 
 function selectControllable(controllableId: string) {
   uiStore.setSelectedControllable(controllableId);
+  uiStore.requestViewportJump(controllableId);
 }
 
 function handleLifecycleAction(controllableId: string, alive: boolean) {
