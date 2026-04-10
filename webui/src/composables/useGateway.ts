@@ -15,6 +15,7 @@ import {
   buildSetNavigationTargetCommand,
   buildSetSubsystemModeCommand,
   buildSetTacticalModeCommand,
+  buildUpgradeSubsystemCommand,
 } from '../transport/commands';
 import { createGatewayClient } from '../transport/gateway';
 import { loadSavedConnections, removeSavedConnection, upsertSavedConnection } from '../lib/savedConnections';
@@ -417,6 +418,20 @@ function createGatewayApi() {
     client.send(envelope.message);
   }
 
+  function upgradeSubsystem(controllableId: string, subsystemId: string) {
+    if (!controllableId || !subsystemId) {
+      return;
+    }
+
+    const envelope = buildUpgradeSubsystemCommand(controllableId, subsystemId);
+    gameStore.trackCommand(envelope.commandId, {
+      label: 'Upgrade subsystem',
+      subject: `${gameStore.getControllableLabel(controllableId)} -> ${subsystemId}`,
+    });
+
+    client.send(envelope.message);
+  }
+
   return {
     savedConnections,
     pendingAttachments,
@@ -442,5 +457,6 @@ function createGatewayApi() {
     setTacticalMode,
     setNavigationTarget,
     clearNavigationTarget,
+    upgradeSubsystem,
   };
 }

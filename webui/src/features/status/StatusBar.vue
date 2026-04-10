@@ -836,7 +836,6 @@ function formatPlayerSessionOptionLabel(player: PlayerSessionSummaryDto): string
           </div>
         </section>
       </div>
-
     </div>
 
     <div class="status-bar-group status-bar-group-right">
@@ -900,3 +899,6 @@ function formatPlayerSessionOptionLabel(player: PlayerSessionSummaryDto): string
     </div>
   </footer>
 </template>
+
+
+

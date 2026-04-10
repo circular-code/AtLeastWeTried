@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import type { WorldSceneSelection } from '../renderer/WorldScene';
 import type { ClientMessage, GatewayMessageDirection, ServerMessage } from '../types/generated';
-import type { ClearTacticalTargetCommandMessage, SetTacticalModeCommandMessage, SetTacticalTargetCommandMessage } from '../transport/commands';
+import type { ClearTacticalTargetCommandMessage, SetTacticalModeCommandMessage, SetTacticalTargetCommandMessage, UpgradeSubsystemCommandMessage } from '../transport/commands';
 import type { DebugLogEntry, ScannerMode, TacticalMode } from '../types/client';
 import { formatDebugPayload } from '../lib/formatting';
 
@@ -28,7 +28,7 @@ type StoredDebugLogSettings = {
   showServer?: boolean;
 };
 
-type DebugGatewayMessage = ClientMessage | ServerMessage | SetTacticalModeCommandMessage | SetTacticalTargetCommandMessage | ClearTacticalTargetCommandMessage;
+type DebugGatewayMessage = ClientMessage | ServerMessage | SetTacticalModeCommandMessage | SetTacticalTargetCommandMessage | ClearTacticalTargetCommandMessage | UpgradeSubsystemCommandMessage;
 
 export const useUiStore = defineStore('ui', {
   state: () => {
@@ -36,6 +36,7 @@ export const useUiStore = defineStore('ui', {
 
     return ({
     selectedControllableId: '',
+    viewportJumpTargetId: '',
     navigationThrustPercentage: 0.25,
     scannerMode: 'off' as ScannerMode,
     scannerWidth: 90,
@@ -86,6 +87,12 @@ export const useUiStore = defineStore('ui', {
   actions: {
     setSelectedControllable(controllableId: string) {
       this.selectedControllableId = controllableId;
+    },
+    requestViewportJump(unitId: string) {
+      this.viewportJumpTargetId = unitId;
+    },
+    clearViewportJump() {
+      this.viewportJumpTargetId = '';
     },
     setNavigationThrustPercentage(value: number) {
       if (!Number.isFinite(value)) {
@@ -184,13 +191,13 @@ export const useUiStore = defineStore('ui', {
         return;
       }
 
-      this.debugLogEntries = [{
+      this.debugLogEntries.unshift({
         id: `debug-${Date.now()}-${Math.random().toString(16).slice(2)}`,
         direction,
         messageType: message.type,
         payload,
         createdAt: Date.now(),
-      }, ...this.debugLogEntries];
+      });
     },
     clearDebugLog() {
       this.debugLogEntries = [];

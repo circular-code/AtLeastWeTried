@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { downloadTextFile, formatDebugDisplayPayload, formatDebugSnapshotFileName, formatDebugTime } from '../../lib/formatting';
 import { useUiStore } from '../../stores/ui';
 
 const uiStore = useUiStore();
+const filteredEntries = computed(() => uiStore.filteredDebugLogEntries);
+const expandedEntryIds = ref<string[]>([]);
 
 const debugLogLimitModel = computed({
   get: () => uiStore.debugLogLimit,
@@ -22,8 +24,21 @@ function handleBackdropClose() {
   close();
 }
 
+function toggleEntry(entryId: string) {
+  if (expandedEntryIds.value.includes(entryId)) {
+    expandedEntryIds.value = expandedEntryIds.value.filter((id) => id !== entryId);
+    return;
+  }
+
+  expandedEntryIds.value = [...expandedEntryIds.value, entryId];
+}
+
+function isEntryExpanded(entryId: string) {
+  return expandedEntryIds.value.includes(entryId);
+}
+
 function downloadSnapshot() {
-  if (uiStore.filteredDebugLogEntries.length === 0) {
+  if (filteredEntries.value.length === 0) {
     return;
   }
 
@@ -41,7 +56,7 @@ function downloadSnapshot() {
     `created=${new Date(createdAt).toISOString()}`,
     filters,
     '',
-    ...uiStore.filteredDebugLogEntries.map((entry) => [
+    ...filteredEntries.value.map((entry) => [
       `[${new Date(entry.createdAt).toISOString()}] ${entry.direction.toUpperCase()} ${entry.messageType}`,
       entry.payload,
       '',
@@ -65,7 +80,7 @@ function downloadSnapshot() {
             <input :checked="uiStore.isDebugLogIngame" type="checkbox" @change="uiStore.setDebugLogIngame(($event.target as HTMLInputElement).checked)" />
             <span>Ingame</span>
           </label>
-          <button class="secondary" type="button" :disabled="uiStore.filteredDebugLogEntries.length === 0" @click="downloadSnapshot">Download Snapshot</button>
+          <button class="secondary" type="button" :disabled="filteredEntries.length === 0" @click="downloadSnapshot">Download Snapshot</button>
           <button class="secondary" type="button" :disabled="uiStore.debugLogEntries.length === 0" @click="uiStore.clearDebugLog()">Clear</button>
           <button class="secondary" type="button" @click="close">Close</button>
         </div>
@@ -106,18 +121,54 @@ function downloadSnapshot() {
 
       <ul class="debug-log-list">
         <li v-if="uiStore.debugLogEntries.length === 0" class="debug-log-empty text-muted">No gateway traffic captured yet.</li>
-        <li v-else-if="uiStore.filteredDebugLogEntries.length === 0" class="debug-log-empty text-muted">No messages match the current filters.</li>
-        <li v-for="entry in uiStore.filteredDebugLogEntries" :key="entry.id" :class="['debug-log-entry', `is-${entry.direction}`]">
-          <div class="debug-log-head">
+        <li v-else-if="filteredEntries.length === 0" class="debug-log-empty text-muted">No messages match the current filters.</li>
+        <li v-for="entry in filteredEntries" :key="entry.id" :class="['debug-log-entry', `is-${entry.direction}`, { 'is-open': isEntryExpanded(entry.id) }]">
+          <button type="button" class="debug-log-head" @click="toggleEntry(entry.id)">
             <div class="debug-log-meta">
+              <span class="debug-log-caret" aria-hidden="true">{{ isEntryExpanded(entry.id) ? 'v' : '>' }}</span>
               <span :class="['debug-log-direction', `is-${entry.direction}`]">{{ entry.direction }}</span>
               <strong>{{ entry.messageType }}</strong>
             </div>
             <span>{{ formatDebugTime(entry.createdAt) }}</span>
-          </div>
-          <pre>{{ formatDebugDisplayPayload(entry.payload) }}</pre>
+          </button>
+          <pre v-if="isEntryExpanded(entry.id)">{{ formatDebugDisplayPayload(entry.payload) }}</pre>
         </li>
       </ul>
     </section>
   </div>
 </template>
+
+<style scoped>
+.debug-log-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  cursor: pointer;
+}
+
+.debug-log-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.debug-log-caret {
+  display: inline-block;
+  width: 0.9rem;
+  color: rgba(235, 242, 255, 0.72);
+  flex: 0 0 auto;
+}
+
+.debug-log-entry pre {
+  overflow: auto;
+  margin-top: 0.6rem;
+}
+</style>

@@ -335,6 +335,21 @@ export class WorldScene {
     this.requestRender();
   }
 
+  jumpToUnit(unitId: string) {
+    if (!unitId) {
+      return;
+    }
+
+    const targetUnit = this.renderableUnitsById.get(unitId);
+    if (!targetUnit) {
+      return;
+    }
+
+    this.camera.position.x = targetUnit.x;
+    this.camera.position.y = -targetUnit.y;
+    this.requestRender();
+  }
+
   private readonly handlePointerDown = (event: PointerEvent) => {
     if (event.button === 2) {
       event.preventDefault();
