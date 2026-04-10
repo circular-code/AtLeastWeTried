@@ -90,7 +90,9 @@ export const useGameStore = defineStore('game', {
       const selectedSessionId = sessionStore.selectedPlayerSession?.playerSessionId ?? '';
       const overlayById = selectedSessionId ? state.overlayBySessionId.get(selectedSessionId) ?? new Map() : new Map();
 
-      return Array.from(overlayById.entries()).map(([controllableId, overlay]) => {
+      return Array.from(overlayById.entries())
+        .filter(([, overlay]) => isOverlayCommandable(objectValue(overlay) ?? {}))
+        .map(([controllableId, overlay]) => {
         const publicControllable = state.galaxy?.controllables.find((item) => item.controllableId === controllableId);
         const overlayState = objectValue(overlay) ?? {};
 
@@ -102,7 +104,7 @@ export const useGameStore = defineStore('game', {
           score: publicControllable?.score ?? 0,
           kind: stringValue(overlayState.kind, 'unknown'),
         };
-      });
+        });
     },
     activeControllable: (state) => (controllableId: string) => {
       if (!controllableId) {
@@ -557,6 +559,14 @@ function getControllableAliveState(
   }
 
   return publicControllable?.alive ?? true;
+}
+
+function isOverlayCommandable(overlayState: Record<string, unknown>) {
+  if (hasRecordKey(overlayState, 'isCommandable')) {
+    return booleanValue(overlayState.isCommandable, false);
+  }
+
+  return true;
 }
 
 function buildOverlayEntry(

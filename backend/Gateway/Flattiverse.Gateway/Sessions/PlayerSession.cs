@@ -219,6 +219,9 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     public List<OwnerOverlayDeltaDto> BuildOverlaySnapshot()
     {
         var ownSnapshots = BuildOwnOverlaySnapshot();
+        foreach (var snapshot in ownSnapshots)
+            SetSnapshotCommandability(snapshot, isCommandable: true);
+
         var teamScopeKey = BuildTeamOverlayScopeKey();
         if (string.IsNullOrWhiteSpace(teamScopeKey))
             return ownSnapshots;
@@ -228,6 +231,9 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         var teammateSnapshots = TeamOverlaySyncService.CollectTeammateSnapshots(teamScopeKey, _id);
         if (teammateSnapshots.Count == 0)
             return ownSnapshots;
+
+        foreach (var snapshot in teammateSnapshots)
+            SetSnapshotCommandability(snapshot, isCommandable: false);
 
         var mergedByControllableId = new Dictionary<string, OwnerOverlayDeltaDto>(StringComparer.Ordinal);
         foreach (var snapshot in ownSnapshots)
@@ -270,6 +276,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     private OwnerOverlayDeltaDto BuildControllableOverlay(Controllable controllable)
     {
         var changes = new Dictionary<string, object?>();
+        changes["isCommandable"] = true;
         changes["displayName"] = controllable.Name;
         changes["kind"] = MappingService.MapUnitKind(controllable.Kind);
         changes["clusterId"] = controllable.Cluster?.Id ?? 0;
@@ -330,6 +337,14 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             ControllableId = $"p{Galaxy!.Player.Id}-c{controllable.Id}",
             Changes = changes
         };
+    }
+
+    private static void SetSnapshotCommandability(OwnerOverlayDeltaDto snapshot, bool isCommandable)
+    {
+        if (snapshot.Changes is null)
+            return;
+
+        snapshot.Changes["isCommandable"] = isCommandable;
     }
 
     private static List<Dictionary<string, object?>> BuildSubsystemOverlay(Controllable controllable)
