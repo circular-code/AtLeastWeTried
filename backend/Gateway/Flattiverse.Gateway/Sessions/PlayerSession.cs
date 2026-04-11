@@ -958,6 +958,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             {
                 "360" or "full" => ScanningService.ScannerMode.Full,
                 "forward" => ScanningService.ScannerMode.Forward,
+                "hold" => ScanningService.ScannerMode.Hold,
                 "sweep" => ScanningService.ScannerMode.Sweep,
                 "off" => ScanningService.ScannerMode.Off,
                 _ => null

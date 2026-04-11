@@ -53,6 +53,16 @@ export type HarvestSourceSummary = {
   score: number;
 };
 
+export type CargoResourceKey = 'metal' | 'carbon' | 'hydrogen' | 'silicon' | 'nebula';
+
+export type CargoResourceSnapshot = {
+  key: CargoResourceKey;
+  label: string;
+  current: number;
+  maximum: number;
+  ratio: number;
+};
+
 export function readSubsystemEntries(value: unknown): ShipSubsystemEntry[] {
   if (!Array.isArray(value)) {
     return [];
@@ -132,6 +142,40 @@ export function readSubsystemResourceValue(subsystems: ShipSubsystemEntry[], sub
 export function readSubsystemMetric(subsystem: ShipSubsystemEntry | null | undefined, statLabel: string) {
   const stat = subsystem?.stats.find((entry) => entry.label === statLabel);
   return stat ? readLeadingMetric(stat.value) : null;
+}
+
+export function readCargoResourceSnapshot(
+  subsystems: ShipSubsystemEntry[],
+  resource: CargoResourceKey,
+): CargoResourceSnapshot | null {
+  const cargo = subsystems.find((entry) => entry.name === 'Cargo');
+  if (!cargo) {
+    return null;
+  }
+
+  const label = cargoResourceLabel(resource);
+  const stat = cargo.stats.find((entry) => entry.label === label);
+  if (!stat) {
+    return null;
+  }
+
+  const metrics = Array.from(stat.value.matchAll(/-?\d+(?:[.,]\d+)?/g))
+    .map((match) => Number(match[0].replace(',', '.')))
+    .filter((metric) => Number.isFinite(metric));
+
+  if (metrics.length < 2) {
+    return null;
+  }
+
+  const current = metrics[0] ?? 0;
+  const maximum = metrics[1] ?? 0;
+  return {
+    key: resource,
+    label,
+    current,
+    maximum,
+    ratio: maximum > 0 ? Math.max(0, Math.min(1, current / maximum)) : 0,
+  };
 }
 
 export function readSubsystemMaximumMetric(subsystem: ShipSubsystemEntry | null | undefined, statLabel: string) {
@@ -290,6 +334,21 @@ function computeHarvestScore(unit: UnitSnapshotDto) {
     + (unit.planetHydrogen ?? 0)
     + (unit.planetSilicon ?? 0)
     + (unit.kind === 'nebula' ? 1 : 0);
+}
+
+function cargoResourceLabel(resource: CargoResourceKey) {
+  switch (resource) {
+    case 'metal':
+      return 'Metal';
+    case 'carbon':
+      return 'Carbon';
+    case 'hydrogen':
+      return 'Hydrogen';
+    case 'silicon':
+      return 'Silicon';
+    case 'nebula':
+      return 'Nebula';
+  }
 }
 
 function readNumeric(value: unknown) {
