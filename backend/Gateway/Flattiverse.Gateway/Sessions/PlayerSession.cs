@@ -1692,6 +1692,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                             _tacticalService.AttachControllable($"p{continued.Player.Id}-c{continued.ControllableInfo.Id}", respawnedShip);
                             ObserveBackgroundTask(_scanningService.ReapplyModeAsync(respawnedShip));
                             _maneuveringService.RebindShip(respawnedShip);
+                            _pathfindingService.RebindShip(respawnedShip);
                             break;
                         }
                     }

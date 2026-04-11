@@ -282,7 +282,6 @@ function humanizeSubsystemName(value: string) {
                 <div class="owner-overlay-title-topline">
                   <span class="owner-overlay-inline-meta owner-overlay-inline-meta--type">{{ entry.kind }}</span>
                   <span class="owner-overlay-inline-meta">{{ compactClusterLabel(entry.clusterLabel) }}</span>
-                  <span class="owner-overlay-inline-meta">{{ entry.statusLabel }}</span>
                 </div>
               </div>
               <div class="owner-overlay-head-actions">
