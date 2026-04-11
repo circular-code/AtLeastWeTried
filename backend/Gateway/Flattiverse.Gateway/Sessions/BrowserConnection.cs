@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Text.Json;
 using System.Threading.Channels;
 using Flattiverse.Gateway.Protocol;
 using Flattiverse.Gateway.Protocol.ClientMessages;
@@ -61,15 +60,15 @@ public sealed class BrowserConnection : IDisposable
         };
     }
 
-    public async Task HandleMessageAsync(string json, PlayerSessionPool sessionPool)
+    public async Task HandleMessageAsync(object? raw, PlayerSessionPool sessionPool)
     {
-        var msg = ClientMessage.Parse(json);
+        var msg = ClientMessage.Parse(raw);
         if (msg is null)
         {
             EnqueueMessage(new ServerStatusMessage
             {
                 Kind = "error",
-                Code = "invalid_json",
+                Code = "invalid_message",
                 Message = "Could not parse message.",
                 Recoverable = true
             });

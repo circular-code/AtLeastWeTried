@@ -6,6 +6,7 @@ using Flattiverse.Connector.GalaxyHierarchy;
 using Flattiverse.Connector.Network;
 using Flattiverse.Connector.Units;
 using Flattiverse.Gateway.Connector;
+using Flattiverse.Gateway.Protocol;
 using Flattiverse.Gateway.Protocol.Dtos;
 using Flattiverse.Gateway.Protocol.ServerMessages;
 using Flattiverse.Gateway.Options;
@@ -767,7 +768,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return overlay;
     }
 
-    public async Task<CommandReplyMessage> HandleCommandAsync(string commandType, string commandId, System.Text.Json.JsonElement? payload)
+    public async Task<CommandReplyMessage> HandleCommandAsync(string commandType, string commandId, PayloadElement? payload)
     {
         if (Galaxy is null || !_connected)
             return Rejected(commandId, "not_connected", "Player session is not connected.");
@@ -805,7 +806,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         }
     }
 
-    private async Task<CommandReplyMessage> HandleChat(string commandId, System.Text.Json.JsonElement? payload)
+    private async Task<CommandReplyMessage> HandleChat(string commandId, PayloadElement? payload)
     {
         var message = payload?.GetProperty("message").GetString() ?? "";
         var scope = payload?.GetProperty("scope").GetString() ?? "galaxy";
@@ -829,7 +830,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return Completed(commandId);
     }
 
-    private async Task<CommandReplyMessage> HandleCreateShip(string commandId, System.Text.Json.JsonElement? payload)
+    private async Task<CommandReplyMessage> HandleCreateShip(string commandId, PayloadElement? payload)
     {
         var name = payload?.GetProperty("name").GetString() ?? "Ship";
         var shipClass = payload?.GetProperty("shipClass").GetString() ?? "classic";
@@ -872,7 +873,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         };
     }
 
-    private async Task<CommandReplyMessage> HandleSetEngine(string commandId, System.Text.Json.JsonElement? payload)
+    private async Task<CommandReplyMessage> HandleSetEngine(string commandId, PayloadElement? payload)
     {
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
         var controllable = FindControllable(controllableId);
@@ -912,7 +913,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return Completed(commandId);
     }
 
-    private CommandReplyMessage HandleSetNavigationTarget(string commandId, System.Text.Json.JsonElement? payload)
+    private CommandReplyMessage HandleSetNavigationTarget(string commandId, PayloadElement? payload)
     {
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
         var controllable = FindControllable(controllableId);
@@ -946,7 +947,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return Completed(commandId);
     }
 
-    private CommandReplyMessage HandleClearNavigationTarget(string commandId, System.Text.Json.JsonElement? payload)
+    private CommandReplyMessage HandleClearNavigationTarget(string commandId, PayloadElement? payload)
     {
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
         if (FindControllable(controllableId) is ClassicShipControllable classic)
@@ -965,7 +966,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return Completed(commandId);
     }
 
-    private async Task<CommandReplyMessage> HandleScanner(string commandId, System.Text.Json.JsonElement? payload)
+    private async Task<CommandReplyMessage> HandleScanner(string commandId, PayloadElement? payload)
     {
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
         var controllable = FindControllable(controllableId);
@@ -1004,7 +1005,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return Completed(commandId);
     }
 
-    private async Task<CommandReplyMessage> HandleFireWeapon(string commandId, System.Text.Json.JsonElement? payload)
+    private async Task<CommandReplyMessage> HandleFireWeapon(string commandId, PayloadElement? payload)
     {
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
         var weaponId = payload?.GetProperty("weaponId").GetString() ?? "shot";
@@ -1487,7 +1488,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return ((moonbeamAngleDegrees % 360f) + 360f) % 360f;
     }
 
-    private async Task<CommandReplyMessage> HandleSetSubsystemMode(string commandId, System.Text.Json.JsonElement? payload)
+    private async Task<CommandReplyMessage> HandleSetSubsystemMode(string commandId, PayloadElement? payload)
     {
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
         var subsystemId = payload?.GetProperty("subsystemId").GetString() ?? "";
@@ -1718,7 +1719,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return Completed(commandId);
     }
 
-    private async Task<CommandReplyMessage> HandleUpgradeSubsystem(string commandId, System.Text.Json.JsonElement? payload)
+    private async Task<CommandReplyMessage> HandleUpgradeSubsystem(string commandId, PayloadElement? payload)
     {
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
         var subsystemId = payload?.GetProperty("subsystemId").GetString() ?? "";
@@ -1743,7 +1744,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return Completed(commandId);
     }
 
-    private Task<CommandReplyMessage> HandleSetTacticalMode(string commandId, System.Text.Json.JsonElement? payload)
+    private Task<CommandReplyMessage> HandleSetTacticalMode(string commandId, PayloadElement? payload)
     {
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
         var mode = payload?.GetProperty("mode").GetString() ?? "";
@@ -1769,7 +1770,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return Task.FromResult(Completed(commandId));
     }
 
-    private async Task<CommandReplyMessage> HandleSetTacticalTarget(string commandId, System.Text.Json.JsonElement? payload)
+    private async Task<CommandReplyMessage> HandleSetTacticalTarget(string commandId, PayloadElement? payload)
     {
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
         var targetId = payload?.GetProperty("targetId").GetString() ?? "";
@@ -1836,7 +1837,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         });
     }
 
-    private Task<CommandReplyMessage> HandleClearTacticalTarget(string commandId, System.Text.Json.JsonElement? payload)
+    private Task<CommandReplyMessage> HandleClearTacticalTarget(string commandId, PayloadElement? payload)
     {
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
         var controllable = FindControllable(controllableId);
@@ -1847,7 +1848,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return Task.FromResult(Completed(commandId));
     }
 
-    private async Task<CommandReplyMessage> HandleDestroyShip(string commandId, System.Text.Json.JsonElement? payload)
+    private async Task<CommandReplyMessage> HandleDestroyShip(string commandId, PayloadElement? payload)
     {
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
         var controllable = FindControllable(controllableId);
@@ -1858,7 +1859,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return Completed(commandId);
     }
 
-    private async Task<CommandReplyMessage> HandleContinueShip(string commandId, System.Text.Json.JsonElement? payload)
+    private async Task<CommandReplyMessage> HandleContinueShip(string commandId, PayloadElement? payload)
     {
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
         var controllable = FindControllable(controllableId);
@@ -1869,7 +1870,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return Completed(commandId);
     }
 
-    private CommandReplyMessage HandleRemoveShip(string commandId, System.Text.Json.JsonElement? payload)
+    private CommandReplyMessage HandleRemoveShip(string commandId, PayloadElement? payload)
     {
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
         var controllable = FindControllable(controllableId);

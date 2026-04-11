@@ -12,6 +12,24 @@ type Handlers = {
 
 export type OutgoingMessage = ClientMessage | SetTacticalModeCommandMessage | SetTacticalTargetCommandMessage | ClearTacticalTargetCommandMessage | UpgradeSubsystemCommandMessage;
 
+function toCamelCaseKey(key: string): string {
+  return key.charAt(0).toLowerCase() + key.slice(1);
+}
+
+function transformKeys(obj: unknown): unknown {
+  if (Array.isArray(obj)) {
+    return obj.map(transformKeys);
+  }
+  if (obj !== null && typeof obj === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj)) {
+      result[toCamelCaseKey(key)] = transformKeys(value);
+    }
+    return result;
+  }
+  return obj;
+}
+
 export function createGatewayClient(url: string, handlers: Handlers) {
   let socket: WebSocket | null = null;
 
@@ -34,7 +52,8 @@ export function createGatewayClient(url: string, handlers: Handlers) {
 
     socket.addEventListener('message', (event) => {
       try {
-        const parsed = decode(new Uint8Array(event.data as ArrayBuffer)) as ServerMessage;
+        const raw = decode(new Uint8Array(event.data as ArrayBuffer));
+        const parsed = transformKeys(raw) as ServerMessage;
         handlers.onMessage?.(parsed);
 
         if (parsed.type === 'ping') {

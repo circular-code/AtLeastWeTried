@@ -1,9 +1,7 @@
 using System.Net.WebSockets;
-using System.Text;
-using System.Text.Json;
 using Flattiverse.Gateway.Options;
-using Flattiverse.Gateway.Protocol;
 using MessagePack;
+using MessagePack.Resolvers;
 using Microsoft.Extensions.Options;
 using Flattiverse.Gateway.Protocol.ServerMessages;
 using Flattiverse.Gateway.Services;
@@ -37,6 +35,9 @@ builder.Services.AddHostedService<TickService>();
 var app = builder.Build();
 
 app.UseWebSockets();
+
+var msgPackOptions = MessagePackSerializerOptions.Standard
+    .WithResolver(ContractlessStandardResolver.Instance);
 
 app.MapGet("/api/health", () => Results.Ok(new
 {
@@ -86,8 +87,7 @@ app.Map("/ws", async (HttpContext context, PlayerSessionPool sessionPool, ILogge
             {
                 if (ws.State != WebSocketState.Open) break;
 
-                var json = JsonSerializer.Serialize<object>(message, JsonDefaults.Options);
-                var bytes = MessagePackSerializer.ConvertFromJson(json);
+                var bytes = MessagePackSerializer.Serialize(message.GetType(), message, msgPackOptions);
                 await ws.SendAsync(bytes, WebSocketMessageType.Binary, true, cts.Token);
             }
         }
@@ -125,8 +125,8 @@ app.Map("/ws", async (HttpContext context, PlayerSessionPool sessionPool, ILogge
                     msgpackBytes = ms.ToArray();
                 }
 
-                var json = MessagePackSerializer.ConvertToJson(msgpackBytes);
-                await connection.HandleMessageAsync(json, sessionPool);
+                var raw = MessagePackSerializer.Deserialize<object>(msgpackBytes, msgPackOptions);
+                await connection.HandleMessageAsync(raw, sessionPool);
             }
         }
     }

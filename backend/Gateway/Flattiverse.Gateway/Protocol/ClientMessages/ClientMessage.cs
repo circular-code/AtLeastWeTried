@@ -1,5 +1,3 @@
-using System.Text.Json;
-
 namespace Flattiverse.Gateway.Protocol.ClientMessages;
 
 public sealed class ClientMessage
@@ -7,31 +5,31 @@ public sealed class ClientMessage
     public string Type { get; set; } = "";
     public string? CommandId { get; set; }
     public string? PlayerSessionId { get; set; }
-    public JsonElement? Payload { get; set; }
+    public PayloadElement? Payload { get; set; }
 
-    public static ClientMessage? Parse(string json)
+    public static ClientMessage? Parse(object? raw)
     {
         try
         {
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
+            if (raw is not IDictionary<object, object> dict)
+                return null;
 
-            if (!root.TryGetProperty("type", out var typeProp))
+            if (!dict.TryGetValue("type", out var typeValue) || typeValue is not string typeStr)
                 return null;
 
             var msg = new ClientMessage
             {
-                Type = typeProp.GetString() ?? ""
+                Type = typeStr
             };
 
-            if (root.TryGetProperty("commandId", out var cmdId))
-                msg.CommandId = cmdId.GetString();
+            if (dict.TryGetValue("commandId", out var cmdVal) && cmdVal is string cmdStr)
+                msg.CommandId = cmdStr;
 
-            if (root.TryGetProperty("playerSessionId", out var psId))
-                msg.PlayerSessionId = psId.GetString();
+            if (dict.TryGetValue("playerSessionId", out var psVal) && psVal is string psStr)
+                msg.PlayerSessionId = psStr;
 
-            if (root.TryGetProperty("payload", out var payload))
-                msg.Payload = payload.Clone();
+            if (dict.TryGetValue("payload", out var payloadVal) && payloadVal is not null)
+                msg.Payload = new PayloadElement(payloadVal);
 
             return msg;
         }
