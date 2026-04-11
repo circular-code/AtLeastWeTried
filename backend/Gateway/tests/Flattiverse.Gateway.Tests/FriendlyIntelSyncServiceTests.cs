@@ -34,6 +34,36 @@ public sealed class FriendlyIntelSyncServiceTests
             {
                 new TrajectoryPointDto { X = 16f, Y = -7f },
                 new TrajectoryPointDto { X = 17f, Y = -5.5f }
+            },
+            MissionTargetSequenceNumber = 7,
+            MissionTargetVectorCount = 2,
+            MissionTargetVectors = new List<TrajectoryPointDto>
+            {
+                new TrajectoryPointDto { X = 18f, Y = -4f },
+                new TrajectoryPointDto { X = 19f, Y = -3f }
+            },
+            WormHoleTargetClusterName = "Echo Rift",
+            WormHoleTargetLeft = -12f,
+            WormHoleTargetTop = 44f,
+            WormHoleTargetRight = 8f,
+            WormHoleTargetBottom = 60f,
+            CurrentFieldMode = "spiral",
+            CurrentFieldFlowX = 0.25f,
+            CurrentFieldFlowY = -0.75f,
+            PowerUpAmount = 2f,
+            ScannedSubsystems = new List<ScannedSubsystemDto>
+            {
+                new ScannedSubsystemDto
+                {
+                    Id = "scanner-a",
+                    Name = "Main Scanner",
+                    Exists = true,
+                    Status = "Worked",
+                    Stats = new List<ScannedSubsystemStatDto>
+                    {
+                        new ScannedSubsystemStatDto { Label = "Range", Value = "42" }
+                    }
+                }
             }
         };
 
@@ -64,6 +94,11 @@ public sealed class FriendlyIntelSyncServiceTests
         Assert.Equal(snapshot.X, upsert.Snapshot.X, precision: 3);
         Assert.Equal(snapshot.Y, upsert.Snapshot.Y, precision: 3);
         Assert.Equal(snapshot.PredictedTrajectory!.Count, upsert.Snapshot.PredictedTrajectory!.Count);
+        Assert.Equal(snapshot.MissionTargetSequenceNumber, upsert.Snapshot.MissionTargetSequenceNumber);
+        Assert.Equal(snapshot.MissionTargetVectors!.Count, upsert.Snapshot.MissionTargetVectors!.Count);
+        Assert.Equal(snapshot.WormHoleTargetClusterName, upsert.Snapshot.WormHoleTargetClusterName);
+        Assert.Equal(snapshot.CurrentFieldMode, upsert.Snapshot.CurrentFieldMode);
+        Assert.Equal(snapshot.ScannedSubsystems![0].Name, upsert.Snapshot.ScannedSubsystems![0].Name);
 
         var remove = decoded[1];
         Assert.Equal(FriendlyIntelSyncService.IntelChangeKind.Remove, remove.Kind);

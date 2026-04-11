@@ -320,7 +320,7 @@ public sealed class PathfindingService : IConnectorEventHandler
 
             var clusterId = ship.Cluster?.Id ?? 0;
             var obstacles = CircularObstacleExtractor.Extract(
-                _mappingService.BuildUnitSnapshots(),
+                _mappingService.BuildCollaborativeClusterUnitSnapshots(clusterId),
                 clusterId,
                 ship.Size,
                 ClearanceMargin,
@@ -373,7 +373,7 @@ public sealed class PathfindingService : IConnectorEventHandler
 
             var clusterId = ship.Cluster?.Id ?? 0;
             var obstacles = CircularObstacleExtractor.Extract(
-                _mappingService.BuildUnitSnapshots(),
+                _mappingService.BuildCollaborativeClusterUnitSnapshots(clusterId),
                 clusterId,
                 ship.Size,
                 ClearanceMargin,
@@ -443,7 +443,7 @@ public sealed class PathfindingService : IConnectorEventHandler
 
         var currentClusterId = ship.Cluster?.Id ?? 0;
         var currentObstacles = CircularObstacleExtractor.Extract(
-            _mappingService.BuildUnitSnapshots(),
+            _mappingService.BuildCollaborativeClusterUnitSnapshots(currentClusterId),
             currentClusterId,
             ship.Size,
             ClearanceMargin,
@@ -716,7 +716,7 @@ public sealed class PathfindingService : IConnectorEventHandler
         var speed = Math.Sqrt(velX * velX + velY * velY);
 
         // Extract gravity sources from mapping
-        var units = _mappingService.BuildUnitSnapshots();
+        var units = _mappingService.BuildCollaborativeClusterUnitSnapshots(ship.Cluster?.Id ?? 0);
         var gravitySources = new List<GravitySource>();
         foreach (var unit in units)
         {
