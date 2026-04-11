@@ -965,7 +965,7 @@ function mergeKnownUnitIntelMetric(currentValue: number | null | undefined, inco
 
 function normalizeKnownUnitIntelMetric(value: unknown) {
   const numericValue = optionalNumberValue(value);
-  return typeof numericValue === 'number' && numericValue > 0 ? numericValue : undefined;
+  return typeof numericValue === 'number' && Number.isFinite(numericValue) ? numericValue : undefined;
 }
 
 function normalizeTrajectoryPoints(value: unknown): TrajectoryPointDto[] | undefined {
