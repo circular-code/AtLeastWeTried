@@ -1943,8 +1943,33 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
     private ScanningService.TargetSnapshot? ResolveScanTarget(string targetUnitId)
     {
+        if (string.IsNullOrWhiteSpace(targetUnitId))
+            return null;
+
+        _mappingService.TryGetCurrentTickForCurrentScope(out var currentTick);
+        if (_mappingService.TryGetUnitSnapshot(targetUnitId, out var unitSnapshot) && unitSnapshot is not null)
+        {
+            var predictedTrajectory = unitSnapshot.PredictedTrajectory?
+                .Select(point => new ScanningService.TargetPathPoint(point.X, point.Y))
+                .ToArray();
+            var hasVelocity = unitSnapshot.MovementX.HasValue && unitSnapshot.MovementY.HasValue;
+
+            return new ScanningService.TargetSnapshot(
+                unitSnapshot.X,
+                unitSnapshot.Y,
+                hasVelocity ? unitSnapshot.MovementX.GetValueOrDefault() : 0f,
+                hasVelocity ? unitSnapshot.MovementY.GetValueOrDefault() : 0f,
+                hasVelocity,
+                unitSnapshot.IsSeen,
+                unitSnapshot.LastSeenTick,
+                currentTick,
+                unitSnapshot.CurrentThrust,
+                unitSnapshot.MaximumThrust,
+                predictedTrajectory);
+        }
+
         var galaxy = Galaxy;
-        if (galaxy is null || string.IsNullOrWhiteSpace(targetUnitId))
+        if (galaxy is null)
             return null;
 
         if (TryParseControllableLocalId(targetUnitId, out var localControllableId))
@@ -1957,21 +1982,54 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                     controllable.Position.Y,
                     controllable.Movement.X,
                     controllable.Movement.Y,
-                    HasVelocity: true);
+                    HasVelocity: true,
+                    IsSeen: true,
+                    LastSeenTick: currentTick,
+                    CurrentTick: currentTick,
+                    CurrentThrust: ResolveCurrentThrust(controllable),
+                    MaximumThrust: ResolveMaximumThrust(controllable),
+                    PredictedTrajectory: null);
             }
         }
 
-        if (_mappingService.TryGetUnitSnapshot(targetUnitId, out var unitSnapshot) && unitSnapshot is not null)
+        return null;
+    }
+
+    private static float? ResolveCurrentThrust(Controllable controllable)
+    {
+        return controllable switch
         {
-            return new ScanningService.TargetSnapshot(
-                unitSnapshot.X,
-                unitSnapshot.Y,
-                VelocityX: 0f,
-                VelocityY: 0f,
-                HasVelocity: false);
+            ClassicShipControllable classic when classic.Engine.Exists => classic.Engine.Current.Length,
+            ModernShipControllable modern => SumModernShipThrust(modern, current: true),
+            _ => null
+        };
+    }
+
+    private static float? ResolveMaximumThrust(Controllable controllable)
+    {
+        return controllable switch
+        {
+            ClassicShipControllable classic when classic.Engine.Exists && classic.Engine.Maximum > 0f => classic.Engine.Maximum,
+            ModernShipControllable modern => SumModernShipThrust(modern, current: false),
+            _ => null
+        };
+    }
+
+    private static float? SumModernShipThrust(ModernShipControllable ship, bool current)
+    {
+        var total = 0f;
+        var hasEngine = false;
+
+        foreach (var engine in ship.Engines)
+        {
+            if (!engine.Exists)
+                continue;
+
+            hasEngine = true;
+            total += current ? MathF.Abs(engine.CurrentThrust) : MathF.Max(0f, engine.MaximumThrust);
         }
 
-        return null;
+        return hasEngine ? total : null;
     }
 
     private MappingService.MappingScopeContext? BuildMappingScopeContext()

@@ -5,7 +5,6 @@ using Flattiverse.Gateway.Protocol.Dtos;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using static Flattiverse.Gateway.Services.GravitySimulator;
 
 namespace Flattiverse.Gateway.Services;
 
@@ -18,8 +17,8 @@ public sealed class MappingService : IConnectorEventHandler
     private const int MaxStoredDeltasPerScope = 4096;
     private const int HiddenTrajectoryLookaheadTicks = 20;
     private const int HiddenTrajectoryMaximumTicks = 72;
-    private const int HiddenTrajectoryDownsample = 2;
-    private const double HiddenTrajectoryMinimumPointDistance = 0.35d;
+    private const int HiddenTrajectoryDownsample = 1;
+    private const double HiddenTrajectoryMinimumPointDistance = 0.2d;
 
     // Mapped units are shared across sessions by scope (Galaxy + Cluster).
     private static readonly Dictionary<MappingScopeKey, ScopeState> _scopeStates = new();
@@ -162,6 +161,21 @@ public sealed class MappingService : IConnectorEventHandler
                 return false;
 
             snapshot = CloneUnitSnapshot(unit);
+            return true;
+        }
+    }
+
+    public bool TryGetCurrentTickForCurrentScope(out uint currentTick)
+    {
+        currentTick = 0;
+        var scopeKey = ResolveScopeKey();
+        if (scopeKey is null)
+            return false;
+
+        lock (_stateLock)
+        {
+            EnsureGalaxyLoadedUnsafe(scopeKey.Value.GalaxyId);
+            currentTick = _latestTickByGalaxy.TryGetValue(scopeKey.Value.GalaxyId, out var tick) ? tick : 0;
             return true;
         }
     }
@@ -450,6 +464,8 @@ public sealed class MappingService : IConnectorEventHandler
             TeamName = unit.Team?.Name
         };
 
+        PopulatePropulsionMetadata(dto, unit);
+
         if (unit.FullStateKnown && unit is Sun sun)
         {
             dto.SunEnergy = sun.Energy;
@@ -468,6 +484,115 @@ public sealed class MappingService : IConnectorEventHandler
         }
 
         return dto;
+    }
+
+    private static void PopulatePropulsionMetadata(UnitSnapshotDto dto, Unit unit)
+    {
+        switch (unit)
+        {
+            case ClassicShipPlayerUnit classicShip when classicShip.Engine.Exists:
+                dto.CurrentThrust = classicShip.Engine.Current.Length;
+                dto.MaximumThrust = classicShip.Engine.Maximum > 0f ? classicShip.Engine.Maximum : null;
+                dto.PropulsionPrediction = new PropulsionPredictionSnapshotDto
+                {
+                    Mode = PropulsionPredictionMode.DirectVector,
+                    CurrentX = classicShip.Engine.Current.X,
+                    CurrentY = classicShip.Engine.Current.Y,
+                    TargetX = classicShip.Engine.Target.X,
+                    TargetY = classicShip.Engine.Target.Y,
+                    MaximumMagnitude = Math.Max(0f, classicShip.Engine.Maximum),
+                    MaximumChangePerTick = 0f
+                };
+                break;
+
+            case ModernShipPlayerUnit modernShip:
+            {
+                var hasEngine = false;
+                var currentThrust = 0f;
+                var maximumThrust = 0f;
+                var maximumChange = 0f;
+                var currentVectorX = 0f;
+                var currentVectorY = 0f;
+                var targetVectorX = 0f;
+                var targetVectorY = 0f;
+                var thrusters = new List<PropulsionThrusterSnapshotDto>(modernShip.Engines.Count);
+
+                for (var engineIndex = 0; engineIndex < modernShip.Engines.Count; engineIndex++)
+                {
+                    var engine = modernShip.Engines[engineIndex];
+                    if (!engine.Exists)
+                        continue;
+
+                    hasEngine = true;
+                    currentThrust += MathF.Abs(engine.CurrentThrust);
+                    maximumThrust += MathF.Max(0f, engine.MaximumThrust);
+                    maximumChange += MathF.Max(0f, engine.MaximumThrustChangePerTick);
+
+                    var worldAngleDegrees = ResolveModernThrusterWorldAngleDegrees(modernShip.Angle, engineIndex);
+                    var radians = worldAngleDegrees * (MathF.PI / 180f);
+                    var unitX = MathF.Cos(radians);
+                    var unitY = MathF.Sin(radians);
+                    currentVectorX += unitX * engine.CurrentThrust;
+                    currentVectorY += unitY * engine.CurrentThrust;
+                    targetVectorX += unitX * engine.TargetThrust;
+                    targetVectorY += unitY * engine.TargetThrust;
+
+                    thrusters.Add(new PropulsionThrusterSnapshotDto
+                    {
+                        WorldAngleDegrees = worldAngleDegrees,
+                        CurrentThrust = engine.CurrentThrust,
+                        TargetThrust = engine.TargetThrust,
+                        MaximumThrust = MathF.Max(0f, engine.MaximumThrust),
+                        MaximumThrustChangePerTick = MathF.Max(0f, engine.MaximumThrustChangePerTick)
+                    });
+                }
+
+                if (!hasEngine)
+                    break;
+
+                dto.CurrentThrust = currentThrust;
+                dto.MaximumThrust = maximumThrust > 0f ? maximumThrust : null;
+                dto.PropulsionPrediction = new PropulsionPredictionSnapshotDto
+                {
+                    Mode = PropulsionPredictionMode.DirectionalThrusters,
+                    CurrentX = currentVectorX,
+                    CurrentY = currentVectorY,
+                    TargetX = targetVectorX,
+                    TargetY = targetVectorY,
+                    MaximumMagnitude = Math.Max(0f, maximumThrust),
+                    MaximumChangePerTick = Math.Max(0f, maximumChange),
+                    Thrusters = thrusters
+                };
+                break;
+            }
+        }
+    }
+
+    private static float ResolveModernThrusterWorldAngleDegrees(float shipAngle, int engineIndex)
+    {
+        var localAngle = engineIndex switch
+        {
+            0 => 0f,
+            1 => 315f,
+            2 => 270f,
+            3 => 225f,
+            4 => 180f,
+            5 => 135f,
+            6 => 90f,
+            7 => 45f,
+            _ => 0f
+        };
+
+        return NormalizeAngle(shipAngle + localAngle);
+    }
+
+    private static float NormalizeAngle(float angle)
+    {
+        angle %= 360f;
+        if (angle < 0f)
+            angle += 360f;
+
+        return angle;
     }
 
     private static string BuildUnitId(Unit unit)
@@ -536,6 +661,8 @@ public sealed class MappingService : IConnectorEventHandler
             { "radius", unit.Radius },
             { "gravity", unit.Gravity },
             { "speedLimit", unit.SpeedLimit },
+            { "currentThrust", unit.CurrentThrust },
+            { "maximumThrust", unit.MaximumThrust },
             { "predictedTrajectory", unit.PredictedTrajectory?.Select(CloneTrajectoryPoint).ToArray() }
         };
 
@@ -574,21 +701,31 @@ public sealed class MappingService : IConnectorEventHandler
 
     private static void MergeKnownDetailState(UnitSnapshotDto current, UnitSnapshotDto? previous)
     {
-        if (previous is null)
-            return;
+        current.SunEnergy = MergeKnownIntelMetric(current.SunEnergy, previous?.SunEnergy);
+        current.SunIons = MergeKnownIntelMetric(current.SunIons, previous?.SunIons);
+        current.SunNeutrinos = MergeKnownIntelMetric(current.SunNeutrinos, previous?.SunNeutrinos);
+        current.SunHeat = MergeKnownIntelMetric(current.SunHeat, previous?.SunHeat);
+        current.SunDrain = MergeKnownIntelMetric(current.SunDrain, previous?.SunDrain);
+        current.PlanetMetal = MergeKnownIntelMetric(current.PlanetMetal, previous?.PlanetMetal);
+        current.PlanetCarbon = MergeKnownIntelMetric(current.PlanetCarbon, previous?.PlanetCarbon);
+        current.PlanetHydrogen = MergeKnownIntelMetric(current.PlanetHydrogen, previous?.PlanetHydrogen);
+        current.PlanetSilicon = MergeKnownIntelMetric(current.PlanetSilicon, previous?.PlanetSilicon);
+        current.CurrentThrust = MergeKnownIntelMetric(current.CurrentThrust, previous?.CurrentThrust);
+        current.MaximumThrust = MergeKnownIntelMetric(current.MaximumThrust, previous?.MaximumThrust);
+        current.PropulsionPrediction = ClonePropulsionPrediction(current.PropulsionPrediction ?? previous?.PropulsionPrediction);
+    }
 
-        if (current.FullStateKnown)
-            return;
+    private static float? MergeKnownIntelMetric(float? currentValue, float? previousValue)
+    {
+        if (IsKnownIntelMetric(currentValue))
+            return currentValue;
 
-        current.SunEnergy = previous.SunEnergy;
-        current.SunIons = previous.SunIons;
-        current.SunNeutrinos = previous.SunNeutrinos;
-        current.SunHeat = previous.SunHeat;
-        current.SunDrain = previous.SunDrain;
-        current.PlanetMetal = previous.PlanetMetal;
-        current.PlanetCarbon = previous.PlanetCarbon;
-        current.PlanetHydrogen = previous.PlanetHydrogen;
-        current.PlanetSilicon = previous.PlanetSilicon;
+        return IsKnownIntelMetric(previousValue) ? previousValue : null;
+    }
+
+    private static bool IsKnownIntelMetric(float? value)
+    {
+        return value.HasValue && float.IsFinite(value.Value) && value.Value > 0f;
     }
 
     private static bool IsStaticUnit(Unit unit)
@@ -652,101 +789,15 @@ public sealed class MappingService : IConnectorEventHandler
         IEnumerable<UnitSnapshotDto> scopeUnits,
         uint currentTick)
     {
-        if (unit.IsStatic || unit.IsSeen)
-            return null;
-
-        var relevantUnits = scopeUnits
-            .Where(candidate => candidate.ClusterId == unit.ClusterId)
-            .ToArray();
-
-        var elapsedTicks = currentTick > unit.LastSeenTick
-            ? (int)Math.Min(currentTick - unit.LastSeenTick, HiddenTrajectoryMaximumTicks)
-            : 0;
-        var totalTicks = Math.Min(HiddenTrajectoryMaximumTicks, elapsedTicks + HiddenTrajectoryLookaheadTicks);
-        if (totalTicks <= 0)
-            return null;
-
-        var gravitySources = relevantUnits
-            .Where(source =>
-                !string.Equals(source.UnitId, unit.UnitId, StringComparison.Ordinal) &&
-                source.Gravity > 0f &&
-                (source.IsStatic || source.IsSeen))
-            .Select(source => new GravitySource(source.X, source.Y, source.Gravity))
-            .ToArray();
-
-        var blockingDisks = relevantUnits
-            .Where(obstacle =>
-                !string.Equals(obstacle.UnitId, unit.UnitId, StringComparison.Ordinal) &&
-                obstacle.IsSolid != false &&
-                obstacle.Radius > 0f &&
-                (obstacle.IsStatic || obstacle.IsSeen))
-            .Select(obstacle => new PredictionObstacle(obstacle.X, obstacle.Y, obstacle.Radius))
-            .ToArray();
-
-        var speedLimit = unit.SpeedLimit.GetValueOrDefault();
-        var simulated = SimulateTrajectory(
-            startX: unit.X,
-            startY: unit.Y,
-            velX: unit.MovementX.GetValueOrDefault(),
-            velY: unit.MovementY.GetValueOrDefault(),
-            engineX: 0d,
-            engineY: 0d,
-            gravitySampler: (x, y) => ComputeGravityAcceleration(x, y, gravitySources),
-            ticks: totalTicks,
-            speedLimit: speedLimit > 0f ? speedLimit : double.PositiveInfinity,
-            shouldStop: point => IntersectsPredictionObstacle(point, unit.Radius, blockingDisks));
-
-        if (simulated.Count < 2)
-            return null;
-
-        var predicted = new List<TrajectoryPointDto>();
-        AppendTrajectoryPoint(predicted, simulated[0]);
-
-        var presentIndex = Math.Min(elapsedTicks, simulated.Count - 1);
-        if (presentIndex > 0)
-            AppendTrajectoryPoint(predicted, simulated[presentIndex]);
-
-        for (var index = presentIndex + HiddenTrajectoryDownsample; index < simulated.Count; index += HiddenTrajectoryDownsample)
-            AppendTrajectoryPoint(predicted, simulated[index]);
-
-        AppendTrajectoryPoint(predicted, simulated[^1]);
-        return predicted.Count >= 2 ? predicted : null;
-    }
-
-    private static bool IntersectsPredictionObstacle(
-        TrajectoryPoint point,
-        float unitRadius,
-        IReadOnlyList<PredictionObstacle> blockingDisks)
-    {
-        var safeRadius = Math.Max(0f, unitRadius);
-        foreach (var disk in blockingDisks)
-        {
-            var dx = point.X - disk.X;
-            var dy = point.Y - disk.Y;
-            var minimumDistance = safeRadius + disk.Radius;
-            if ((dx * dx) + (dy * dy) <= minimumDistance * minimumDistance)
-                return true;
-        }
-
-        return false;
-    }
-
-    private static void AppendTrajectoryPoint(List<TrajectoryPointDto> points, TrajectoryPoint candidate)
-    {
-        if (points.Count > 0)
-        {
-            var previous = points[^1];
-            var dx = candidate.X - previous.X;
-            var dy = candidate.Y - previous.Y;
-            if ((dx * dx) + (dy * dy) < HiddenTrajectoryMinimumPointDistance * HiddenTrajectoryMinimumPointDistance)
-                return;
-        }
-
-        points.Add(new TrajectoryPointDto
-        {
-            X = (float)candidate.X,
-            Y = (float)candidate.Y
-        });
+        return TrajectoryPredictionService.BuildHiddenTrajectory(
+            unit,
+            scopeUnits,
+            currentTick,
+            new TrajectoryPredictionService.PredictionOptions(
+                HiddenTrajectoryLookaheadTicks,
+                HiddenTrajectoryMaximumTicks,
+                HiddenTrajectoryDownsample,
+                HiddenTrajectoryMinimumPointDistance));
     }
 
     private static bool TrajectoryMatches(
@@ -1042,7 +1093,10 @@ public sealed class MappingService : IConnectorEventHandler
             Radius = source.Radius,
             Gravity = source.Gravity,
             SpeedLimit = source.SpeedLimit,
+            CurrentThrust = source.CurrentThrust,
+            MaximumThrust = source.MaximumThrust,
             PredictedTrajectory = source.PredictedTrajectory?.Select(CloneTrajectoryPoint).ToList(),
+            PropulsionPrediction = ClonePropulsionPrediction(source.PropulsionPrediction),
             TeamName = source.TeamName,
             SunEnergy = source.SunEnergy,
             SunIons = source.SunIons,
@@ -1053,6 +1107,33 @@ public sealed class MappingService : IConnectorEventHandler
             PlanetCarbon = source.PlanetCarbon,
             PlanetHydrogen = source.PlanetHydrogen,
             PlanetSilicon = source.PlanetSilicon
+        };
+    }
+
+    private static PropulsionPredictionSnapshotDto? ClonePropulsionPrediction(PropulsionPredictionSnapshotDto? source)
+    {
+        if (source is null)
+            return null;
+
+        return new PropulsionPredictionSnapshotDto
+        {
+            Mode = source.Mode,
+            CurrentX = source.CurrentX,
+            CurrentY = source.CurrentY,
+            TargetX = source.TargetX,
+            TargetY = source.TargetY,
+            MaximumMagnitude = source.MaximumMagnitude,
+            MaximumChangePerTick = source.MaximumChangePerTick,
+            Thrusters = source.Thrusters?
+                .Select(thruster => new PropulsionThrusterSnapshotDto
+                {
+                    WorldAngleDegrees = thruster.WorldAngleDegrees,
+                    CurrentThrust = thruster.CurrentThrust,
+                    TargetThrust = thruster.TargetThrust,
+                    MaximumThrust = thruster.MaximumThrust,
+                    MaximumThrustChangePerTick = thruster.MaximumThrustChangePerTick
+                })
+                .ToList()
         };
     }
 

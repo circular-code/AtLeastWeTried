@@ -227,7 +227,7 @@ export class WorldScene {
       new THREE.LineBasicMaterial({
         color: 0xb7d8ff,
         transparent: true,
-        opacity: 0.54,
+        opacity: 0.82,
         depthTest: false,
         depthWrite: false,
       }),
@@ -1246,7 +1246,7 @@ export class WorldScene {
         continue;
       }
 
-      appendDottedTrajectory(points, unit.predictedTrajectory, 3.05, 16, 10);
+      appendDottedTrajectory(points, unit.predictedTrajectory, 3.08, 18, 6, 0.42);
     }
 
     if (points.length === 0) {
@@ -1255,7 +1255,7 @@ export class WorldScene {
       return;
     }
 
-    this.unseenTrajectoryPreview.renderOrder = 37;
+    this.unseenTrajectoryPreview.renderOrder = 40;
     this.unseenTrajectoryPreview.frustumCulled = false;
     this.setDynamicLinePoints(this.unseenTrajectoryPreview, points);
     this.unseenTrajectoryPreview.visible = true;
@@ -2069,6 +2069,7 @@ function appendDottedTrajectory(
   z: number,
   dashLength: number,
   gapLength: number,
+  lineHalfWidth = 0,
 ) {
   let draw = true;
   let remaining = dashLength;
@@ -2092,10 +2093,13 @@ function appendDottedTrajectory(
       const nextY = cursorY + unitY * step;
 
       if (draw) {
-        target.push(
-          new THREE.Vector3(cursorX, -cursorY, z),
-          new THREE.Vector3(nextX, -nextY, z),
-        );
+        const offsetX = -unitY * lineHalfWidth;
+        const offsetY = unitX * lineHalfWidth;
+        appendLineSegment(target, cursorX, cursorY, nextX, nextY, z, 0, 0);
+        if (lineHalfWidth > 0.0001) {
+          appendLineSegment(target, cursorX, cursorY, nextX, nextY, z, offsetX, offsetY);
+          appendLineSegment(target, cursorX, cursorY, nextX, nextY, z, -offsetX, -offsetY);
+        }
       }
 
       cursorX = nextX;
@@ -2109,4 +2113,20 @@ function appendDottedTrajectory(
       }
     }
   }
+}
+
+function appendLineSegment(
+  target: THREE.Vector3[],
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+  z: number,
+  offsetX: number,
+  offsetY: number,
+) {
+  target.push(
+    new THREE.Vector3(startX + offsetX, -(startY + offsetY), z),
+    new THREE.Vector3(endX + offsetX, -(endY + offsetY), z),
+  );
 }

@@ -2,6 +2,7 @@ using Flattiverse.Connector;
 using Flattiverse.Connector.Events;
 using Flattiverse.Connector.GalaxyHierarchy;
 using Flattiverse.Gateway.Connector;
+using System.Numerics;
 
 namespace Flattiverse.Gateway.Services;
 
@@ -15,6 +16,9 @@ namespace Flattiverse.Gateway.Services;
 public sealed class ScanningService : IConnectorEventHandler
 {
     private const float SweepHalfArc = 60f;
+    private const float TargetPredictionSeconds = 0.45f;
+    private const float TargetUncertaintyCapFactor = 0.75f;
+    private const uint MaximumUncertaintyTicks = 72u;
 
     public enum ScannerMode
     {
@@ -26,7 +30,22 @@ public sealed class ScanningService : IConnectorEventHandler
         Targeted
     }
 
-    public readonly record struct TargetSnapshot(float X, float Y, float VelocityX, float VelocityY, bool HasVelocity);
+    public readonly record struct TargetPathPoint(float X, float Y);
+
+    public readonly record struct TargetSnapshot(
+        float X,
+        float Y,
+        float VelocityX,
+        float VelocityY,
+        bool HasVelocity,
+        bool IsSeen,
+        uint LastSeenTick,
+        uint CurrentTick,
+        float? CurrentThrust,
+        float? MaximumThrust,
+        IReadOnlyList<TargetPathPoint>? PredictedTrajectory);
+
+    internal readonly record struct TargetingSolution(float Angle, float Width);
 
     private sealed class TargetTrackState
     {
@@ -123,10 +142,10 @@ public sealed class ScanningService : IConnectorEventHandler
         }
 
         if (state is { Mode: ScannerMode.Targeted, Active: true, Ship: { } targetedShip, TargetUnitId: { Length: > 0 } }
-            && TryResolveTargetedAngle(state, targetedShip, out var targetAngle))
+            && TryResolveTargetedSolution(state, targetedShip, out var targetingSolution))
         {
             var scanner = targetedShip.MainScanner;
-            TryDispatchScannerCommand(() => scanner.Set(ResolveWidth(scanner, state), ResolveLength(scanner, state), targetAngle));
+            TryDispatchScannerCommand(() => scanner.Set(targetingSolution.Width, ResolveLength(scanner, state), targetingSolution.Angle));
         }
     }
 
@@ -220,11 +239,15 @@ public sealed class ScanningService : IConnectorEventHandler
             return;
 
         var scanner = ship.MainScanner;
+        var targetWidth = ResolveWidth(scanner, state);
         var targetAngle = ship.Angle;
-        if (TryResolveTargetedAngle(state, ship, out var resolvedAngle))
-            targetAngle = resolvedAngle;
+        if (TryResolveTargetedSolution(state, ship, out var targetingSolution))
+        {
+            targetWidth = targetingSolution.Width;
+            targetAngle = targetingSolution.Angle;
+        }
 
-        await scanner.Set(ResolveWidth(scanner, state), ResolveLength(scanner, state), targetAngle);
+        await scanner.Set(targetWidth, ResolveLength(scanner, state), targetAngle);
         await scanner.On();
     }
 
@@ -330,9 +353,9 @@ public sealed class ScanningService : IConnectorEventHandler
         return state;
     }
 
-    private bool TryResolveTargetedAngle(ScannerState state, ClassicShipControllable ship, out float targetAngle)
+    private bool TryResolveTargetedSolution(ScannerState state, ClassicShipControllable ship, out TargetingSolution solution)
     {
-        targetAngle = ship.Angle;
+        solution = new TargetingSolution(ship.Angle, ResolveWidth(ship.MainScanner, state));
         if (string.IsNullOrWhiteSpace(state.TargetUnitId))
             return false;
 
@@ -356,18 +379,130 @@ public sealed class ScanningService : IConnectorEventHandler
             velocityY = estimatedVelocity.Y;
         }
 
-        const float predictionSeconds = 0.45f;
-        var predictedX = target.X + velocityX * predictionSeconds;
-        var predictedY = target.Y + velocityY * predictionSeconds;
-        var deltaX = predictedX - ship.Position.X;
-        var deltaY = predictedY - ship.Position.Y;
-        if (MathF.Abs(deltaX) < 0.0001f && MathF.Abs(deltaY) < 0.0001f)
+        return TryResolveTargetingSolution(
+            new Vector2(ship.Position.X, ship.Position.Y),
+            ResolveWidth(ship.MainScanner, state),
+            ship.MainScanner.MinimumWidth,
+            ship.MainScanner.MaximumWidth,
+            target,
+            velocityX,
+            velocityY,
+            out solution);
+    }
+
+    internal static bool TryResolveTargetingSolution(
+        Vector2 scannerOrigin,
+        float desiredWidth,
+        float minimumWidth,
+        float maximumWidth,
+        in TargetSnapshot target,
+        float resolvedVelocityX,
+        float resolvedVelocityY,
+        out TargetingSolution solution)
+    {
+        var baseWidth = Math.Clamp(desiredWidth, minimumWidth, maximumWidth);
+        if (!target.IsSeen &&
+            target.PredictedTrajectory is { Count: > 0 } predictedTrajectory &&
+            TryResolveTrajectoryEnvelope(scannerOrigin, baseWidth, minimumWidth, maximumWidth, predictedTrajectory, target, out solution))
+            return true;
+
+        var predictedX = target.X + (resolvedVelocityX * TargetPredictionSeconds);
+        var predictedY = target.Y + (resolvedVelocityY * TargetPredictionSeconds);
+        var delta = new Vector2(predictedX - scannerOrigin.X, predictedY - scannerOrigin.Y);
+        if (delta.LengthSquared() < 0.00000001f)
+        {
+            solution = default;
+            return false;
+        }
+
+        var predictedAngle = NormalizeAngle(MathF.Atan2(delta.Y, delta.X) * (180f / MathF.PI));
+        var uncertaintyAngle = ComputeAngularPaddingDegrees(delta.Length(), ComputeTargetUncertaintyRadius(target));
+        var width = Math.Clamp(Math.Max(baseWidth, baseWidth + (uncertaintyAngle * 2f)), minimumWidth, maximumWidth);
+        solution = new TargetingSolution(predictedAngle, width);
+        return true;
+    }
+
+    private static bool TryResolveTrajectoryEnvelope(
+        Vector2 scannerOrigin,
+        float baseWidth,
+        float minimumWidth,
+        float maximumWidth,
+        IReadOnlyList<TargetPathPoint> predictedTrajectory,
+        in TargetSnapshot target,
+        out TargetingSolution solution)
+    {
+        solution = default;
+        var uncertaintyRadius = ComputeTargetUncertaintyRadius(target);
+        var hasAngle = false;
+        var referenceAngle = 0f;
+        var minimumDelta = 0f;
+        var maximumDelta = 0f;
+
+        for (var index = 0; index < predictedTrajectory.Count; index++)
+        {
+            var point = predictedTrajectory[index];
+            var delta = new Vector2(point.X - scannerOrigin.X, point.Y - scannerOrigin.Y);
+            var distance = delta.Length();
+            if (distance < 0.0001f)
+                continue;
+
+            var angle = NormalizeAngle(MathF.Atan2(delta.Y, delta.X) * (180f / MathF.PI));
+            if (!hasAngle)
+            {
+                hasAngle = true;
+                referenceAngle = angle;
+                minimumDelta = 0f;
+                maximumDelta = 0f;
+            }
+
+            var anglePadding = ComputeAngularPaddingDegrees(distance, uncertaintyRadius);
+            var relativeAngle = ShortestAngleDelta(referenceAngle, angle);
+            minimumDelta = Math.Min(minimumDelta, relativeAngle - anglePadding);
+            maximumDelta = Math.Max(maximumDelta, relativeAngle + anglePadding);
+        }
+
+        if (!hasAngle)
             return false;
 
-        targetAngle = MathF.Atan2(deltaY, deltaX) * (180f / MathF.PI);
-        if (targetAngle < 0f)
-            targetAngle += 360f;
+        var width = Math.Clamp(Math.Max(baseWidth, maximumDelta - minimumDelta), minimumWidth, maximumWidth);
+        var targetAngle = NormalizeAngle(referenceAngle + ((minimumDelta + maximumDelta) * 0.5f));
+        solution = new TargetingSolution(targetAngle, width);
         return true;
+    }
+
+    private static float ComputeTargetUncertaintyRadius(in TargetSnapshot target)
+    {
+        if (target.IsSeen)
+            return 0f;
+
+        var currentThrust = Math.Max(0f, target.CurrentThrust.GetValueOrDefault());
+        if (currentThrust <= 0f || target.CurrentTick <= target.LastSeenTick)
+            return 0f;
+
+        var ticksSinceSeen = Math.Min(target.CurrentTick - target.LastSeenTick, MaximumUncertaintyTicks);
+        if (ticksSinceSeen == 0)
+            return 0f;
+
+        var ticks = (float)ticksSinceSeen;
+        var uncertainty = currentThrust * ticks * (ticks + 1f) * 0.5f;
+        var maximumThrust = Math.Max(0f, target.MaximumThrust.GetValueOrDefault());
+        if (maximumThrust > 0f)
+        {
+            var uncertaintyCap = maximumThrust * ticks * TargetUncertaintyCapFactor;
+            uncertainty = Math.Min(uncertainty, uncertaintyCap);
+        }
+
+        return uncertainty;
+    }
+
+    private static float ComputeAngularPaddingDegrees(float distance, float radius)
+    {
+        if (radius <= 0f)
+            return 0f;
+        if (distance <= 0.0001f)
+            return 180f;
+
+        return MathF.Atan2(radius, distance) * (180f / MathF.PI);
     }
 
     private static (float X, float Y) EstimateVelocity(TargetTrackState track, float x, float y)
