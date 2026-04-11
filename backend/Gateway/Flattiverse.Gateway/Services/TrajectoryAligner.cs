@@ -189,11 +189,33 @@ public static class TrajectoryAligner
         var thrustAlongX = alongTrackError * toTargetX;
         var thrustAlongY = alongTrackError * toTargetY;
 
-        // --- Combine both phases ---
+        // --- Combine with gravity-aware priority ---
+        // Gravity compensation and cross-track correction (cancelX/Y) take priority
+        // over along-track thrust.  When the engine budget is tight (gravity is a
+        // large fraction of max thrust), uniform clamping would scale down gravity
+        // compensation during braking, letting the ship drift into the gravity source.
+        var cancelMag = Math.Sqrt(cancelX * cancelX + cancelY * cancelY);
+        if (cancelMag >= maxThrust)
+        {
+            // Safety corrections saturate the engine — no budget for along-track.
+            var s = maxThrust / Math.Max(cancelMag, 1e-9d);
+            return (cancelX * s, cancelY * s);
+        }
+
+        // Limit along-track thrust to budget remaining after safety corrections.
+        var thrustAlongMag = Math.Sqrt(thrustAlongX * thrustAlongX + thrustAlongY * thrustAlongY);
+        var availableForAlong = maxThrust - cancelMag;
+        if (thrustAlongMag > availableForAlong && thrustAlongMag > 1e-9d)
+        {
+            var sf = availableForAlong / thrustAlongMag;
+            thrustAlongX *= sf;
+            thrustAlongY *= sf;
+        }
+
         var correctionX = cancelX + thrustAlongX;
         var correctionY = cancelY + thrustAlongY;
 
-        // Clamp to maximum thrust
+        // Final safety clamp — vectors can add constructively.
         var correctionMag = Math.Sqrt(correctionX * correctionX + correctionY * correctionY);
         if (correctionMag > maxThrust)
         {
@@ -255,10 +277,21 @@ public static class TrajectoryAligner
             // rather than gravity at the far-away endpoint.
             var (egx, egy) = ComputeGravityAcceleration(shipX, shipY, sources);
             var gravMag = Math.Sqrt(egx * egx + egy * egy);
-            var gravCompCost = Math.Min(gravMag * GravityLookaheadTicks, maxThrust * 0.9d);
+
+            // Use the same adaptive lookahead as the engine vector computation
+            // so the braking estimate matches actual gravity-compensation cost.
+            var adaptiveLookahead = GravityLookaheadTicks;
+            if (gravMag > 1e-9d)
+            {
+                var maxCompMag = maxThrust * 0.5d;
+                var maxTicks = maxCompMag / gravMag;
+                adaptiveLookahead = Math.Min(adaptiveLookahead, (int)Math.Max(1d, maxTicks));
+            }
+
+            var gravCompCost = Math.Min(gravMag * adaptiveLookahead, maxThrust * 0.7d);
 
             // Effective braking = thrust left after gravity compensation.
-            var effectiveBraking = Math.Max(maxThrust - gravCompCost, maxThrust * 0.05d);
+            var effectiveBraking = Math.Max(maxThrust - gravCompCost, maxThrust * 0.15d);
 
             // Two braking limits, take the tighter one:
             // 1) Physics sqrt curve:  v = sqrt(2 · a_eff · d)
@@ -266,6 +299,17 @@ public static class TrajectoryAligner
             var vMaxSqrt = Math.Sqrt(2d * effectiveBraking * totalRemainingDist);
             var vMaxProp = totalRemainingDist * StopApproachRate;
             vMaxForStop = Math.Min(vMaxSqrt, vMaxProp);
+
+            // Gravity-based minimum speed floor: when gravity is a significant
+            // fraction of engine thrust, the ship must maintain enough speed to
+            // resist cross-track drift.  Without this floor, braking near gravity
+            // wells leaves the ship too slow and gravity pulls it off-path.
+            if (gravMag > maxThrust * 0.15d)
+            {
+                var gravityRatio = gravMag / maxThrust;
+                var minGravSpeed = Math.Clamp(gravityRatio * speedLimit * 0.4d, 0.5d, speedLimit * 0.5d);
+                vMaxForStop = Math.Max(vMaxForStop, minGravSpeed);
+            }
         }
 
         if (path is null || path.Count < 2)

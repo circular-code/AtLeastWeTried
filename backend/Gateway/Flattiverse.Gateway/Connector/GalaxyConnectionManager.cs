@@ -9,32 +9,6 @@ namespace Flattiverse.Gateway.Connector;
 /// </summary>
 public sealed class GalaxyConnectionManager : IDisposable
 {
-    private static readonly RuntimeDisclosure RuntimeSelfDisclosure = new(
-        RuntimeDisclosureLevel.Automated,
-        RuntimeDisclosureLevel.Automated,
-        RuntimeDisclosureLevel.Automated,
-        RuntimeDisclosureLevel.Automated,
-        RuntimeDisclosureLevel.AiControlled,
-        RuntimeDisclosureLevel.Manual,
-        RuntimeDisclosureLevel.Unsupported,
-        RuntimeDisclosureLevel.Unsupported,
-        RuntimeDisclosureLevel.Manual,
-        RuntimeDisclosureLevel.Manual);
-
-    private static readonly BuildDisclosure BuildSelfDisclosure = new(
-        BuildDisclosureLevel.AgenticTool,
-        BuildDisclosureLevel.IntegratedLlm,
-        BuildDisclosureLevel.SearchOnly,
-        BuildDisclosureLevel.SearchOnly,
-        BuildDisclosureLevel.AgenticTool,
-        BuildDisclosureLevel.AgenticTool,
-        BuildDisclosureLevel.AgenticTool,
-        BuildDisclosureLevel.AgenticTool,
-        BuildDisclosureLevel.SearchOnly,
-        BuildDisclosureLevel.None,
-        BuildDisclosureLevel.None,
-        BuildDisclosureLevel.None);
-
     private readonly string _galaxyUrl;
     private readonly string _apiKey;
     private readonly string? _teamName;
@@ -53,13 +27,7 @@ public sealed class GalaxyConnectionManager : IDisposable
     /// </summary>
     public event Action? ConnectionLost;
 
-    public GalaxyConnectionManager(
-        string galaxyUrl,
-        string apiKey,
-        string? teamName,
-        RuntimeDisclosure? runtimeDisclosure,
-        BuildDisclosure? buildDisclosure,
-        ILogger logger)
+    public GalaxyConnectionManager(string galaxyUrl, string apiKey, string? teamName, RuntimeDisclosure? runtimeDisclosure, BuildDisclosure? buildDisclosure, ILogger logger)
     {
         _galaxyUrl = galaxyUrl;
         _apiKey = apiKey;
@@ -74,7 +42,8 @@ public sealed class GalaxyConnectionManager : IDisposable
     /// </summary>
     public async Task ConnectAsync(IReadOnlyList<IConnectorEventHandler> eventHandlers)
     {
-        BuildDisclosure buildDisclosure = new(
+        
+        BuildDisclosure buildDisclosure = _buildDisclosure ?? new(
             softwareDesign:    BuildDisclosureLevel.IntegratedLlm,
             ui:                BuildDisclosureLevel.IntegratedLlm,
             universeRendering: BuildDisclosureLevel.IntegratedLlm,
@@ -89,7 +58,7 @@ public sealed class GalaxyConnectionManager : IDisposable
             chat:              BuildDisclosureLevel.IntegratedLlm
         );
 
-        RuntimeDisclosure runtimeDisclosure = new(
+        RuntimeDisclosure runtimeDisclosure = _runtimeDisclosure ?? new(
             engineControl:         RuntimeDisclosureLevel.Automated,
             navigation:            RuntimeDisclosureLevel.Autonomous,
             scannerControl:        RuntimeDisclosureLevel.Automated,
@@ -101,6 +70,7 @@ public sealed class GalaxyConnectionManager : IDisposable
             loadoutControl:        RuntimeDisclosureLevel.Manual,
             chat:                  RuntimeDisclosureLevel.Manual
         );
+
         _galaxy = await Galaxy.Connect(_galaxyUrl, _apiKey, _teamName, runtimeDisclosure, buildDisclosure);
         _logger.LogInformation("Connected to Galaxy as {Player}", _galaxy.Player.Name);
 
