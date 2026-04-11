@@ -39,6 +39,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     private readonly RuntimeDisclosure? _runtimeDisclosure;
     private readonly BuildDisclosure? _buildDisclosure;
     private readonly MappingService _mappingService;
+    private readonly FriendlyIntelSyncService _friendlyIntelSyncService;
     private readonly ScanningService _scanningService;
     private readonly ManeuveringService _maneuveringService;
     private readonly PathfindingService _pathfindingService;
@@ -82,6 +83,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         _buildDisclosure = buildDisclosure;
         _logger = logger;
         _mappingService = new MappingService(BuildMappingScopeContext);
+        _friendlyIntelSyncService = new FriendlyIntelSyncService(_id, _mappingService, BuildFriendlyIntelSyncContext, logger);
         _scanningService = new ScanningService(ResolveScanTarget);
         _maneuveringService = new ManeuveringService(_mappingService);
         _pathfindingService = new PathfindingService(_mappingService, _maneuveringService, pathfindingLogger, pathfindingOptions);
@@ -120,6 +122,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
             _connected = true;
             _displayName = _connectionManager.Galaxy!.Player.Name;
+            RegisterLocalTeamSession();
         }
         catch (Exception ex)
         {
@@ -135,6 +138,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     private void OnConnectionLost()
     {
         _connected = false;
+        LocalTeamSessionRegistry.RemoveSession(_id);
         TeamOverlaySyncService.RemoveSession(_id);
 
         List<BrowserConnection> connections;
@@ -283,7 +287,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         if (galaxy is null || string.IsNullOrWhiteSpace(teamName))
             return null;
 
-        return $"{_galaxyUrl}|{galaxy.Name}|team:{teamName}";
+        return MappingService.BuildTeamScopeKey($"{_galaxyUrl}|{galaxy.Name}", teamName);
     }
 
     private OwnerOverlayDeltaDto BuildControllableOverlay(Controllable controllable)
@@ -2293,7 +2297,28 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
         var clusterId = ResolveCurrentClusterId(galaxy);
         var galaxyId = $"{_galaxyUrl}|{galaxy.Name}";
-        return new MappingService.MappingScopeContext(galaxyId, clusterId, galaxy.Player.Id);
+        return new MappingService.MappingScopeContext(galaxyId, clusterId, galaxy.Player.Id, galaxy.Player.Team?.Name);
+    }
+
+    private FriendlyIntelSyncService.SyncContext? BuildFriendlyIntelSyncContext()
+    {
+        var galaxy = Galaxy;
+        var teamName = galaxy?.Player?.Team?.Name;
+        if (galaxy is null || string.IsNullOrWhiteSpace(teamName))
+            return null;
+
+        var galaxyId = $"{_galaxyUrl}|{galaxy.Name}";
+        var teamScopeKey = MappingService.BuildTeamScopeKey(galaxyId, teamName);
+        return new FriendlyIntelSyncService.SyncContext(teamScopeKey, galaxyId, teamName, galaxy.Player.Id, galaxy);
+    }
+
+    private void RegisterLocalTeamSession()
+    {
+        var context = BuildFriendlyIntelSyncContext();
+        if (context is null)
+            return;
+
+        LocalTeamSessionRegistry.Register(context.Value.TeamScopeKey, _id, context.Value.LocalPlayerId);
     }
 
     private static int ResolveCurrentClusterId(Galaxy galaxy)
@@ -2319,6 +2344,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     /// </summary>
     public void FlushTickDeltas()
     {
+        ObserveBackgroundTask(_friendlyIntelSyncService.FlushAsync());
+
         List<BrowserConnection> connections;
         lock (_lock)
             connections = _attachedConnections.ToList();
@@ -2353,6 +2380,11 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
         switch (@event)
         {
+            case PlayerBinaryChatEvent binaryEvent:
+                var response = _friendlyIntelSyncService.HandleIncoming(binaryEvent);
+                if (response is not null)
+                    ObserveBackgroundTask(response);
+                break;
 
             case ChatEvent chatEvent:
                 var scope = chatEvent switch
@@ -2676,6 +2708,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
     public void Dispose()
     {
+        LocalTeamSessionRegistry.RemoveSession(_id);
         TeamOverlaySyncService.RemoveSession(_id);
 
         if (_connectionManager is not null)

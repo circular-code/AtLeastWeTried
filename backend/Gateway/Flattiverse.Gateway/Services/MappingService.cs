@@ -26,6 +26,8 @@ public sealed class MappingService : IConnectorEventHandler
     private static readonly Dictionary<MappingScopeKey, ScopeState> _scopeStates = new();
     private static readonly object _stateLock = new();
     private static readonly Dictionary<string, Dictionary<string, RecentTargetSnapshotEntry>> _recentTargetSnapshotsByGalaxy = new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, Dictionary<string, Dictionary<string, UnitSnapshotDto>>> _remoteSnapshotsByTeamScope
+        = new(StringComparer.Ordinal);
 
     private static readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -155,6 +157,25 @@ public sealed class MappingService : IConnectorEventHandler
         lock (_stateLock)
         {
             EnsureGalaxyLoadedUnsafe(scope.Value.GalaxyId);
+            return BuildUnifiedGalaxyUnitSnapshotsUnsafe(scope.Value.GalaxyId, scope.Value.TeamName);
+        }
+    }
+
+    /// <summary>
+    /// Build the backend-local collaborative snapshot without any imported remote
+    /// teammate intel. This is the outbound export surface for binary sync.
+    /// </summary>
+    internal List<UnitSnapshotDto> BuildLocalGalaxyUnitSnapshots()
+    {
+        EnsurePersistenceConfigured();
+
+        var scope = _scopeResolver();
+        if (scope is null || string.IsNullOrWhiteSpace(scope.Value.GalaxyId))
+            return new List<UnitSnapshotDto>();
+
+        lock (_stateLock)
+        {
+            EnsureGalaxyLoadedUnsafe(scope.Value.GalaxyId);
             return BuildMergedGalaxyUnitSnapshotsUnsafe(scope.Value.GalaxyId);
         }
     }
@@ -203,7 +224,7 @@ public sealed class MappingService : IConnectorEventHandler
         lock (_stateLock)
         {
             EnsureGalaxyLoadedUnsafe(scope.Value.GalaxyId);
-            foreach (var unit in BuildMergedGalaxyUnitSnapshotsUnsafe(scope.Value.GalaxyId))
+            foreach (var unit in BuildUnifiedGalaxyUnitSnapshotsUnsafe(scope.Value.GalaxyId, scope.Value.TeamName))
             {
                 if (!string.Equals(unit.UnitId, unitId, StringComparison.Ordinal))
                     continue;
@@ -354,7 +375,7 @@ public sealed class MappingService : IConnectorEventHandler
         {
             EnsureGalaxyLoadedUnsafe(scope.Value.GalaxyId);
 
-            var currentUnits = BuildMergedGalaxyUnitSnapshotsUnsafe(scope.Value.GalaxyId);
+            var currentUnits = BuildUnifiedGalaxyUnitSnapshotsUnsafe(scope.Value.GalaxyId, scope.Value.TeamName);
             var currentById = currentUnits.ToDictionary(unit => unit.UnitId, CloneUnitSnapshot, StringComparer.Ordinal);
             if (!_lastDeliveredGalaxyUnitsByGalaxy.TryGetValue(scope.Value.GalaxyId, out var previousById))
             {
@@ -401,6 +422,66 @@ public sealed class MappingService : IConnectorEventHandler
 
             _lastDeliveredGalaxyUnitsByGalaxy[scope.Value.GalaxyId] = currentById;
             return deltas;
+        }
+    }
+
+    internal void ApplyRemoteIntel(string sourcePlayerKey, IReadOnlyList<FriendlyIntelSyncService.IntelChange> changes)
+    {
+        if (changes.Count == 0)
+            return;
+
+        EnsurePersistenceConfigured();
+
+        var scope = _scopeResolver();
+        if (scope is null ||
+            string.IsNullOrWhiteSpace(scope.Value.GalaxyId) ||
+            string.IsNullOrWhiteSpace(scope.Value.TeamName) ||
+            string.IsNullOrWhiteSpace(sourcePlayerKey))
+        {
+            return;
+        }
+
+        lock (_stateLock)
+        {
+            EnsureGalaxyLoadedUnsafe(scope.Value.GalaxyId);
+
+            var teamScopeKey = BuildTeamScopeKey(scope.Value.GalaxyId, scope.Value.TeamName);
+            if (!_remoteSnapshotsByTeamScope.TryGetValue(teamScopeKey, out var snapshotsBySource))
+            {
+                snapshotsBySource = new Dictionary<string, Dictionary<string, UnitSnapshotDto>>(StringComparer.Ordinal);
+                _remoteSnapshotsByTeamScope[teamScopeKey] = snapshotsBySource;
+            }
+
+            if (!snapshotsBySource.TryGetValue(sourcePlayerKey, out var sourceSnapshots))
+            {
+                sourceSnapshots = new Dictionary<string, UnitSnapshotDto>(StringComparer.Ordinal);
+                snapshotsBySource[sourcePlayerKey] = sourceSnapshots;
+            }
+
+            for (var index = 0; index < changes.Count; index++)
+            {
+                var change = changes[index];
+                if (change.Kind == FriendlyIntelSyncService.IntelChangeKind.Remove)
+                {
+                    sourceSnapshots.Remove(change.UnitId);
+                    continue;
+                }
+
+                if (change.Snapshot is null)
+                    continue;
+
+                var incoming = CloneUnitSnapshot(change.Snapshot);
+                if (sourceSnapshots.TryGetValue(change.UnitId, out var existing))
+                    MergeKnownDetailState(incoming, existing);
+
+                sourceSnapshots[change.UnitId] = incoming;
+            }
+
+            if (sourceSnapshots.Count == 0)
+                snapshotsBySource.Remove(sourcePlayerKey);
+
+            if (snapshotsBySource.Count == 0)
+                _remoteSnapshotsByTeamScope.Remove(teamScopeKey);
         }
     }
 
@@ -874,6 +955,39 @@ public sealed class MappingService : IConnectorEventHandler
         }
 
         return mergedById.Values.ToList();
+    }
+
+    private static List<UnitSnapshotDto> BuildUnifiedGalaxyUnitSnapshotsUnsafe(string galaxyId, string? teamName)
+    {
+        var mergedById = BuildMergedGalaxyUnitSnapshotsUnsafe(galaxyId)
+            .ToDictionary(unit => unit.UnitId, CloneUnitSnapshot, StringComparer.Ordinal);
+
+        if (string.IsNullOrWhiteSpace(teamName))
+            return mergedById.Values.ToList();
+
+        if (!_remoteSnapshotsByTeamScope.TryGetValue(BuildTeamScopeKey(galaxyId, teamName), out var snapshotsBySource))
+            return mergedById.Values.ToList();
+
+        foreach (var sourceSnapshots in snapshotsBySource.Values)
+        {
+            foreach (var candidate in sourceSnapshots.Values)
+            {
+                if (!mergedById.TryGetValue(candidate.UnitId, out var existing))
+                {
+                    mergedById[candidate.UnitId] = CloneUnitSnapshot(candidate);
+                    continue;
+                }
+
+                mergedById[candidate.UnitId] = MergeGalaxyUnitSnapshots(existing, candidate);
+            }
+        }
+
+        return mergedById.Values.ToList();
+    }
+
+    internal static string BuildTeamScopeKey(string galaxyId, string teamName)
+    {
+        return $"{galaxyId}|team:{teamName}";
     }
 
     private static UnitSnapshotDto MergeGalaxyUnitSnapshots(UnitSnapshotDto current, UnitSnapshotDto candidate)
@@ -2067,7 +2181,7 @@ public sealed class MappingService : IConnectorEventHandler
         };
     }
 
-    public readonly record struct MappingScopeContext(string GalaxyId, int ClusterId, int? LocalPlayerId);
+    public readonly record struct MappingScopeContext(string GalaxyId, int ClusterId, int? LocalPlayerId, string? TeamName = null);
 
     private readonly record struct MappingScopeKey(string GalaxyId, int ClusterId);
 
