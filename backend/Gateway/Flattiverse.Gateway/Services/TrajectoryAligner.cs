@@ -23,7 +23,7 @@ public static class TrajectoryAligner
     /// Approach deceleration factor: desired along-track speed = min(speedLimit, dist * factor).
     /// Lower values start braking earlier. Used when no path is available.
     /// </summary>
-    private const double ApproachDecelerationFactor = 0.06d;
+    private const double ApproachDecelerationFactor = 0.10d;
 
     /// <summary>
     /// How far ahead (in world units) along the remaining path to scan for upcoming turns.
@@ -33,7 +33,7 @@ public static class TrajectoryAligner
     /// <summary>
     /// Safety factor for turn-speed calculation. Lower = more conservative braking.
     /// </summary>
-    private const double TurnSpeedSafetyFactor = 0.85d;
+    private const double TurnSpeedSafetyFactor = 0.70d;
 
     /// <summary>
     /// Minimum sine of turn angle to trigger curvature braking.
@@ -50,14 +50,14 @@ public static class TrajectoryAligner
     /// is too generous for discrete-time control.  Chosen so the ship reaches
     /// ≈0.5 speed at typical arrival thresholds (~14 units).
     /// </summary>
-    private const double StopApproachRate = 0.06d;
+    private const double StopApproachRate = 0.035d;
 
     /// <summary>
     /// Multiplier on the ideal stopping distance to determine when destination-stop
     /// braking activates.  3× gives a comfortable margin for the braking curve to
     /// work within discrete-time control.
     /// </summary>
-    private const double StopBrakeActivationMultiplier = 4.0d;
+    private const double StopBrakeActivationMultiplier = 5.0d;
 
     /// <summary>
     /// Compute the engine vector that best steers the ship from its current position
