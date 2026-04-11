@@ -876,7 +876,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         _maneuveringService.ClearNavigationTarget(classic.Id);
 
         var thrust = payload?.GetProperty("thrust").GetSingle() ?? 0f;
-        _maneuveringService.SetThrustPercentage(classic.Id, thrust);
+        _maneuveringService.SetMaxSpeedFraction(classic.Id, thrust);
 
         if (payload?.TryGetProperty("x", out var xEl) == true && payload?.TryGetProperty("y", out var yEl) == true &&
             xEl.ValueKind != System.Text.Json.JsonValueKind.Null && yEl.ValueKind != System.Text.Json.JsonValueKind.Null)
@@ -914,21 +914,24 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
         var targetX = payload?.GetProperty("targetX").GetSingle() ?? 0f;
         var targetY = payload?.GetProperty("targetY").GetSingle() ?? 0f;
-        var thrustPercentage = payload?.TryGetProperty("thrustPercentage", out var thrustEl) == true
-            && thrustEl.ValueKind != System.Text.Json.JsonValueKind.Null
-            ? thrustEl.GetSingle()
-            : 1f;
+        var maxSpeedFraction = payload?.TryGetProperty("maxSpeedFraction", out var speedEl) == true
+            && speedEl.ValueKind != System.Text.Json.JsonValueKind.Null
+            ? speedEl.GetSingle()
+            : payload?.TryGetProperty("thrustPercentage", out var thrustEl) == true
+                && thrustEl.ValueKind != System.Text.Json.JsonValueKind.Null
+                ? thrustEl.GetSingle()
+                : 1f;
         var direct = payload?.TryGetProperty("direct", out var directEl) == true
             && directEl.ValueKind == System.Text.Json.JsonValueKind.True;
 
         if (direct)
         {
             _pathfindingService.ClearNavigationGoal(classic.Id);
-            _maneuveringService.SetNavigationTarget(classic, targetX, targetY, thrustPercentage, true, isDirect: true);
+            _maneuveringService.SetNavigationTarget(classic, targetX, targetY, maxSpeedFraction, true, isDirect: true);
         }
         else
         {
-            _pathfindingService.SetNavigationGoal(classic, targetX, targetY, thrustPercentage);
+            _pathfindingService.SetNavigationGoal(classic, targetX, targetY, maxSpeedFraction);
         }
 
         return Completed(commandId);

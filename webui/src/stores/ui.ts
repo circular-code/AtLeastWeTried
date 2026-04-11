@@ -38,7 +38,7 @@ export const useUiStore = defineStore('ui', {
 
     return ({
     selectedControllableId: '',
-    navigationThrustPercentage: 1,
+    navigationMaxSpeedFraction: 1,
     viewportJumpTargetId: '',
     focusSelectionRequestToken: 0,
     isFocusSelectionActive: false,
@@ -108,13 +108,13 @@ export const useUiStore = defineStore('ui', {
     setFocusSelectionActive(value: boolean) {
       this.isFocusSelectionActive = value;
     },
-    setNavigationThrustPercentage(value: number) {
+    setNavigationMaxSpeedFraction(value: number) {
       if (!Number.isFinite(value)) {
-        this.navigationThrustPercentage = 0;
+        this.navigationMaxSpeedFraction = 0;
         return;
       }
 
-      this.navigationThrustPercentage = Math.min(Math.max(value, 0), 1);
+      this.navigationMaxSpeedFraction = Math.min(Math.max(value, 0), 1);
     },
     setScannerMode(mode: ScannerMode) {
       this.scannerMode = mode;

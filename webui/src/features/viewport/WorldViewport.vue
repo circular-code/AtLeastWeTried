@@ -66,7 +66,7 @@ function handleWorldNavigate(selection: WorldSceneSelection) {
     selectedControllableId.value,
     selection.worldX,
     selection.worldY,
-    uiStore.navigationThrustPercentage,
+    uiStore.navigationMaxSpeedFraction,
     selection.direct,
   );
 }
@@ -94,19 +94,23 @@ function handleThrustWheel(delta: number) {
     return;
   }
 
-  const nextThrust = Math.round(
+  const nextSpeed = Math.round(
     Math.min(
       1,
-      Math.max(0, uiStore.navigationThrustPercentage - delta * 0.0005),
+      Math.max(0, uiStore.navigationMaxSpeedFraction - delta * 0.0005),
     ) * 20,
   ) / 20;
 
-  if (nextThrust === uiStore.navigationThrustPercentage) {
+  if (nextSpeed === uiStore.navigationMaxSpeedFraction) {
     return;
   }
 
-  uiStore.setNavigationThrustPercentage(nextThrust);
-  gateway.setEngine(controllableId, nextThrust);
+  uiStore.setNavigationMaxSpeedFraction(nextSpeed);
+
+  const navigationTarget = readNavigationTarget(gameStore.ownerOverlay, controllableId);
+  if (navigationTarget) {
+    gateway.setNavigationTarget(controllableId, navigationTarget.x, -navigationTarget.y, nextSpeed);
+  }
 }
 
 function triggerDamageFlash(damageRatio: number) {

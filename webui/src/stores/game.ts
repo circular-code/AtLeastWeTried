@@ -241,6 +241,19 @@ export const useGameStore = defineStore('game', {
       if (mode === 'target') return 'target';
       return 'off';
     },
+    maxSpeedFractionFor: (state) => (controllableId: string): number => {
+      if (!controllableId) {
+        return 1;
+      }
+
+      const overlayState = objectValue(resolveOverlayByControllableId(state.overlayBySessionId, controllableId)) ?? {};
+      const navigationState = objectValue(overlayState.navigation);
+      if (!navigationState) {
+        return 1;
+      }
+
+      return numberValue(navigationState.maxSpeedFraction, numberValue(navigationState.thrustPercentage, 1));
+    },
     thrustPercentageFor: (state) => (controllableId: string): number => {
       if (!controllableId) {
         return 1;
@@ -252,7 +265,7 @@ export const useGameStore = defineStore('game', {
         return 1;
       }
 
-      return numberValue(navigationState.thrustPercentage, 1);
+      return numberValue(navigationState.thrustPercentage, numberValue(navigationState.maxSpeedFraction, 1));
     },
     recentActivity: (state) => (lifetimeMs: number) => {
       const now = Date.now();
@@ -1036,19 +1049,6 @@ function buildDetailGroups(unit: UnitSnapshotDto | undefined | null, kindHint?: 
         ],
       },
     );
-  }
-
-  if (hasPlanetTelemetry(unit)) {
-    groups.push({
-      title: 'Planetary Composition',
-      tone: 'solar',
-      stats: [
-        { label: 'Metal', value: formatPlanetMetric(unit?.planetMetal) },
-        { label: 'Carbon', value: formatPlanetMetric(unit?.planetCarbon) },
-        { label: 'Hydrogen', value: formatPlanetMetric(unit?.planetHydrogen) },
-        { label: 'Silicon', value: formatPlanetMetric(unit?.planetSilicon) },
-      ],
-    });
   }
 
   return groups;

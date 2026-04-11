@@ -14,16 +14,14 @@ const gameStore = useGameStore();
 const uiStore = useUiStore();
 const activeControllableId = computed(() => uiStore.selectedControllableId || (gameStore.ownedControllables[0]?.controllableId ?? ''));
 
-const thrust = computed({
-  get: () => uiStore.navigationThrustPercentage,
+const maxSpeed = computed({
+  get: () => uiStore.navigationMaxSpeedFraction,
   set: (value: number) => {
-    uiStore.setNavigationThrustPercentage(value);
+    uiStore.setNavigationMaxSpeedFraction(value);
     const controllableId = activeControllableId.value;
     const navigationTarget = readNavigationTarget(gameStore.ownerOverlay, controllableId);
     if (navigationTarget) {
       gateway.setNavigationTarget(controllableId, navigationTarget.x, -navigationTarget.y, value);
-    } else {
-      gateway.setEngine(controllableId, value);
     }
   },
 });
@@ -95,8 +93,8 @@ watch(
     const tacticalModeFromOverlay = gameStore.tacticalModeFor(newId);
     uiStore.setTacticalMode(tacticalModeFromOverlay);
 
-    const thrustFromOverlay = gameStore.thrustPercentageFor(newId);
-    uiStore.setNavigationThrustPercentage(thrustFromOverlay);
+    const maxSpeedFromOverlay = gameStore.maxSpeedFractionFor(newId);
+    uiStore.setNavigationMaxSpeedFraction(maxSpeedFromOverlay);
   },
 );
 
@@ -339,9 +337,9 @@ function formatCargoFill(current: number, maximum: number) {
           </div>
           <span class="dock-sep dock-sep--horizontal" aria-hidden="true"></span>
           <div class="dock-group">
-            <span class="dock-label">Thrust</span>
-            <input v-model.number="thrust" class="dock-slider" type="range" min="0" max="1" step="0.05" />
-            <span class="dock-value">{{ thrust.toFixed(2) }}</span>
+            <span class="dock-label">Speed</span>
+            <input v-model.number="maxSpeed" class="dock-slider" type="range" min="0" max="1" step="0.05" />
+            <span class="dock-value">{{ maxSpeed.toFixed(2) }}</span>
             <!-- <button class="dock-btn" type="button" @click="gateway.fireWeapon(activeControllableId)">Fire</button> -->
           </div>
         </div>
