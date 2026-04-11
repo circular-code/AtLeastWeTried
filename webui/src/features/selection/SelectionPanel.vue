@@ -27,7 +27,7 @@ const canSetAsTarget = computed(() => {
     return false;
   }
 
-  return tacticalMode.value === 'target' && selectionEntry.value.id !== activeControllableId.value;
+  return selectionEntry.value.id !== activeControllableId.value;
 });
 
 function initiateTargetedScan() {
@@ -58,6 +58,11 @@ function trackedUnitButtonStyle(unitId: string) {
 function setAsTarget() {
   if (!selectionEntry.value || !activeControllableId.value) {
     return;
+  }
+
+  if (tacticalMode.value !== 'target') {
+    uiStore.setTacticalMode('target');
+    gateway.setTacticalMode(activeControllableId.value, 'target');
   }
 
   gateway.setTacticalTarget(activeControllableId.value, selectionEntry.value.id);
@@ -105,7 +110,6 @@ function setAsTarget() {
           </button>
           -->
           <button
-            v-if="tacticalMode === 'target'"
             class="button-secondary button-compact"
             type="button"
             :disabled="!canSetAsTarget"

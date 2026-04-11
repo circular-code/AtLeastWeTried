@@ -84,6 +84,11 @@ const sections = computed<KeybindSection[]>(() => [
         action: 'Lock onto ship',
       },
       {
+        input: 'T',
+        action: 'Set selected unit as tactical target',
+        detail: 'Switches to target mode if not already active, then sets the selected unit as the target.',
+      },
+      {
         input: 'F',
         action: 'Scanner off',
       },

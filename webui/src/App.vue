@@ -98,6 +98,19 @@ function handleWindowKeydown(event: KeyboardEvent) {
       event.preventDefault();
       requestFocusSelectionToggle();
       return;
+    case 't': {
+      const selection = gameStore.selectionEntry(uiStore.lastSelection);
+      if (!selection || selection.id === controllableId) {
+        return;
+      }
+      event.preventDefault();
+      if (uiStore.tacticalMode !== 'target') {
+        uiStore.setTacticalMode('target');
+        gateway.setTacticalMode(controllableId, 'target');
+      }
+      gateway.setTacticalTarget(controllableId, selection.id);
+      return;
+    }
     case 'f':
       event.preventDefault();
       uiStore.setScannerMode('off');
