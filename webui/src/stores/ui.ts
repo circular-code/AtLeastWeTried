@@ -39,6 +39,7 @@ export const useUiStore = defineStore('ui', {
     return ({
     selectedControllableId: '',
     removingControllableIds: new Set<string>(),
+    autoShotRegenerationControllableIds: new Set<string>(),
     navigationMaxSpeedFraction: 1,
     viewportJumpTargetId: '',
     focusSelectionRequestToken: 0,
@@ -76,6 +77,7 @@ export const useUiStore = defineStore('ui', {
       return Math.max(1, Math.floor(state.debugLogLimit));
     },
     activeDebugCaptureSearch: (state) => state.debugLogCaptureSearch.trim(),
+    isShotRegenerationEnabled: (state) => (controllableId: string) => state.autoShotRegenerationControllableIds.has(controllableId),
     filteredDebugLogEntries(state): DebugLogEntry[] {
       return state.debugLogEntries.filter((entry) => matchesDebugLogFilters(
         state,
@@ -115,12 +117,35 @@ export const useUiStore = defineStore('ui', {
       next.delete(controllableId);
       this.removingControllableIds = next;
     },
+    setShotRegenerationEnabled(controllableId: string, enabled: boolean) {
+      const normalizedControllableId = controllableId.trim();
+      if (!normalizedControllableId) {
+        return;
+      }
+
+      const next = new Set(this.autoShotRegenerationControllableIds);
+      if (enabled) {
+        next.add(normalizedControllableId);
+      } else {
+        next.delete(normalizedControllableId);
+      }
+
+      this.autoShotRegenerationControllableIds = next;
+    },
+    clearShotRegenerationEnabled(controllableId: string) {
+      this.setShotRegenerationEnabled(controllableId, false);
+    },
     pruneRemovingControllables(visibleControllableIds: Iterable<string>) {
       const visible = new Set(visibleControllableIds);
       const next = new Set(
         Array.from(this.removingControllableIds).filter((controllableId) => visible.has(controllableId)),
       );
       this.removingControllableIds = next;
+
+      const nextShotRegeneration = new Set(
+        Array.from(this.autoShotRegenerationControllableIds).filter((controllableId) => visible.has(controllableId)),
+      );
+      this.autoShotRegenerationControllableIds = nextShotRegeneration;
     },
     requestViewportJump(unitId: string) {
       this.viewportJumpTargetId = unitId;

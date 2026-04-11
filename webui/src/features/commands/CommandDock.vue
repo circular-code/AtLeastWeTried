@@ -41,6 +41,27 @@ const activeSubsystems = computed(() => readSubsystemEntries(activeOverlayState.
 const shotFabricator = computed(() => activeSubsystems.value.find((entry) => entry.name === 'Shot Fabricator' && entry.exists) ?? null);
 const shotFabricatorRunning = computed(() => shotFabricator.value ? isShotFabricatorRunning(shotFabricator.value) : false);
 const shotFabricatorMaximumRate = computed(() => shotFabricator.value ? readSubsystemMaximumMetric(shotFabricator.value, 'Rate') : null);
+const shotMagazine = computed(() => activeSubsystems.value.find((entry) => entry.name === 'Shot Magazine' && entry.exists) ?? null);
+const shotMagazineCurrentShots = computed(() => readSubsystemMetric(shotMagazine.value, 'Shots') ?? 0);
+const shotMagazineMaximumShots = computed(() => readSubsystemMaximumMetric(shotMagazine.value, 'Shots') ?? 0);
+const shotMagazineIsFull = computed(() => {
+  const maximumShots = shotMagazineMaximumShots.value;
+  if (maximumShots <= 0) {
+    return false;
+  }
+
+  return shotMagazineCurrentShots.value >= (maximumShots - 0.001);
+});
+const shotRegenerationEnabled = computed(() => {
+  const controllableId = activeControllableId.value;
+  if (!controllableId) {
+    return false;
+  }
+
+  return uiStore.isShotRegenerationEnabled(controllableId) || shotFabricatorRunning.value;
+});
+const pendingShotRegenerationSyncMode = ref<'on' | 'off' | null>(null);
+const pendingShotRegenerationSyncAt = ref(0);
 const resourceMiner = computed(() => activeSubsystems.value.find((entry) => entry.name === 'Resource Miner' && entry.exists) ?? null);
 const resourceMinerRunning = computed(() => resourceMiner.value ? isResourceMinerRunning(resourceMiner.value) : false);
 const miningAutoStopIssuedAt = ref(0);
@@ -132,6 +153,63 @@ watch(
 watch(
   () => ({
     controllableId: activeControllableId.value,
+    enabled: shotRegenerationEnabled.value,
+    running: shotFabricatorRunning.value,
+    isFull: shotMagazineIsFull.value,
+    maximumRate: shotFabricatorMaximumRate.value,
+    subsystemId: shotFabricator.value?.id ?? '',
+  }),
+  ({ controllableId, enabled, running, isFull, maximumRate, subsystemId }) => {
+    if (!controllableId || !subsystemId || !shotFabricator.value) {
+      pendingShotRegenerationSyncMode.value = null;
+      pendingShotRegenerationSyncAt.value = 0;
+      return;
+    }
+
+    const desiredMode: 'on' | 'off' = enabled && !isFull ? 'on' : 'off';
+    const now = Date.now();
+
+    if (pendingShotRegenerationSyncMode.value === desiredMode) {
+      const syncSettled =
+        (desiredMode === 'on' && running) ||
+        (desiredMode === 'off' && !running);
+      if (syncSettled) {
+        pendingShotRegenerationSyncMode.value = null;
+        pendingShotRegenerationSyncAt.value = 0;
+      } else if (now - pendingShotRegenerationSyncAt.value < 1500) {
+        return;
+      }
+    }
+
+    if (desiredMode === 'on') {
+      if (running) {
+        pendingShotRegenerationSyncMode.value = null;
+        pendingShotRegenerationSyncAt.value = 0;
+        return;
+      }
+
+      if (maximumRate !== null && maximumRate > 0) {
+        gateway.setSubsystemMode(controllableId, subsystemId, 'set', maximumRate);
+      }
+      gateway.setSubsystemMode(controllableId, subsystemId, 'on');
+    } else {
+      if (!running) {
+        pendingShotRegenerationSyncMode.value = null;
+        pendingShotRegenerationSyncAt.value = 0;
+        return;
+      }
+
+      gateway.setSubsystemMode(controllableId, subsystemId, 'off');
+    }
+
+    pendingShotRegenerationSyncMode.value = desiredMode;
+    pendingShotRegenerationSyncAt.value = now;
+  },
+);
+
+watch(
+  () => ({
+    controllableId: activeControllableId.value,
     running: resourceMinerRunning.value,
     resources: activeMinedResources.value.map((resource) => ({
       key: resource.key,
@@ -209,22 +287,11 @@ function setTactical(mode: TacticalMode) {
 
 function toggleShotRegeneration() {
   const controllableId = activeControllableId.value;
-  const subsystem = shotFabricator.value;
-  if (!controllableId || !subsystem) {
+  if (!controllableId || !shotFabricator.value) {
     return;
   }
 
-  if (shotFabricatorRunning.value) {
-    gateway.setSubsystemMode(controllableId, subsystem.id, 'off');
-    return;
-  }
-
-  const maximumRate = shotFabricatorMaximumRate.value;
-  if (maximumRate !== null && maximumRate > 0) {
-    gateway.setSubsystemMode(controllableId, subsystem.id, 'set', maximumRate);
-  }
-
-  gateway.setSubsystemMode(controllableId, subsystem.id, 'on');
+  uiStore.setShotRegenerationEnabled(controllableId, !shotRegenerationEnabled.value);
 }
 
 function toggleResourceMiner() {
@@ -288,6 +355,10 @@ function isShotFabricatorRunning(subsystem: ShipSubsystemEntry) {
   }
 
   return false;
+}
+
+function shotRegenerationButtonLabel() {
+  return shotRegenerationEnabled.value ? 'Stop Regen' : 'Regen Shots';
 }
 
 function isResourceMinerRunning(subsystem: ShipSubsystemEntry) {
@@ -444,8 +515,8 @@ function formatCargoFill(current: number, maximum: number) {
     <div class="dock-group-stack dock-group-stack--utility">
       <div class="dock-group">
         <button class="dock-btn" type="button" @click="gateway.clearNavigationTarget(activeControllableId)">Clear Nav</button>
-        <button v-if="shotFabricator" class="dock-btn" :class="{ active: shotFabricatorRunning }" type="button" @click="toggleShotRegeneration">
-          {{ shotFabricatorRunning ? 'Stop Regen' : 'Regen Shots' }}
+        <button v-if="shotFabricator" class="dock-btn" :class="{ active: shotRegenerationEnabled }" type="button" @click="toggleShotRegeneration">
+          {{ shotRegenerationButtonLabel() }}
         </button>
       </div>
       <div class="dock-group dock-group--lock">
