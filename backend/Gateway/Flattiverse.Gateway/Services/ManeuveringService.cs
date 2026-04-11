@@ -199,15 +199,13 @@ public sealed class ManeuveringService : IConnectorEventHandler
         if (@event is not GalaxyTickEvent)
             return;
 
-        var gravitySources = ExtractGravitySources();
-
         foreach (var state in _states.Values)
         {
-            UpdateShip(state, gravitySources);
+            UpdateShip(state);
         }
     }
 
-    private void UpdateShip(ShipState state, List<GravitySource> gravitySources)
+    private void UpdateShip(ShipState state)
     {
         var ship = state.Ship;
         if (ship is null || !ship.Active || !ship.Alive || !state.HasTarget)
@@ -215,6 +213,8 @@ public sealed class ManeuveringService : IConnectorEventHandler
             state.CachedTrajectory = null;
             return;
         }
+
+        var gravitySources = ExtractGravitySources(ship.Cluster?.Id ?? 0);
 
         var shipX = (double)ship.Position.X;
         var shipY = (double)ship.Position.Y;
@@ -254,9 +254,9 @@ public sealed class ManeuveringService : IConnectorEventHandler
             speedLimit);
     }
 
-    private List<GravitySource> ExtractGravitySources()
+    private List<GravitySource> ExtractGravitySources(int clusterId)
     {
-        var units = _mappingService.BuildUnitSnapshots();
+        var units = _mappingService.BuildCollaborativeClusterUnitSnapshots(clusterId);
         var sources = new List<GravitySource>();
 
         foreach (var unit in units)

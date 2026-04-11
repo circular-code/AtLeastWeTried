@@ -1,8 +1,12 @@
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Globalization;
+using System.IO;
+using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Flattiverse.Connector.Events;
 using Flattiverse.Connector.GalaxyHierarchy;
 using Flattiverse.Gateway.Connector;
@@ -25,6 +29,10 @@ public sealed class FriendlyIntelSyncService
     private static readonly byte[] Magic = Encoding.ASCII.GetBytes("FVIS");
     private static readonly object ProcessedMessageSync = new();
     private static readonly Dictionary<string, ScopeProcessedMessages> ProcessedMessagesByScope = new(StringComparer.Ordinal);
+    private static readonly JsonSerializerOptions SyncJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
 
     private readonly string _sessionId;
     private readonly MappingService _mappingService;
@@ -644,46 +652,9 @@ public sealed class FriendlyIntelSyncService
         if (change.Kind == IntelChangeKind.Remove || change.Snapshot is null)
             return;
 
-        WriteInt32(buffer, change.Snapshot.ClusterId);
-        WriteString(buffer, change.Snapshot.Kind);
-        WriteByte(buffer, BuildFieldFlags(change.Snapshot));
-        WriteByte(buffer, BuildPresenceFlags(change.Snapshot));
-        WriteUInt32(buffer, change.Snapshot.LastSeenTick);
-        WriteSingle(buffer, change.Snapshot.X);
-        WriteSingle(buffer, change.Snapshot.Y);
-        WriteSingle(buffer, change.Snapshot.Angle);
-        WriteSingle(buffer, change.Snapshot.Radius);
-        WriteSingle(buffer, change.Snapshot.Gravity);
-        WriteIsSolid(buffer, change.Snapshot.IsSolid);
-
-        if (change.Snapshot.MovementX.HasValue && change.Snapshot.MovementY.HasValue)
-        {
-            WriteSingle(buffer, change.Snapshot.MovementX.Value);
-            WriteSingle(buffer, change.Snapshot.MovementY.Value);
-        }
-
-        if (change.Snapshot.SpeedLimit.HasValue)
-            WriteSingle(buffer, change.Snapshot.SpeedLimit.Value);
-
-        if (change.Snapshot.CurrentThrust.HasValue)
-            WriteSingle(buffer, change.Snapshot.CurrentThrust.Value);
-
-        if (change.Snapshot.MaximumThrust.HasValue)
-            WriteSingle(buffer, change.Snapshot.MaximumThrust.Value);
-
-        if (!string.IsNullOrWhiteSpace(change.Snapshot.TeamName))
-            WriteString(buffer, change.Snapshot.TeamName!);
-
-        var trajectory = NormalizeTrajectory(change.Snapshot.PredictedTrajectory);
-        WriteByte(buffer, checked((byte)(trajectory?.Count ?? 0)));
-        if (trajectory is null)
-            return;
-
-        for (var index = 0; index < trajectory.Count; index++)
-        {
-            WriteSingle(buffer, trajectory[index].X);
-            WriteSingle(buffer, trajectory[index].Y);
-        }
+        var snapshotBytes = SerializeSnapshotBytes(CloneSyncSnapshot(change.Snapshot));
+        WriteUInt16(buffer, checked((ushort)snapshotBytes.Length));
+        WriteBytes(buffer, snapshotBytes);
     }
 
     private static bool TryReadChange(byte[] payload, ref int offset, out IntelChange change)
@@ -702,151 +673,26 @@ public sealed class FriendlyIntelSyncService
             return true;
         }
 
-        if (!TryReadInt32(payload, ref offset, out var clusterId) ||
-            !TryReadString(payload, ref offset, out var unitKind) ||
-            !TryReadByte(payload, ref offset, out var fieldFlags) ||
-            !TryReadByte(payload, ref offset, out var presenceFlags) ||
-            !TryReadUInt32(payload, ref offset, out var lastSeenTick) ||
-            !TryReadSingle(payload, ref offset, out var x) ||
-            !TryReadSingle(payload, ref offset, out var y) ||
-            !TryReadSingle(payload, ref offset, out var angle) ||
-            !TryReadSingle(payload, ref offset, out var radius) ||
-            !TryReadSingle(payload, ref offset, out var gravity) ||
-            !TryReadIsSolid(payload, ref offset, out var isSolid))
+        if (!TryReadUInt16(payload, ref offset, out var snapshotLength) ||
+            offset + snapshotLength > payload.Length)
+            return false;
+
+        if (!TryDeserializeSnapshot(payload.AsSpan(offset, snapshotLength), out var snapshot) ||
+            snapshot is null)
         {
             return false;
         }
 
-        float? movementX = null;
-        float? movementY = null;
-        if ((presenceFlags & 0x01) != 0)
-        {
-            if (!TryReadSingle(payload, ref offset, out var readMovementX) ||
-                !TryReadSingle(payload, ref offset, out var readMovementY))
-            {
-                return false;
-            }
-
-            movementX = readMovementX;
-            movementY = readMovementY;
-        }
-
-        float? speedLimit = null;
-        if ((presenceFlags & 0x02) != 0)
-        {
-            if (!TryReadSingle(payload, ref offset, out var readSpeedLimit))
-                return false;
-
-            speedLimit = readSpeedLimit;
-        }
-
-        float? currentThrust = null;
-        if ((presenceFlags & 0x04) != 0)
-        {
-            if (!TryReadSingle(payload, ref offset, out var readCurrentThrust))
-                return false;
-
-            currentThrust = readCurrentThrust;
-        }
-
-        float? maximumThrust = null;
-        if ((presenceFlags & 0x08) != 0)
-        {
-            if (!TryReadSingle(payload, ref offset, out var readMaximumThrust))
-                return false;
-
-            maximumThrust = readMaximumThrust;
-        }
-
-        string? teamName = null;
-        if ((presenceFlags & 0x10) != 0)
-        {
-            if (!TryReadString(payload, ref offset, out var readTeamName))
-                return false;
-
-            teamName = readTeamName;
-        }
-
-        if (!TryReadByte(payload, ref offset, out var trajectoryCount))
-            return false;
-
-        List<TrajectoryPointDto>? trajectory = null;
-        if (trajectoryCount > 0)
-        {
-            trajectory = new List<TrajectoryPointDto>(trajectoryCount);
-            for (var index = 0; index < trajectoryCount; index++)
-            {
-                if (!TryReadSingle(payload, ref offset, out var pointX) ||
-                    !TryReadSingle(payload, ref offset, out var pointY))
-                {
-                    return false;
-                }
-
-                trajectory.Add(new TrajectoryPointDto { X = pointX, Y = pointY });
-            }
-        }
-
-        var snapshot = new UnitSnapshotDto
-        {
-            UnitId = unitId,
-            ClusterId = clusterId,
-            Kind = unitKind,
-            FullStateKnown = (fieldFlags & 0x01) != 0,
-            IsStatic = (fieldFlags & 0x02) != 0,
-            IsSeen = (fieldFlags & 0x04) != 0,
-            LastSeenTick = lastSeenTick,
-            X = x,
-            Y = y,
-            MovementX = movementX,
-            MovementY = movementY,
-            Angle = angle,
-            Radius = radius,
-            Gravity = gravity,
-            IsSolid = isSolid,
-            SpeedLimit = speedLimit,
-            CurrentThrust = currentThrust,
-            MaximumThrust = maximumThrust,
-            TeamName = teamName,
-            PredictedTrajectory = trajectory
-        };
+        offset += snapshotLength;
+        snapshot.UnitId = unitId;
 
         change = new IntelChange(kind, unitId, snapshot, CreateSignature(snapshot));
         return true;
     }
 
-    private static byte BuildFieldFlags(UnitSnapshotDto snapshot)
-    {
-        byte flags = 0;
-        if (snapshot.FullStateKnown)
-            flags |= 0x01;
-        if (snapshot.IsStatic)
-            flags |= 0x02;
-        if (snapshot.IsSeen)
-            flags |= 0x04;
-        return flags;
-    }
-
-    private static byte BuildPresenceFlags(UnitSnapshotDto snapshot)
-    {
-        byte flags = 0;
-        if (snapshot.MovementX.HasValue && snapshot.MovementY.HasValue)
-            flags |= 0x01;
-        if (snapshot.SpeedLimit.HasValue)
-            flags |= 0x02;
-        if (snapshot.CurrentThrust.HasValue)
-            flags |= 0x04;
-        if (snapshot.MaximumThrust.HasValue)
-            flags |= 0x08;
-        if (!string.IsNullOrWhiteSpace(snapshot.TeamName))
-            flags |= 0x10;
-        return flags;
-    }
-
     private static string CreateSignature(UnitSnapshotDto snapshot)
     {
-        var buffer = new ArrayBufferWriter<byte>();
-        WriteChange(buffer, new IntelChange(IntelChangeKind.Upsert, snapshot.UnitId, CloneSyncSnapshot(snapshot), null));
-        return Convert.ToHexString(SHA256.HashData(buffer.WrittenSpan));
+        return Convert.ToHexString(SHA256.HashData(SerializeSnapshotBytes(CloneSyncSnapshot(snapshot))));
     }
 
     private static UnitSnapshotDto CloneSyncSnapshot(UnitSnapshotDto snapshot)
@@ -871,8 +717,51 @@ public sealed class FriendlyIntelSyncService
             SpeedLimit = snapshot.SpeedLimit,
             CurrentThrust = snapshot.CurrentThrust,
             MaximumThrust = snapshot.MaximumThrust,
+            PredictedTrajectory = NormalizeTrajectory(snapshot.PredictedTrajectory),
             TeamName = snapshot.TeamName,
-            PredictedTrajectory = NormalizeTrajectory(snapshot.PredictedTrajectory)
+            ScannedSubsystems = CloneScannedSubsystems(snapshot.ScannedSubsystems),
+            SunEnergy = snapshot.SunEnergy,
+            SunIons = snapshot.SunIons,
+            SunNeutrinos = snapshot.SunNeutrinos,
+            SunHeat = snapshot.SunHeat,
+            SunDrain = snapshot.SunDrain,
+            PlanetMetal = snapshot.PlanetMetal,
+            PlanetCarbon = snapshot.PlanetCarbon,
+            PlanetHydrogen = snapshot.PlanetHydrogen,
+            PlanetSilicon = snapshot.PlanetSilicon,
+            MissionTargetSequenceNumber = snapshot.MissionTargetSequenceNumber,
+            MissionTargetVectorCount = snapshot.MissionTargetVectorCount,
+            MissionTargetVectors = CloneTrajectory(snapshot.MissionTargetVectors),
+            FlagActive = snapshot.FlagActive,
+            FlagGraceTicks = snapshot.FlagGraceTicks,
+            DominationRadius = snapshot.DominationRadius,
+            Domination = snapshot.Domination,
+            DominationScoreCountdown = snapshot.DominationScoreCountdown,
+            WormHoleTargetClusterName = snapshot.WormHoleTargetClusterName,
+            WormHoleTargetLeft = snapshot.WormHoleTargetLeft,
+            WormHoleTargetTop = snapshot.WormHoleTargetTop,
+            WormHoleTargetRight = snapshot.WormHoleTargetRight,
+            WormHoleTargetBottom = snapshot.WormHoleTargetBottom,
+            CurrentFieldMode = snapshot.CurrentFieldMode,
+            CurrentFieldFlowX = snapshot.CurrentFieldFlowX,
+            CurrentFieldFlowY = snapshot.CurrentFieldFlowY,
+            CurrentFieldRadialForce = snapshot.CurrentFieldRadialForce,
+            CurrentFieldTangentialForce = snapshot.CurrentFieldTangentialForce,
+            NebulaHue = snapshot.NebulaHue,
+            StormSpawnChancePerTick = snapshot.StormSpawnChancePerTick,
+            StormMinAnnouncementTicks = snapshot.StormMinAnnouncementTicks,
+            StormMaxAnnouncementTicks = snapshot.StormMaxAnnouncementTicks,
+            StormMinActiveTicks = snapshot.StormMinActiveTicks,
+            StormMaxActiveTicks = snapshot.StormMaxActiveTicks,
+            StormMinWhirlRadius = snapshot.StormMinWhirlRadius,
+            StormMaxWhirlRadius = snapshot.StormMaxWhirlRadius,
+            StormMinWhirlSpeed = snapshot.StormMinWhirlSpeed,
+            StormMaxWhirlSpeed = snapshot.StormMaxWhirlSpeed,
+            StormMinWhirlGravity = snapshot.StormMinWhirlGravity,
+            StormMaxWhirlGravity = snapshot.StormMaxWhirlGravity,
+            StormDamage = snapshot.StormDamage,
+            StormWhirlRemainingTicks = snapshot.StormWhirlRemainingTicks,
+            PowerUpAmount = snapshot.PowerUpAmount,
         };
     }
 
@@ -885,6 +774,67 @@ public sealed class FriendlyIntelSyncService
             .Take(byte.MaxValue)
             .Select(point => new TrajectoryPointDto { X = point.X, Y = point.Y })
             .ToList();
+    }
+
+    private static List<TrajectoryPointDto>? CloneTrajectory(IReadOnlyList<TrajectoryPointDto>? trajectory)
+    {
+        if (trajectory is null || trajectory.Count == 0)
+            return null;
+
+        return trajectory
+            .Select(point => new TrajectoryPointDto { X = point.X, Y = point.Y })
+            .ToList();
+    }
+
+    private static List<ScannedSubsystemDto>? CloneScannedSubsystems(IReadOnlyList<ScannedSubsystemDto>? source)
+    {
+        if (source is null || source.Count == 0)
+            return null;
+
+        return source
+            .Select(subsystem => new ScannedSubsystemDto
+            {
+                Id = subsystem.Id,
+                Name = subsystem.Name,
+                Exists = subsystem.Exists,
+                Status = subsystem.Status,
+                Stats = subsystem.Stats
+                    .Select(stat => new ScannedSubsystemStatDto
+                    {
+                        Label = stat.Label,
+                        Value = stat.Value
+                    })
+                    .ToList()
+            })
+            .ToList();
+    }
+
+    private static byte[] SerializeSnapshotBytes(UnitSnapshotDto snapshot)
+    {
+        var json = JsonSerializer.SerializeToUtf8Bytes(snapshot, SyncJsonOptions);
+        using var output = new MemoryStream();
+        using (var brotli = new BrotliStream(output, CompressionLevel.Fastest, leaveOpen: true))
+            brotli.Write(json, 0, json.Length);
+
+        return output.ToArray();
+    }
+
+    private static bool TryDeserializeSnapshot(ReadOnlySpan<byte> payload, out UnitSnapshotDto? snapshot)
+    {
+        snapshot = null;
+
+        try
+        {
+            using var input = new MemoryStream(payload.ToArray(), writable: false);
+            using var brotli = new BrotliStream(input, CompressionMode.Decompress);
+            snapshot = JsonSerializer.Deserialize<UnitSnapshotDto>(brotli, SyncJsonOptions);
+            return snapshot is not null;
+        }
+        catch
+        {
+            snapshot = null;
+            return false;
+        }
     }
 
     private static bool TryMarkMessageProcessed(string scopeKey, int sourcePlayerId, ulong messageId)

@@ -38,7 +38,7 @@ public sealed class ConnectorEventLoop : IDisposable
             while (_galaxy.Active && !_cts.Token.IsCancellationRequested)
             {
                 var @event = await _galaxy.NextEvent();
-                _logger.LogDebug("Received event {EventType} details {EventDetails}", @event.GetType().Name, @event.ToString());
+                _logger.LogDebug("Received event {EventType} details {EventDetails}", @event.GetType().Name, DescribeEventSafely(@event));
 
                 foreach (var handler in _handlers)
                 {
@@ -68,6 +68,18 @@ public sealed class ConnectorEventLoop : IDisposable
         }
 
         Terminated?.Invoke();
+    }
+
+    private static string DescribeEventSafely(Flattiverse.Connector.Events.FlattiverseEvent @event)
+    {
+        try
+        {
+            return @event.ToString();
+        }
+        catch (Exception ex)
+        {
+            return $"<event formatting failed: {ex.GetType().Name}: {ex.Message}>";
+        }
     }
 
     /// <summary>
