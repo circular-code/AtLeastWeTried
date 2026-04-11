@@ -1318,6 +1318,12 @@ h2 {
   width: 86px;
 }
 
+.dock-group--harvest-status {
+  gap: 0.28rem;
+  padding: 0;
+  flex-wrap: wrap;
+}
+
 .dock-group--harvest-sources {
   gap: 0.32rem;
   padding: 0;
@@ -1387,6 +1393,28 @@ h2 {
 
 .dock-btn--wide {
   width: 100%;
+}
+
+.dock-harvest-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.18rem 0.42rem;
+  border-radius: 999px;
+  background: rgba(124, 179, 221, 0.08);
+  border: 1px solid rgba(124, 179, 221, 0.16);
+  font-size: 0.62rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.dock-harvest-chip strong {
+  font-size: 0.63rem;
+  color: #eef7ff;
+}
+
+.dock-harvest-chip span {
+  color: rgba(235, 242, 255, 0.8);
 }
 
 .dock-sep {
