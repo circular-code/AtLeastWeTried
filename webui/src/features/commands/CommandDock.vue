@@ -335,6 +335,7 @@ function formatCargoFill(current: number, maximum: number) {
         <span class="dock-label">Scanner</span>
         <button class="dock-btn" :class="{ active: scannerMode === '360' }" type="button" @click="setScanner('360')">360°</button>
         <button class="dock-btn" :class="{ active: scannerMode === 'forward' }" type="button" @click="setScanner('forward')">Fwd</button>
+        <button class="dock-btn" :class="{ active: scannerMode === 'hold' }" type="button" @click="setScanner('hold')">Hold</button>
         <button class="dock-btn" :class="{ active: scannerMode === 'sweep' }" type="button" @click="setScanner('sweep')">Sweep</button>
         <button class="dock-btn" :class="{ active: scannerMode === 'off' }" type="button" @click="setScanner('off')">Off</button>
       </div>

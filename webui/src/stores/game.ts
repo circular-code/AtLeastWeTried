@@ -219,6 +219,7 @@ export const useGameStore = defineStore('game', {
       const mode = stringValue(scannerState.mode, 'off').toLowerCase();
       if (mode === '360' || mode === 'full') return '360';
       if (mode === 'forward') return 'forward';
+      if (mode === 'hold') return 'hold';
       if (mode === 'sweep') return 'sweep';
       if (mode === 'targeted' || mode === 'target') return 'targeted';
       return 'off';
@@ -989,6 +990,10 @@ function deriveScannerMode(scannerState: Record<string, unknown> | undefined): S
 
   if (explicitMode === 'forward') {
     return 'forward';
+  }
+
+  if (explicitMode === 'hold') {
+    return 'hold';
   }
 
   if (explicitMode === 'target' || explicitMode === 'targeted') {

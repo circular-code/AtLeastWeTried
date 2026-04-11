@@ -21,6 +21,7 @@ public sealed class ScanningService : IConnectorEventHandler
         Off,
         Full,
         Forward,
+        Hold,
         Sweep,
         Targeted
     }
@@ -49,6 +50,7 @@ public sealed class ScanningService : IConnectorEventHandler
         public float TargetWidth { get; set; }
         public float TargetLength { get; set; }
         public float TargetAngle { get; set; }
+        public float HoldAngle { get; set; }
         public bool SweepForward { get; set; } = true;
         public ClassicShipControllable? Ship { get; set; }
         public string? TargetUnitId { get; set; }
@@ -94,6 +96,13 @@ public sealed class ScanningService : IConnectorEventHandler
             return;
         }
 
+        if (state is { Mode: ScannerMode.Hold, Active: true, Ship: { } holdShip })
+        {
+            var scanner = holdShip.MainScanner;
+            TryDispatchScannerCommand(() => scanner.Set(ResolveWidth(scanner, state), ResolveLength(scanner, state), state.HoldAngle));
+            return;
+        }
+
         if (state is { Mode: ScannerMode.Full, Active: true, Ship: { } fullShip })
         {
             var scanner = fullShip.MainScanner;
@@ -133,6 +142,9 @@ public sealed class ScanningService : IConnectorEventHandler
 
         if (mode.HasValue)
         {
+            if (mode.Value == ScannerMode.Hold)
+                state.HoldAngle = ResolveHoldAngle(ship, state);
+
             state.Mode = mode.Value;
             if (state.Mode != ScannerMode.Targeted)
             {
@@ -163,6 +175,10 @@ public sealed class ScanningService : IConnectorEventHandler
                 break;
             case ScannerMode.Forward:
                 await scanner.Set(targetWidth, ResolveLength(scanner, state), ship.Angle);
+                await scanner.On();
+                break;
+            case ScannerMode.Hold:
+                await scanner.Set(targetWidth, ResolveLength(scanner, state), state.HoldAngle);
                 await scanner.On();
                 break;
             case ScannerMode.Sweep:
@@ -271,6 +287,7 @@ public sealed class ScanningService : IConnectorEventHandler
                 {
                     ScannerMode.Full => "360",
                     ScannerMode.Forward => "forward",
+                    ScannerMode.Hold => "hold",
                     ScannerMode.Sweep => "sweep",
                     ScannerMode.Targeted => "targeted",
                     _ => "off"
@@ -443,5 +460,28 @@ public sealed class ScanningService : IConnectorEventHandler
         return state.DesiredLength > 0f
             ? ClampLength(scanner, state.DesiredLength)
             : scanner.MaximumLength;
+    }
+
+    private static float ResolveHoldAngle(ClassicShipControllable ship, ScannerState state)
+    {
+        var angle = state.Active
+            ? state.CurrentAngle
+            : ship.MainScanner.CurrentAngle;
+
+        if (!float.IsFinite(angle))
+            angle = ship.Angle;
+
+        return NormalizeAngle(angle);
+    }
+
+    private static float NormalizeAngle(float angle)
+    {
+        if (!float.IsFinite(angle))
+            return 0f;
+
+        angle %= 360f;
+        if (angle < 0f)
+            angle += 360f;
+        return angle;
     }
 }
