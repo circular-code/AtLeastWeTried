@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useGateway } from '../../composables/useGateway';
 import { readCargoResourceSnapshot, readSubsystemEntries, readSubsystemMaximumMetric, readSubsystemMetric } from '../../lib/harvesting';
@@ -44,10 +44,8 @@ const shotFabricator = computed(() => activeSubsystems.value.find((entry) => ent
 const shotFabricatorRunning = computed(() => shotFabricator.value ? isShotFabricatorRunning(shotFabricator.value) : false);
 const shotFabricatorMaximumRate = computed(() => shotFabricator.value ? readSubsystemMaximumMetric(shotFabricator.value, 'Rate') : null);
 const resourceMiner = computed(() => activeSubsystems.value.find((entry) => entry.name === 'Resource Miner' && entry.exists) ?? null);
-const resourceMinerRate = computed(() => readSubsystemMetric(resourceMiner.value, 'Rate') ?? 0);
-const resourceMinerMaximumRate = computed(() => readSubsystemMaximumMetric(resourceMiner.value, 'Rate') ?? 0);
-const resourceMinerRunning = computed(() => resourceMinerRate.value > 0.0001);
-const pendingMiningRateRequest = ref<{ desiredRate: number; createdAt: number; warningShown: boolean } | null>(null);
+const resourceMinerRunning = computed(() => resourceMiner.value ? isResourceMinerRunning(resourceMiner.value) : false);
+const miningAutoStopIssuedAt = ref(0);
 const activeMinedResources = computed(() => {
   const subsystems = activeSubsystems.value;
   const entries = [
@@ -69,15 +67,6 @@ const nebulaCollectorRate = computed(() => readSubsystemMetric(nebulaCollector.v
 const nebulaCollectorMaximumRate = computed(() => readSubsystemMaximumMetric(nebulaCollector.value, 'Rate') ?? 0);
 const nebulaCollectorRunning = computed(() => nebulaCollectorRate.value > 0.0001);
 const isFocusSelectionActive = computed(() => ('isFocusSelectionActive' in uiStore ? !!uiStore.isFocusSelectionActive : false));
-const currentSpeed = computed(() => {
-  const movement = activeOverlayState.value.movement;
-  const record = movement && typeof movement === 'object'
-    ? movement as Record<string, unknown>
-    : undefined;
-  const x = typeof record?.x === 'number' ? record.x : 0;
-  const y = typeof record?.y === 'number' ? record.y : 0;
-  return Math.hypot(x, y);
-});
 const scannerWidth = computed({
   get: () => uiStore.scannerWidth,
   set: (value: number) => uiStore.setScannerWidth(value),
@@ -141,46 +130,51 @@ watch(
   { immediate: true },
 );
 
+
 watch(
   () => ({
-    actualRate: resourceMinerRate.value,
-    speed: currentSpeed.value,
     controllableId: activeControllableId.value,
+    running: resourceMinerRunning.value,
+    resources: activeMinedResources.value.map((resource) => ({
+      key: resource.key,
+      current: resource.cargo?.current ?? 0,
+      maximum: resource.cargo?.maximum ?? 0,
+      ratio: resource.cargo?.ratio ?? 0,
+    })),
   }),
-  ({ actualRate, speed, controllableId }) => {
-    const pending = pendingMiningRateRequest.value;
-    if (!pending) {
+  ({ controllableId, running, resources }) => {
+    if (!controllableId || !resourceMiner.value || !running) {
+      miningAutoStopIssuedAt.value = 0;
       return;
     }
 
-    if (!controllableId || Date.now() - pending.createdAt > 4000) {
-      pendingMiningRateRequest.value = null;
+    const trackedResources = resources.filter((resource) => resource.maximum > 0);
+    if (trackedResources.length === 0) {
+      miningAutoStopIssuedAt.value = 0;
       return;
     }
 
-    if (actualRate >= pending.desiredRate - 0.00005) {
-      pendingMiningRateRequest.value = null;
+    const allFull = trackedResources.every((resource) => resource.ratio >= 0.999);
+    if (!allFull) {
+      miningAutoStopIssuedAt.value = 0;
       return;
     }
 
-    if (!pending.warningShown && speed > 0.02 && pending.desiredRate > actualRate + 0.00005) {
-      gameStore.recordActivity({
-        tone: 'warn',
-        summary: 'Mining rate reduced',
-        detail: 'The backend cut the mining rate back because the ship is still moving too much. Slow down or hold position, then try again.',
-        meta: `${gameStore.getControllableLabel(controllableId)} · speed ${speed.toFixed(2)}`,
-      });
-      pendingMiningRateRequest.value = {
-        ...pending,
-        warningShown: true,
-      };
+    const now = Date.now();
+    if (now - miningAutoStopIssuedAt.value < 3000) {
       return;
     }
 
-    if (pending.warningShown && speed <= 0.02) {
-      pendingMiningRateRequest.value = null;
-    }
+    miningAutoStopIssuedAt.value = now;
+    gateway.setSubsystemMode(controllableId, resourceMiner.value.id, 'off');
+    gameStore.recordActivity({
+      tone: 'info',
+      summary: 'Mining stopped',
+      detail: 'The cargo for the resource currently being mined is full, so the miner was switched off automatically.',
+      meta: gameStore.getControllableLabel(controllableId),
+    });
   },
+  { deep: true },
 );
 
 function setScanner(mode: ScannerMode) {
@@ -241,23 +235,20 @@ function toggleResourceMiner() {
     return;
   }
 
-  gateway.setSubsystemMode(controllableId, resourceMiner.value.id, resourceMinerRunning.value ? 'off' : 'on');
-}
-
-function setResourceMinerRate(value: number) {
-  const controllableId = activeControllableId.value;
-  const subsystem = resourceMiner.value;
-  if (!controllableId || !subsystem) {
-    return;
+  if (!resourceMinerRunning.value) {
+    const trackedResources = activeMinedResources.value.filter((resource) => (resource.cargo?.maximum ?? 0) > 0);
+    if (trackedResources.length > 0 && trackedResources.every((resource) => (resource.cargo?.ratio ?? 0) >= 0.999)) {
+      gameStore.recordActivity({
+        tone: 'warn',
+        summary: 'Mining not started',
+        detail: 'Cargo for the currently mined resource is already full, so the miner stayed off.',
+        meta: gameStore.getControllableLabel(controllableId),
+      });
+      return;
+    }
   }
 
-  const clampedRate = Math.min(Math.max(value, 0), resourceMinerMaximumRate.value);
-  pendingMiningRateRequest.value = {
-    desiredRate: clampedRate,
-    createdAt: Date.now(),
-    warningShown: false,
-  };
-  gateway.setSubsystemMode(controllableId, subsystem.id, 'set', clampedRate);
+  gateway.setSubsystemMode(controllableId, resourceMiner.value.id, resourceMinerRunning.value ? 'off' : 'on');
 }
 
 function toggleNebulaCollector() {
@@ -301,6 +292,33 @@ function isShotFabricatorRunning(subsystem: ShipSubsystemEntry) {
   return false;
 }
 
+function isResourceMinerRunning(subsystem: ShipSubsystemEntry) {
+  const status = subsystem.status.trim().toLowerCase();
+  if (status === 'active' || status === 'on' || status === 'worked' || status === 'failed') {
+    return true;
+  }
+
+  const rate = readSubsystemMetric(subsystem, 'Rate') ?? 0;
+  if (rate > 0.0001) {
+    return true;
+  }
+
+  if ((readSubsystemMetric(subsystem, 'Energy use') ?? 0) > 0.0001) {
+    return true;
+  }
+
+  if ((readSubsystemMetric(subsystem, 'Ion use') ?? 0) > 0.0001) {
+    return true;
+  }
+
+  if ((readSubsystemMetric(subsystem, 'Neutrino use') ?? 0) > 0.0001) {
+    return true;
+  }
+
+  return ['Metal', 'Carbon', 'Hydrogen', 'Silicon']
+    .some((label) => (readSubsystemMetric(subsystem, label) ?? 0) > 0.0001);
+}
+
 function miningButtonLabel() {
   return resourceMinerRunning.value ? 'Stop Mining' : 'Start Mining';
 }
@@ -333,7 +351,7 @@ function formatCargoFill(current: number, maximum: number) {
     <div class="dock-group-stack dock-group-stack--scanner">
       <div class="dock-group">
         <span class="dock-label">Scanner</span>
-        <button class="dock-btn" :class="{ active: scannerMode === '360' }" type="button" @click="setScanner('360')">360°</button>
+        <button class="dock-btn" :class="{ active: scannerMode === '360' }" type="button" @click="setScanner('360')">360&deg;</button>
         <button class="dock-btn" :class="{ active: scannerMode === 'forward' }" type="button" @click="setScanner('forward')">Fwd</button>
         <button class="dock-btn" :class="{ active: scannerMode === 'hold' }" type="button" @click="setScanner('hold')">Hold</button>
         <button class="dock-btn" :class="{ active: scannerMode === 'sweep' }" type="button" @click="setScanner('sweep')">Sweep</button>
@@ -396,19 +414,6 @@ function formatCargoFill(current: number, maximum: number) {
           {{ nebulaCollectorRunning ? 'Stop Neb' : 'Nebula' }}
         </button>
       </div>
-      <div v-if="resourceMiner" class="dock-group dock-group--harvest-metric">
-        <span class="dock-label">Mine</span>
-        <input
-          :value="resourceMinerRate"
-          class="dock-slider"
-          type="range"
-          min="0"
-          :max="resourceMinerMaximumRate"
-          step="0.0001"
-          @input="setResourceMinerRate(Number(($event.target as HTMLInputElement).value))"
-        />
-        <span class="dock-value">{{ resourceMinerRate.toFixed(4) }}</span>
-      </div>
       <div v-if="activeMinedResources.length > 0" class="dock-group dock-group--harvest-status">
         <span
           v-for="resource in activeMinedResources"
@@ -459,3 +464,4 @@ function formatCargoFill(current: number, maximum: number) {
     </div>
   </section>
 </template>
+
