@@ -948,21 +948,21 @@ export class WorldScene {
   private updateSelectionRing() {
     const selectedUnit = this.renderableUnitsById.get(this.selectedUnitId)
       ?? this.renderableUnitsById.get(this.selectedControllableId);
+    const selectedControllableUnit = this.renderableUnitsById.get(this.selectedControllableId) ?? null;
+
     if (!selectedUnit) {
       this.selectedRing.visible = false;
-      this.selectedCenterDot.visible = false;
-      return;
+    } else {
+      const selectionRadius = Math.max(selectedUnit.renderRadius * 1.18, 4);
+      this.selectedRing.visible = true;
+      this.selectedRing.position.set(selectedUnit.x, -selectedUnit.y, 0);
+      this.selectedRing.scale.set(selectionRadius / 1.25, selectionRadius / 1.25, 1);
     }
 
-    const selectionRadius = Math.max(selectedUnit.renderRadius * 1.18, 4);
-    this.selectedRing.visible = true;
-    this.selectedRing.position.set(selectedUnit.x, -selectedUnit.y, 0);
-    this.selectedRing.scale.set(selectionRadius / 1.25, selectionRadius / 1.25, 1);
-
-    if (selectedUnit.unitId === this.selectedControllableId) {
-      const dotRadius = Math.max(selectedUnit.renderRadius * 0.16, 0.9) + this.getWorldUnitsPerPixel() * 2;
+    if (selectedControllableUnit) {
+      const dotRadius = Math.max(selectedControllableUnit.renderRadius * 0.16, 0.9) + this.getWorldUnitsPerPixel() * 2;
       this.selectedCenterDot.visible = true;
-      this.selectedCenterDot.position.set(selectedUnit.x, -selectedUnit.y, 2);
+      this.selectedCenterDot.position.set(selectedControllableUnit.x, -selectedControllableUnit.y, 2);
       this.selectedCenterDot.scale.set(dotRadius, dotRadius, 1);
     } else {
       this.selectedCenterDot.visible = false;

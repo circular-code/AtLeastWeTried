@@ -46,6 +46,7 @@ function createGatewayApi() {
   const uiStore = useUiStore();
   const savedConnections = ref<SavedGatewayConnection[]>(loadSavedConnections());
   const pendingAttachments = ref<PendingAttachment[]>([]);
+  const pendingAutoSpawnCommandIds = new Set<string>();
   let initialized = false;
 
   const client = createGatewayClient(sessionStore.gatewayUrl, {
@@ -105,6 +106,14 @@ function createGatewayApi() {
         break;
       case 'command.reply': {
         const selectedControllableId = gameStore.resolveCommand(message);
+        if (message.status === 'completed' && pendingAutoSpawnCommandIds.delete(message.commandId)) {
+          const createdControllableId = typeof message.result?.controllableId === 'string'
+            ? message.result.controllableId
+            : '';
+          if (createdControllableId) {
+            continueShip(createdControllableId);
+          }
+        }
         if (selectedControllableId) {
           uiStore.setSelectedControllable(selectedControllableId);
         }
@@ -248,6 +257,7 @@ function createGatewayApi() {
   function createShip(request: ShipCreateRequest) {
     const shipName = request.name.trim() || 'Prototype Wing';
     const envelope = buildCreateShipCommand(shipName, request.shipClass, []);
+    pendingAutoSpawnCommandIds.add(envelope.commandId);
 
     gameStore.trackCommand(envelope.commandId, {
       label: `Deploy ${request.shipClass} ship`,

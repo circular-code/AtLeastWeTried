@@ -6,13 +6,18 @@ const emit = defineEmits<{
   create: [request: ShipCreateRequest];
 }>();
 
-const shipName = ref('Aurora Wing');
+const shipName = ref(createDefaultShipName());
 
 function createShip(shipClass: ShipCreateRequest['shipClass']) {
   emit('create', {
     name: shipName.value,
     shipClass,
   });
+  shipName.value = createDefaultShipName();
+}
+
+function createDefaultShipName() {
+  return `Aurora Wing ${Math.floor(100000 + Math.random() * 900000)}`;
 }
 </script>
 
