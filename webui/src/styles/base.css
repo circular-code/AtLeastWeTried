@@ -354,6 +354,58 @@ h2 {
   align-self: start;
 }
 
+.keybinds-modal-panel {
+  width: min(48rem, calc(100vw - 1.5rem));
+}
+
+.keybinds-modal-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.9rem;
+}
+
+.keybinds-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.keybinds-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.9rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid rgba(239, 191, 132, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.keybinds-copy {
+  min-width: 0;
+}
+
+.keybinds-copy strong {
+  display: block;
+}
+
+.keybinds-copy .panel-copy {
+  margin-top: 0.22rem;
+}
+
+.keybinds-input {
+  flex: 0 0 auto;
+  padding: 0.32rem 0.52rem;
+  border: 1px solid rgba(124, 179, 221, 0.28);
+  border-radius: 999px;
+  background: rgba(124, 179, 221, 0.12);
+  color: #f2f8fd;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
 .overlay-column-right > .panel {
   width: min(100%, 300px);
   max-height: 84vh;

@@ -55,6 +55,7 @@ export const useUiStore = defineStore('ui', {
     trackedUnitColors: {} as Record<string, string>,
     customShipColors: storedCustomShipColors,
     isManagerPopupOpen: false,
+    isKeybindsPopupOpen: false,
     isChatPopupOpen: false,
     isActivityHistoryOpen: false,
     isDebugLogOpen: false,
@@ -263,6 +264,7 @@ export const useUiStore = defineStore('ui', {
     },
     closeAllPopups() {
       this.isManagerPopupOpen = false;
+      this.isKeybindsPopupOpen = false;
       this.isChatPopupOpen = false;
       this.isActivityHistoryOpen = false;
       this.isDebugLogOpen = false;

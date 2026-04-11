@@ -546,6 +546,19 @@ function formatPlayerSessionOptionLabel(player: PlayerSessionSummaryDto): string
           </svg>
           <span class="sr-only">Players</span>
         </button>
+        <button
+          class="button-secondary button-compact status-bar-button status-bar-icon-button"
+          type="button"
+          title="Controls"
+          aria-label="Show controls"
+          @click="uiStore.isKeybindsPopupOpen = true"
+        >
+          <svg viewBox="0 0 16 16" focusable="false" aria-hidden="true">
+            <rect x="1.9" y="3.4" width="12.2" height="9.2" rx="1.7" fill="none" stroke="currentColor" stroke-width="1.2"></rect>
+            <path d="M4.1 6.15h.01M6.15 6.15h.01M8.2 6.15h.01M10.25 6.15h.01M12.3 6.15h.01M4.1 8.3h.01M6.15 8.3h.01M8.2 8.3h.01M10.25 8.3h.01M4.1 10.45h7.3" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.25"></path>
+          </svg>
+          <span class="sr-only">Controls</span>
+        </button>
       </div>
     </div>
 

@@ -8,9 +8,11 @@ import DebugLogPanel from './features/debug/DebugLogPanel.vue';
 import OverlayPanel from './features/overlay/OverlayPanel.vue';
 import SelectionPanel from './features/selection/SelectionPanel.vue';
 import SessionManagerModal from './features/session/SessionManagerModal.vue';
+import KeybindsModal from './features/status/KeybindsModal.vue';
 import StatusBar from './features/status/StatusBar.vue';
 import WorldViewport from './features/viewport/WorldViewport.vue';
 import { useGateway } from './composables/useGateway';
+import { readSubsystemEntries } from './lib/harvesting';
 import { useGameStore } from './stores/game';
 import { useUiStore } from './stores/ui';
 import { isEditableTarget } from './lib/validation';
@@ -23,23 +25,107 @@ const activeControllableId = computed(() => uiStore.selectedControllableId || (g
 
 const hasSelectionDetails = computed(() => !!gameStore.selectionEntry(uiStore.lastSelection));
 const hasMultipleOwnedShips = computed(() => gameStore.ownedControllables.length > 1);
+const activeOverlayState = computed<Record<string, unknown>>(() => {
+  const overlay = gameStore.ownerOverlay[activeControllableId.value];
+  return overlay && typeof overlay === 'object'
+    ? overlay as Record<string, unknown>
+    : {};
+});
+const activeSubsystems = computed(() => readSubsystemEntries(activeOverlayState.value.subsystems ?? activeOverlayState.value.modules));
+const hasShotFabricator = computed(() => activeSubsystems.value.some((entry) => entry.name === 'Shot Fabricator' && entry.exists));
+
+function requestFocusSelectionToggle() {
+  if (typeof uiStore.requestToggleFocusSelection === 'function') {
+    uiStore.requestToggleFocusSelection();
+    return;
+  }
+
+  const currentToken = 'focusSelectionRequestToken' in uiStore && typeof uiStore.focusSelectionRequestToken === 'number'
+    ? uiStore.focusSelectionRequestToken
+    : 0;
+  uiStore.focusSelectionRequestToken = currentToken + 1;
+}
 
 function handleWindowKeydown(event: KeyboardEvent) {
-  if (isEditableTarget(event.target)) {
+  if (isEditableTarget(event.target) || event.altKey || event.ctrlKey || event.metaKey) {
     return;
   }
 
-  if (event.key.toLowerCase() === 's') {
-    event.preventDefault();
-    gateway.clearNavigationTarget(activeControllableId.value);
+  const controllableId = activeControllableId.value;
+  if (!controllableId) {
     return;
   }
 
-  if (event.key !== 'Escape') {
+  const key = event.key.toLowerCase();
+
+  if (key === 'escape') {
+    uiStore.closeAllPopups();
     return;
   }
 
-  uiStore.closeAllPopups();
+  if (event.repeat) {
+    return;
+  }
+
+  switch (key) {
+    case 'q':
+      event.preventDefault();
+      uiStore.setTacticalMode('enemy');
+      gateway.setTacticalMode(controllableId, 'enemy');
+      return;
+    case 'w':
+      event.preventDefault();
+      uiStore.setTacticalMode('target');
+      gateway.setTacticalMode(controllableId, 'target');
+      return;
+    case 'e':
+      event.preventDefault();
+      uiStore.setTacticalMode('off');
+      gateway.setTacticalMode(controllableId, 'off');
+      return;
+    case 'a':
+      if (!hasShotFabricator.value) {
+        return;
+      }
+      event.preventDefault();
+      uiStore.setShotRegenerationEnabled(controllableId, !uiStore.isShotRegenerationEnabled(controllableId));
+      return;
+    case 's':
+      event.preventDefault();
+      gateway.clearNavigationTarget(controllableId);
+      return;
+    case 'd':
+      event.preventDefault();
+      requestFocusSelectionToggle();
+      return;
+    case 'f':
+      event.preventDefault();
+      uiStore.setScannerMode('off');
+      gateway.setScannerMode(controllableId, 'off');
+      return;
+    case '1':
+      event.preventDefault();
+      uiStore.setScannerMode('360');
+      gateway.setScannerMode(controllableId, '360');
+      return;
+    case '2':
+      event.preventDefault();
+      uiStore.setScannerMode('forward');
+      gateway.setScannerMode(controllableId, 'forward');
+      return;
+    case '3':
+      event.preventDefault();
+      uiStore.setScannerMode('hold');
+      gateway.setScannerMode(controllableId, 'hold');
+      return;
+    case '4':
+      event.preventDefault();
+      uiStore.setScannerMode('sweep');
+      gateway.setScannerMode(controllableId, 'sweep');
+      return;
+    default:
+      return;
+  }
 }
 
 watch(
@@ -97,6 +183,7 @@ onBeforeUnmount(() => {
     </section>
 
     <SessionManagerModal v-if="uiStore.isManagerPopupOpen" />
+    <KeybindsModal v-if="uiStore.isKeybindsPopupOpen" />
     <ChatModal v-if="uiStore.isChatPopupOpen" />
     <ActivityHistoryModal v-if="uiStore.isActivityHistoryOpen" />
     <DebugLogPanel v-if="uiStore.isDebugLogOpen" />
