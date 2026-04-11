@@ -10,4 +10,8 @@
     <ProjectReference Include="..\Flattiverse.Gateway\Flattiverse.Gateway.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="MessagePack" Version="3.1.4" />
+  </ItemGroup>
+
 </Project>

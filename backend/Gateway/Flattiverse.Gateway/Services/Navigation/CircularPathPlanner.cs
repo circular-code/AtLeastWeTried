@@ -23,6 +23,26 @@ internal sealed class CircularPathPlanner
         NavigationPoint FromPoint,
         NavigationPoint ToPoint);
 
+    /// <summary>Pre-computed obstacle data for fast segment clearance checks.</summary>
+    private readonly record struct ObstacleBounds(
+        double CenterX,
+        double CenterY,
+        double Radius,
+        double RadiusSq,
+        double CheckRadius);
+
+    private static ObstacleBounds[] PrecomputeObstacleBounds(IReadOnlyList<NavigationObstacle> obstacles)
+    {
+        var bounds = new ObstacleBounds[obstacles.Count];
+        for (var i = 0; i < obstacles.Count; i++)
+        {
+            var o = obstacles[i];
+            var r = o.Radius - 0.05d;
+            bounds[i] = new ObstacleBounds(o.Center.X, o.Center.Y, r, r * r, r);
+        }
+        return bounds;
+    }
+
     public sealed class PlanResult
     {
         public bool Succeeded { get; init; }
@@ -65,8 +85,9 @@ internal sealed class CircularPathPlanner
         };
         var nodesByKey = new Dictionary<string, int>(StringComparer.Ordinal);
         var contactNodesByObstacle = new Dictionary<int, List<int>>();
+        var obsBounds = PrecomputeObstacleBounds(obstacles);
 
-        if (IsSegmentClear(start, goal, obstacles, -1, -1))
+        if (IsSegmentClearFast(start, goal, obsBounds, -1, -1))
         {
             AddDirectedLineEdge(adjacency, 0, 1, start.DistanceTo(goal));
         }
@@ -86,7 +107,7 @@ internal sealed class CircularPathPlanner
                     tangent.ToPoint,
                     tangent.ToPoint - start,
                     obstacles);
-                if (toNode is not null && IsSegmentClear(start, tangent.ToPoint, obstacles, -1, tangent.ToObstacleIndex))
+                if (toNode is not null && IsSegmentClearFast(start, tangent.ToPoint, obsBounds, -1, tangent.ToObstacleIndex))
                 {
                     AddDirectedLineEdge(adjacency, 0, toNode.Value, start.DistanceTo(tangent.ToPoint));
                 }
@@ -103,7 +124,7 @@ internal sealed class CircularPathPlanner
                     tangent.ToPoint,
                     goal - tangent.ToPoint,
                     obstacles);
-                if (fromNode is not null && IsSegmentClear(goal, tangent.ToPoint, obstacles, -1, tangent.ToObstacleIndex))
+                if (fromNode is not null && IsSegmentClearFast(goal, tangent.ToPoint, obsBounds, -1, tangent.ToObstacleIndex))
                 {
                     AddDirectedLineEdge(adjacency, fromNode.Value, 1, goal.DistanceTo(tangent.ToPoint));
                 }
@@ -116,7 +137,7 @@ internal sealed class CircularPathPlanner
             {
                 foreach (var tangent in BuildTangents(obstacles[left], left, obstacles[right], right))
                 {
-                    if (!IsSegmentClear(tangent.FromPoint, tangent.ToPoint, obstacles, left, right))
+                    if (!IsSegmentClearFast(tangent.FromPoint, tangent.ToPoint, obsBounds, left, right))
                     {
                         continue;
                     }
@@ -260,11 +281,14 @@ internal sealed class CircularPathPlanner
         IReadOnlyList<List<GraphEdge>> adjacency,
         IReadOnlyList<NavigationObstacle> obstacles)
     {
+        var count = nodes.Count;
         var frontier = new PriorityQueue<int, double>();
-        var costs = Enumerable.Repeat(double.PositiveInfinity, nodes.Count).ToArray();
-        var cameFrom = Enumerable.Repeat(-1, nodes.Count).ToArray();
-        var cameBy = new GraphEdge?[nodes.Count];
-        var visited = new bool[nodes.Count];
+        var costs = new double[count];
+        var cameFrom = new int[count];
+        var cameBy = new GraphEdge?[count];
+        var visited = new bool[count];
+        Array.Fill(costs, double.PositiveInfinity);
+        Array.Fill(cameFrom, -1);
         var searchNodes = new List<NavigationPreviewPoint>();
         var searchEdges = new List<NavigationPreviewSegment>();
         var searchEdgeKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -368,15 +392,17 @@ internal sealed class CircularPathPlanner
         };
     }
 
-    private static IEnumerable<NavigationPoint> SampleArc(NavigationObstacle obstacle, double startAngle, double sweepAngle)
+    private static List<NavigationPoint> SampleArc(NavigationObstacle obstacle, double startAngle, double sweepAngle)
     {
         var steps = Math.Max(2, (int)Math.Ceiling(Math.Abs(sweepAngle) * obstacle.Radius / 8d));
+        var points = new List<NavigationPoint>(steps);
         for (var step = 1; step <= steps; step++)
         {
             var amount = step / (double)steps;
             var angle = startAngle + sweepAngle * amount;
-            yield return obstacle.Center + NavigationPoint.FromAngle(angle, obstacle.Radius);
+            points.Add(obstacle.Center + NavigationPoint.FromAngle(angle, obstacle.Radius));
         }
+        return points;
     }
 
     private static IReadOnlyList<NavigationPoint> SimplifyPath(IReadOnlyList<NavigationPoint> path)
@@ -395,9 +421,9 @@ internal sealed class CircularPathPlanner
         return simplified;
     }
 
-    private static void AppendPoint(ICollection<NavigationPoint> points, NavigationPoint point)
+    private static void AppendPoint(List<NavigationPoint> points, NavigationPoint point)
     {
-        if (points.Count > 0 && points.Last().DistanceTo(point) <= 0.05d)
+        if (points.Count > 0 && points[^1].DistanceTo(point) <= 0.05d)
         {
             return;
         }
@@ -666,16 +692,21 @@ internal sealed class CircularPathPlanner
 
     private static void AddDirectedEdge(IReadOnlyList<List<GraphEdge>> adjacency, int from, GraphEdge edge)
     {
-        if (!adjacency[from].Any(existing =>
-                existing.To == edge.To
+        var edges = adjacency[from];
+        for (var i = 0; i < edges.Count; i++)
+        {
+            var existing = edges[i];
+            if (existing.To == edge.To
                 && existing.IsArc == edge.IsArc
                 && existing.ObstacleIndex == edge.ObstacleIndex
                 && Math.Abs(existing.Cost - edge.Cost) <= NavigationMath.Epsilon
                 && Math.Abs(existing.StartAngle - edge.StartAngle) <= NavigationMath.Epsilon
-                && Math.Abs(existing.SweepAngle - edge.SweepAngle) <= NavigationMath.Epsilon))
-        {
-            adjacency[from].Add(edge);
+                && Math.Abs(existing.SweepAngle - edge.SweepAngle) <= NavigationMath.Epsilon)
+            {
+                return;
+            }
         }
+        edges.Add(edge);
     }
 
     private static bool IsPointClear(NavigationPoint point, IReadOnlyList<NavigationObstacle> obstacles, int ignoreObstacleIndex)
@@ -691,6 +722,68 @@ internal sealed class CircularPathPlanner
             {
                 return false;
             }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Fast segment clearance check using pre-computed obstacle bounds.
+    /// Uses AABB pre-filter and squared distances to avoid sqrt in the common case.
+    /// </summary>
+    private static bool IsSegmentClearFast(
+        NavigationPoint start,
+        NavigationPoint end,
+        ObstacleBounds[] obsBounds,
+        int ignoreObstacleA,
+        int ignoreObstacleB)
+    {
+        var sx = start.X;
+        var sy = start.Y;
+        var ex = end.X;
+        var ey = end.Y;
+
+        // Pre-compute segment AABB and direction
+        var segMinX = sx < ex ? sx : ex;
+        var segMaxX = sx > ex ? sx : ex;
+        var segMinY = sy < ey ? sy : ey;
+        var segMaxY = sy > ey ? sy : ey;
+        var dx = ex - sx;
+        var dy = ey - sy;
+        var segLenSq = dx * dx + dy * dy;
+
+        for (var i = 0; i < obsBounds.Length; i++)
+        {
+            if (i == ignoreObstacleA || i == ignoreObstacleB)
+                continue;
+
+            ref readonly var ob = ref obsBounds[i];
+
+            // AABB early reject: is obstacle center too far from segment bounding box?
+            if (ob.CenterX < segMinX - ob.CheckRadius || ob.CenterX > segMaxX + ob.CheckRadius ||
+                ob.CenterY < segMinY - ob.CheckRadius || ob.CenterY > segMaxY + ob.CheckRadius)
+                continue;
+
+            // Squared distance from obstacle center to segment (avoids sqrt)
+            double distSq;
+            if (segLenSq <= NavigationMath.Epsilon)
+            {
+                var px = ob.CenterX - sx;
+                var py = ob.CenterY - sy;
+                distSq = px * px + py * py;
+            }
+            else
+            {
+                var t = ((ob.CenterX - sx) * dx + (ob.CenterY - sy) * dy) / segLenSq;
+                if (t < 0d) t = 0d;
+                else if (t > 1d) t = 1d;
+                var projX = sx + dx * t - ob.CenterX;
+                var projY = sy + dy * t - ob.CenterY;
+                distSq = projX * projX + projY * projY;
+            }
+
+            if (distSq < ob.RadiusSq)
+                return false;
         }
 
         return true;

@@ -304,7 +304,7 @@ export const useGameStore = defineStore('game', {
       this.galaxy = nextGalaxy;
       const uiStore = useUiStore();
       uiStore.pruneRemovingControllables(nextGalaxy.controllables.map((entry) => entry.controllableId));
-      rebuildIndexes(this);
+      incrementalRebuildIndexes(this, message);
       this.recordTeamScoreActivities(previousGalaxy, nextGalaxy);
     },
     applyOwnerDelta(message: OwnerOverlayDeltaMessage) {
@@ -472,6 +472,41 @@ function rebuildIndexes(store: GameState) {
   store.clustersById = new Map((store.galaxy?.clusters ?? []).map((cluster) => [cluster.id, cluster]));
 }
 
+function incrementalRebuildIndexes(store: GameState, message: WorldDeltaMessage) {
+  const galaxy = store.galaxy;
+  if (!galaxy) {
+    return;
+  }
+
+  let unitsChanged = false;
+  let controllablesChanged = false;
+  let teamsChanged = false;
+
+  for (const event of message.events) {
+    if (event.eventType === 'unit.updated' || event.eventType === 'unit.created') {
+      unitsChanged = true;
+    } else if (event.eventType === 'unit.removed') {
+      unitsChanged = true;
+      controllablesChanged = true;
+    } else if (event.eventType === 'controllable.created') {
+      controllablesChanged = true;
+    } else if (event.eventType === 'team.created' || event.eventType === 'team.updated' || event.eventType === 'team.removed') {
+      teamsChanged = true;
+    }
+  }
+
+  if (unitsChanged) {
+    store.unitsById = new Map(galaxy.units.map((unit) => [unit.unitId, unit]));
+  }
+  if (controllablesChanged) {
+    store.controllablesById = new Map(galaxy.controllables.map((controllable) => [controllable.controllableId, controllable]));
+  }
+  if (teamsChanged) {
+    store.teamsById = new Map(galaxy.teams.map((team) => [team.id, team]));
+    store.clustersById = new Map(galaxy.clusters.map((cluster) => [cluster.id, cluster]));
+  }
+}
+
 function cloneSnapshot(source: GalaxySnapshotDto): GalaxySnapshotDto {
   return {
     ...source,
@@ -516,6 +551,17 @@ function applyWorldDeltaToSnapshot(current: GalaxySnapshotDto, message: WorldDel
   let unitsChanged = false;
   let controllablesChanged = false;
 
+  // Build index maps for O(1) lookups instead of O(n) findIndex per event
+  const unitIndexById = new Map<string, number>();
+  for (let i = 0; i < units.length; i++) {
+    unitIndexById.set(units[i].unitId, i);
+  }
+
+  const controllableIndexById = new Map<string, number>();
+  for (let i = 0; i < controllables.length; i++) {
+    controllableIndexById.set(controllables[i].controllableId, i);
+  }
+
   for (const event of message.events) {
     if (event.eventType === 'team.removed') {
       const teamId = numberValue(event.changes?.id, Number(event.entityId));
@@ -559,50 +605,63 @@ function applyWorldDeltaToSnapshot(current: GalaxySnapshotDto, message: WorldDel
         continue;
       }
 
-      const existingIndex = units.findIndex((item) => item.unitId === event.entityId);
-      if (existingIndex >= 0) {
+      const existingIndex = unitIndexById.get(event.entityId);
+      if (existingIndex !== undefined) {
         if (!unitsChanged) { units = [...units]; unitsChanged = true; }
         const updated = { ...units[existingIndex] };
         applyUnitChanges(updated, event.changes);
         units[existingIndex] = updated;
       } else {
-        units = [...units, createUnitFromChanges(event.entityId, event.changes)];
-        unitsChanged = true;
+        if (!unitsChanged) { units = [...units]; unitsChanged = true; }
+        unitIndexById.set(event.entityId, units.length);
+        units.push(createUnitFromChanges(event.entityId, event.changes));
       }
       continue;
     }
 
     if (event.eventType === 'unit.created' && event.changes) {
-      const existingIndex = units.findIndex((item) => item.unitId === event.entityId);
-      if (existingIndex >= 0) {
+      const existingIndex = unitIndexById.get(event.entityId);
+      if (existingIndex !== undefined) {
         if (!unitsChanged) { units = [...units]; unitsChanged = true; }
         const updated = { ...units[existingIndex] };
         applyUnitChanges(updated, event.changes);
         units[existingIndex] = updated;
       } else {
-        units = [...units, createUnitFromChanges(event.entityId, event.changes)];
-        unitsChanged = true;
+        if (!unitsChanged) { units = [...units]; unitsChanged = true; }
+        unitIndexById.set(event.entityId, units.length);
+        units.push(createUnitFromChanges(event.entityId, event.changes));
       }
       continue;
     }
 
     if (event.eventType === 'unit.removed') {
-      const filteredUnits = units.filter((item) => item.unitId !== event.entityId);
-      if (filteredUnits.length !== units.length) {
-        units = filteredUnits;
+      const unitIdx = unitIndexById.get(event.entityId);
+      if (unitIdx !== undefined) {
+        if (!unitsChanged) { units = [...units]; unitsChanged = true; }
+        units.splice(unitIdx, 1);
+        // Rebuild unit index after splice
+        unitIndexById.clear();
+        for (let i = 0; i < units.length; i++) {
+          unitIndexById.set(units[i].unitId, i);
+        }
         unitsChanged = true;
       }
-      const filteredControllables = controllables.filter((item) => item.controllableId !== event.entityId);
-      if (filteredControllables.length !== controllables.length) {
-        controllables = filteredControllables;
+      const controllableIdx = controllableIndexById.get(event.entityId);
+      if (controllableIdx !== undefined) {
+        if (!controllablesChanged) { controllables = [...controllables]; controllablesChanged = true; }
+        controllables.splice(controllableIdx, 1);
+        controllableIndexById.clear();
+        for (let i = 0; i < controllables.length; i++) {
+          controllableIndexById.set(controllables[i].controllableId, i);
+        }
         controllablesChanged = true;
       }
       continue;
     }
 
     if (event.eventType === 'controllable.created' && event.changes) {
-      const existingIndex = controllables.findIndex((item) => item.controllableId === event.entityId);
-      if (existingIndex >= 0) {
+      const existingIndex = controllableIndexById.get(event.entityId);
+      if (existingIndex !== undefined) {
         if (!controllablesChanged) { controllables = [...controllables]; controllablesChanged = true; }
         const existing = { ...controllables[existingIndex] };
         existing.displayName = stringValue(event.changes.displayName, existing.displayName);
@@ -611,6 +670,7 @@ function applyWorldDeltaToSnapshot(current: GalaxySnapshotDto, message: WorldDel
         existing.score = numberValue(event.changes.score, existing.score);
         controllables[existingIndex] = existing;
       } else {
+        controllableIndexById.set(event.entityId, controllables.length);
         controllables = [
           ...controllables,
           {

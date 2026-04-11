@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Flattiverse.Gateway.Options;
 using Flattiverse.Gateway.Protocol;
+using MessagePack;
 using Microsoft.Extensions.Options;
 using Flattiverse.Gateway.Protocol.ServerMessages;
 using Flattiverse.Gateway.Services;
@@ -85,8 +86,9 @@ app.Map("/ws", async (HttpContext context, PlayerSessionPool sessionPool, ILogge
             {
                 if (ws.State != WebSocketState.Open) break;
 
-                var bytes = JsonSerializer.SerializeToUtf8Bytes<object>(message, JsonDefaults.Options);
-                await ws.SendAsync(bytes, WebSocketMessageType.Text, true, cts.Token);
+                var json = JsonSerializer.Serialize<object>(message, JsonDefaults.Options);
+                var bytes = MessagePackSerializer.ConvertFromJson(json);
+                await ws.SendAsync(bytes, WebSocketMessageType.Binary, true, cts.Token);
             }
         }
         catch (OperationCanceledException) { }
@@ -103,22 +105,27 @@ app.Map("/ws", async (HttpContext context, PlayerSessionPool sessionPool, ILogge
             if (result.MessageType == WebSocketMessageType.Close)
                 break;
 
-            if (result.MessageType == WebSocketMessageType.Text)
+            if (result.MessageType == WebSocketMessageType.Binary)
             {
-                var json = Encoding.UTF8.GetString(buffer, 0, result.Count);
-
-                // Handle large messages that span multiple frames
-                if (!result.EndOfMessage)
+                byte[] msgpackBytes;
+                if (result.EndOfMessage)
                 {
-                    var sb = new StringBuilder(json);
+                    msgpackBytes = new byte[result.Count];
+                    Buffer.BlockCopy(buffer, 0, msgpackBytes, 0, result.Count);
+                }
+                else
+                {
+                    using var ms = new MemoryStream();
+                    ms.Write(buffer, 0, result.Count);
                     while (!result.EndOfMessage)
                     {
                         result = await ws.ReceiveAsync(buffer, CancellationToken.None);
-                        sb.Append(Encoding.UTF8.GetString(buffer, 0, result.Count));
+                        ms.Write(buffer, 0, result.Count);
                     }
-                    json = sb.ToString();
+                    msgpackBytes = ms.ToArray();
                 }
 
+                var json = MessagePackSerializer.ConvertToJson(msgpackBytes);
                 await connection.HandleMessageAsync(json, sessionPool);
             }
         }

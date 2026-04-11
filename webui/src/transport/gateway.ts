@@ -1,3 +1,4 @@
+import { encode, decode } from '@msgpack/msgpack';
 import type { ClientMessage, PongMessage, ServerMessage } from '../types/generated';
 import type { ClearTacticalTargetCommandMessage, SetTacticalModeCommandMessage, SetTacticalTargetCommandMessage, UpgradeSubsystemCommandMessage } from './commands';
 
@@ -24,6 +25,7 @@ export function createGatewayClient(url: string, handlers: Handlers) {
     }
 
     socket = new WebSocket(url);
+    socket.binaryType = 'arraybuffer';
     setState('connecting');
 
     socket.addEventListener('open', () => {
@@ -32,7 +34,7 @@ export function createGatewayClient(url: string, handlers: Handlers) {
 
     socket.addEventListener('message', (event) => {
       try {
-        const parsed = JSON.parse(event.data) as ServerMessage;
+        const parsed = decode(new Uint8Array(event.data as ArrayBuffer)) as ServerMessage;
         handlers.onMessage?.(parsed);
 
         if (parsed.type === 'ping') {
@@ -59,7 +61,7 @@ export function createGatewayClient(url: string, handlers: Handlers) {
     }
 
     handlers.onSend?.(message);
-    socket.send(JSON.stringify(message));
+    socket.send(encode(message));
     return true;
   }
 

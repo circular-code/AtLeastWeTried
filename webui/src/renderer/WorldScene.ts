@@ -142,6 +142,8 @@ export class WorldScene {
   private isFollowingSelection: boolean;
   private isDisposed: boolean;
   private lastReportedVisibleUnitIds: string[];
+  private lastReportedVisibleUnitIdSet: Set<string>;
+  private lastVisibleUnitsReportTime: number;
   private lastGravityGridViewSignature: string;
   private lastGravityGridSourceSignature: string;
 
@@ -296,6 +298,8 @@ export class WorldScene {
     this.isFollowingSelection = false;
     this.isDisposed = false;
     this.lastReportedVisibleUnitIds = [];
+    this.lastReportedVisibleUnitIdSet = new Set();
+    this.lastVisibleUnitsReportTime = 0;
     this.lastGravityGridViewSignature = '';
     this.lastGravityGridSourceSignature = '';
     this.selectedCenterDot.visible = false;
@@ -645,8 +649,19 @@ export class WorldScene {
     this.updateTrackedTargets();
     this.reportVisibleUnits();
     this.renderer.render(this.scene, this.camera);
-    this.animationFrame = window.requestAnimationFrame(this.renderFrame);
+
+    // Only continue the animation loop when there are animated elements
+    // (scanner cones have time-based shaders, focus following needs smooth updates)
+    if (this.needsContinuousRendering()) {
+      this.animationFrame = window.requestAnimationFrame(this.renderFrame);
+    } else {
+      this.animationFrame = null;
+    }
   };
+
+  private needsContinuousRendering(): boolean {
+    return this.scannerCones.size > 0 || this.isFollowingSelection;
+  }
 
   private syncUnits() {
     const { staticUnits, dynamicUnits } = this.buildRenderableUnits();
@@ -1161,14 +1176,10 @@ export class WorldScene {
   private updatePendingNavigationMarker() {
     const pendingTarget = readPendingNavigationTarget(this.ownerOverlay, this.selectedControllableId);
     if (!pendingTarget) {
-      if (this.pendingNavigationMarker.visible) {
-        console.debug('[PendingMarker] hiding – no pending target in overlay');
-      }
       this.pendingNavigationMarker.visible = false;
       return;
     }
 
-    console.debug('[PendingMarker] showing at', pendingTarget.x, pendingTarget.y);
     const markerScale = Math.max(10, this.getWorldUnitsPerPixel() * 22);
     this.pendingNavigationMarker.visible = true;
     this.pendingNavigationMarker.position.set(pendingTarget.x, -pendingTarget.y, 0);
@@ -1627,22 +1638,35 @@ export class WorldScene {
       return;
     }
 
+    // Throttle to at most every 250ms to avoid per-frame allocation and sorting
+    const now = performance.now();
+    if (now - this.lastVisibleUnitsReportTime < 250) {
+      return;
+    }
+    this.lastVisibleUnitsReportTime = now;
+
     const viewBounds = this.getViewBounds();
+    const previousSet = this.lastReportedVisibleUnitIdSet;
+    let changed = false;
+    const nextIds: string[] = [];
 
-    const visibleUnitIds = this.renderableUnits
-      .filter((unit) => this.isUnitVisible(unit, viewBounds))
-      .map((unit) => unit.unitId)
-      .sort();
+    for (const unit of this.renderableUnits) {
+      if (this.isUnitVisible(unit, viewBounds)) {
+        nextIds.push(unit.unitId);
+        if (!previousSet.has(unit.unitId)) {
+          changed = true;
+        }
+      }
+    }
 
-    if (
-      visibleUnitIds.length === this.lastReportedVisibleUnitIds.length
-      && visibleUnitIds.every((unitId, index) => unitId === this.lastReportedVisibleUnitIds[index])
-    ) {
+    if (!changed && nextIds.length === previousSet.size) {
       return;
     }
 
-    this.lastReportedVisibleUnitIds = visibleUnitIds;
-    this.onVisibleUnitsChanged(visibleUnitIds);
+    nextIds.sort();
+    this.lastReportedVisibleUnitIds = nextIds;
+    this.lastReportedVisibleUnitIdSet = new Set(nextIds);
+    this.onVisibleUnitsChanged(nextIds);
   }
 
   private updateGravityStrengthGrid() {
@@ -1948,27 +1972,15 @@ export function readNavigationTarget(ownerOverlay: Record<string, unknown>, cont
   };
 }
 
-let _lastPendingLogKey = '';
-
 export function readPendingNavigationTarget(ownerOverlay: Record<string, unknown>, controllableId: string): WorldSceneNavigationTarget {
   const navigationState = readNavigationOverlay(ownerOverlay, controllableId);
   if (!navigationState || navigationState.active !== true) {
-    if (_lastPendingLogKey !== 'inactive') {
-      console.debug('[PendingMarker:read] nav overlay inactive or missing');
-      _lastPendingLogKey = 'inactive';
-    }
     return null;
   }
 
   const raw = navigationState as unknown as Record<string, unknown>;
   const px = raw.pendingTargetX;
   const py = raw.pendingTargetY;
-  const logKey = `${px},${py}`;
-
-  if (logKey !== _lastPendingLogKey) {
-    console.debug('[PendingMarker:read] overlay keys:', Object.keys(raw), 'pendingTargetX:', px, 'pendingTargetY:', py);
-    _lastPendingLogKey = logKey;
-  }
 
   if (typeof px !== 'number' || typeof py !== 'number' || !Number.isFinite(px) || !Number.isFinite(py)) {
     return null;

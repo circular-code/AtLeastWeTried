@@ -124,16 +124,33 @@ export function createGlowField(): THREE.Group {
   const stars = new THREE.Group();
   const geometry = new THREE.CircleGeometry(1, 10);
   const material = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.12 });
+  const starCount = 140;
+  const mesh = new THREE.InstancedMesh(geometry, material, starCount);
+  mesh.frustumCulled = false;
 
-  for (let index = 0; index < 140; index++) {
-    const star = new THREE.Mesh(geometry, material.clone());
-    star.position.set((Math.random() - 0.5) * 4200, (Math.random() - 0.5) * 2400, -100);
+  const tempTransform = new THREE.Object3D();
+  const tempColor = new THREE.Color();
+
+  for (let index = 0; index < starCount; index++) {
     const scale = 1 + Math.random() * 2.2;
-    star.scale.set(scale, scale, 1);
-    (star.material as THREE.MeshBasicMaterial).opacity = 0.05 + Math.random() * 0.18;
-    stars.add(star);
+    const opacity = 0.05 + Math.random() * 0.18;
+
+    tempTransform.position.set((Math.random() - 0.5) * 4200, (Math.random() - 0.5) * 2400, -100);
+    tempTransform.scale.set(scale, scale, 1);
+    tempTransform.rotation.set(0, 0, 0);
+    tempTransform.updateMatrix();
+    mesh.setMatrixAt(index, tempTransform.matrix);
+    // Encode opacity as color brightness since InstancedMesh shares one material
+    tempColor.setRGB(opacity / 0.18, opacity / 0.18, opacity / 0.18);
+    mesh.setColorAt(index, tempColor);
   }
 
+  mesh.instanceMatrix.needsUpdate = true;
+  if (mesh.instanceColor) {
+    mesh.instanceColor.needsUpdate = true;
+  }
+
+  stars.add(mesh);
   return stars;
 }
 
