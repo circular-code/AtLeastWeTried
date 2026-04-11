@@ -620,10 +620,8 @@ h2 {
   align-items: center;
   justify-content: center;
   gap: 0.3rem;
-  min-height: 1.8rem;
-  padding: 0.34rem 0.34rem;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
+  min-height: unset;
+  padding: 0.1rem 0.2rem;
   min-width: 0;
 }
 
@@ -2516,7 +2514,6 @@ h2 {
   gap: 0.12rem;
   padding: 0.35rem 0.42rem;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.03);
 }
 
 .overlay-stat-grid dt {

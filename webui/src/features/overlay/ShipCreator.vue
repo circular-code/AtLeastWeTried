@@ -1,6 +1,9 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, watch } from 'vue';
 import type { ShipCreateRequest } from '../../types/client';
+import { useSessionStore } from '../../stores/session';
+
+const session = useSessionStore();
 
 const emit = defineEmits<{
   create: [request: ShipCreateRequest];
@@ -17,8 +20,18 @@ function createShip(shipClass: ShipCreateRequest['shipClass']) {
 }
 
 function createDefaultShipName() {
-  return `Aurora Wing ${Math.floor(100000 + Math.random() * 900000)}`;
+  const prefix = session.selectedPlayerSession?.displayName ?? 'Ship';
+  return `${prefix} ${Math.floor(100000 + Math.random() * 900000)}`;
 }
+
+watch(
+  () => session.selectedPlayerSession?.displayName,
+  (displayName) => {
+    if (!displayName) return;
+    const suffix = shipName.value.match(/\d{6}$/)?.[0] ?? Math.floor(100000 + Math.random() * 900000).toString();
+    shipName.value = `${displayName} ${suffix}`;
+  }
+);
 </script>
 
 <template>
