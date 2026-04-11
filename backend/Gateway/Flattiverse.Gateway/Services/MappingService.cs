@@ -871,12 +871,26 @@ public sealed class MappingService : IConnectorEventHandler
                     continue;
                 }
 
-                if (PreferCandidateSnapshot(existing, unit))
-                    mergedById[unit.UnitId] = CloneUnitSnapshot(unit);
+                mergedById[unit.UnitId] = MergeGalaxyUnitSnapshots(existing, unit);
             }
         }
 
         return mergedById.Values.ToList();
+    }
+
+    private static UnitSnapshotDto MergeGalaxyUnitSnapshots(UnitSnapshotDto current, UnitSnapshotDto candidate)
+    {
+        var candidatePreferred = PreferCandidateSnapshot(current, candidate);
+        var preferred = candidatePreferred
+            ? CloneUnitSnapshot(candidate)
+            : CloneUnitSnapshot(current);
+        var fallback = candidatePreferred ? current : candidate;
+
+        MergeKnownDetailState(preferred, fallback);
+        preferred.FullStateKnown = preferred.FullStateKnown || fallback.FullStateKnown;
+        preferred.IsSeen = preferred.IsSeen || fallback.IsSeen;
+
+        return preferred;
     }
 
     private static bool PreferCandidateSnapshot(UnitSnapshotDto current, UnitSnapshotDto candidate)
@@ -1431,7 +1445,7 @@ public sealed class MappingService : IConnectorEventHandler
 
     private static bool IsKnownIntelMetric(float? value)
     {
-        return value.HasValue && float.IsFinite(value.Value) && value.Value > 0f;
+        return value.HasValue && float.IsFinite(value.Value);
     }
 
     private static void RecordRecentTargetSnapshotUnsafe(string galaxyId, UnitSnapshotDto snapshot, uint currentTick)
