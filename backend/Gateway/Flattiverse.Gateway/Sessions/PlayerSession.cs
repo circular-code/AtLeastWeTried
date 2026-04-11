@@ -19,6 +19,10 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 {
     private const string ControllableRebuildingErrorCode = "controllable_rebuilding";
     private const string ControllableRebuildingErrorMessage = "[0x3F] This controllable is currently rebuilding and cannot execute commands.";
+    private const float DirectPointShotSpawnPaddingDistance = 2f;
+    private const float DirectPointShotFallbackTickPenalty = 0.03f;
+    private const string FireTraceEnvVar = "FV_GATEWAY_FIRE_TRACE";
+    private static readonly bool FireTraceEnabledByEnv = string.Equals(Environment.GetEnvironmentVariable(FireTraceEnvVar), "1", StringComparison.Ordinal);
 
     private readonly string _apiKey;
     private readonly string? _teamName;
@@ -41,6 +45,13 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     private readonly object _autoFireSync = new();
     private readonly HashSet<string> _autoFireInFlight = new();
     private uint _latestGalaxyTick;
+    private readonly record struct DirectPointShotFallbackPlan(
+        Vector RelativeMovement,
+        ushort Ticks,
+        float Load,
+        float Damage,
+        float EstimatedMissDistance,
+        bool UsesVelocityCompensation);
 
     public string Id => _id;
     public string DisplayName => _displayName;
@@ -529,7 +540,13 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         var stats = new List<Dictionary<string, object?>>();
         AddPerTickRatioStat(stats, "Rate", miner.Rate, miner.MaximumRate);
         AddRateStat(stats, "Yield", miner.MinedMetalThisTick + miner.MinedCarbonThisTick + miner.MinedHydrogenThisTick + miner.MinedSiliconThisTick);
+        AddRateStat(stats, "Metal", miner.MinedMetalThisTick);
+        AddRateStat(stats, "Carbon", miner.MinedCarbonThisTick);
+        AddRateStat(stats, "Hydrogen", miner.MinedHydrogenThisTick);
         AddRateStat(stats, "Silicon", miner.MinedSiliconThisTick);
+        AddRateStat(stats, "Energy use", miner.ConsumedEnergyThisTick);
+        AddRateStat(stats, "Ion use", miner.ConsumedIonsThisTick);
+        AddRateStat(stats, "Neutrino use", miner.ConsumedNeutrinosThisTick);
         return stats;
     }
 
@@ -539,6 +556,9 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         AddPerTickRatioStat(stats, "Rate", collector.Rate, collector.MaximumRate);
         AddRateStat(stats, "Yield", collector.CollectedThisTick);
         AddStat(stats, "Hue", FormatFloat(collector.CollectedHueThisTick));
+        AddRateStat(stats, "Energy use", collector.ConsumedEnergyThisTick);
+        AddRateStat(stats, "Ion use", collector.ConsumedIonsThisTick);
+        AddRateStat(stats, "Neutrino use", collector.ConsumedNeutrinosThisTick);
         return stats;
     }
 
@@ -949,6 +969,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             {
                 "360" or "full" => ScanningService.ScannerMode.Full,
                 "forward" => ScanningService.ScannerMode.Forward,
+                "hold" => ScanningService.ScannerMode.Hold,
                 "sweep" => ScanningService.ScannerMode.Sweep,
                 "off" => ScanningService.ScannerMode.Off,
                 _ => null
@@ -992,6 +1013,34 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         if (payload?.TryGetProperty("targetY", out var targetYEl) == true && targetYEl.ValueKind != System.Text.Json.JsonValueKind.Null)
             targetY = targetYEl.GetSingle();
 
+        if (targetX.HasValue != targetY.HasValue)
+        {
+            _logger.LogWarning(
+                "Fire request has incomplete point target for session {SessionId}, command {CommandId}, controllable {ControllableId}: targetX={TargetX}, targetY={TargetY}",
+                _id,
+                commandId,
+                controllableId,
+                targetX,
+                targetY);
+        }
+
+        if (IsFireTraceEnabled())
+        {
+            _logger.LogInformation(
+                "Fire request session={SessionId} command={CommandId} controllable={ControllableId} weapon={WeaponId} relativeAngle={RelativeAngle} targetX={TargetX} targetY={TargetY} shipAngle={ShipAngle} shipX={ShipX} shipY={ShipY} tick={Tick}",
+                _id,
+                commandId,
+                controllableId,
+                weaponId,
+                relativeAngle,
+                targetX,
+                targetY,
+                classic.Angle,
+                classic.Position.X,
+                classic.Position.Y,
+                _latestGalaxyTick);
+        }
+
         Dictionary<string, object?>? result = null;
 
         switch (weaponId)
@@ -1006,20 +1055,83 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                     const float cosmicMochiBlasterLoad = 12f;
                     const float cosmicMochiBlasterDamage = 8f;
 
-                    float puffDeltaX = targetX.Value - classic.Position.X;
-                    float puffDeltaY = targetY.Value - classic.Position.Y;
-                    Vector cosmicMochiBlasterMovement = MathF.Abs(puffDeltaX) < 0.0001f && MathF.Abs(puffDeltaY) < 0.0001f
-                        ? Vector.FromAngleLength(classic.Angle, cosmicMochiBlasterRelativeSpeed)
-                        : Vector.FromAngleLength(MathF.Atan2(puffDeltaY, puffDeltaX), cosmicMochiBlasterRelativeSpeed);
+                    bool hasPredictedPointShot = _tacticalService.TryBuildPointShotRequest(
+                        controllableId,
+                        classic,
+                        targetX.Value,
+                        targetY.Value,
+                        _latestGalaxyTick,
+                        out TacticalService.AutoFireRequest sparklingPointShotRequest);
 
-                    await classic.ShotLauncher.Shoot(cosmicMochiBlasterMovement, cosmicMochiBlasterTicks, cosmicMochiBlasterLoad, cosmicMochiBlasterDamage);
+                    Vector cosmicMochiBlasterMovement;
+                    ushort cosmicMochiBlasterShotTicks;
+                    float cosmicMochiBlasterShotLoad;
+                    float cosmicMochiBlasterShotDamage;
+                    string cosmicMochiBlasterAimingStrategy;
+                    DirectPointShotFallbackPlan? moonbeamFallbackPlan = null;
+
+                    if (hasPredictedPointShot)
+                    {
+                        cosmicMochiBlasterMovement = sparklingPointShotRequest.RelativeMovement;
+                        cosmicMochiBlasterShotTicks = sparklingPointShotRequest.Ticks;
+                        cosmicMochiBlasterShotLoad = sparklingPointShotRequest.Load;
+                        cosmicMochiBlasterShotDamage = sparklingPointShotRequest.Damage;
+                        cosmicMochiBlasterAimingStrategy = "predicted";
+                    }
+                    else
+                    {
+                        moonbeamFallbackPlan = BuildDirectPointShotFallbackPlan(
+                            classic,
+                            targetX.Value,
+                            targetY.Value,
+                            cosmicMochiBlasterRelativeSpeed,
+                            cosmicMochiBlasterTicks,
+                            cosmicMochiBlasterLoad,
+                            cosmicMochiBlasterDamage);
+                        cosmicMochiBlasterMovement = moonbeamFallbackPlan.Value.RelativeMovement;
+                        cosmicMochiBlasterShotTicks = moonbeamFallbackPlan.Value.Ticks;
+                        cosmicMochiBlasterShotLoad = moonbeamFallbackPlan.Value.Load;
+                        cosmicMochiBlasterShotDamage = moonbeamFallbackPlan.Value.Damage;
+                        cosmicMochiBlasterAimingStrategy = "fallback";
+                    }
+
+                    float? dreamyPredictedMissDistance = hasPredictedPointShot ? sparklingPointShotRequest.PredictedMissDistance : null;
+                    float? dreamyFallbackEstimatedMissDistance = moonbeamFallbackPlan?.EstimatedMissDistance;
+                    bool moonbeamFallbackCompensated = moonbeamFallbackPlan?.UsesVelocityCompensation ?? false;
+
+                    float dreamyMovementAngleDegrees = NormalizeAngleDegrees(MathF.Atan2(cosmicMochiBlasterMovement.Y, cosmicMochiBlasterMovement.X) * (180f / MathF.PI));
+                    if (IsFireTraceEnabled())
+                    {
+                        _logger.LogInformation(
+                            "Shot fire(point) session={SessionId} command={CommandId} controllable={ControllableId} strategy={Strategy} targetX={TargetX} targetY={TargetY} shotVectorX={ShotVectorX} shotVectorY={ShotVectorY} shotVectorLen={ShotVectorLen} shotVectorAngle={ShotVectorAngle} ticks={Ticks} load={Load} damage={Damage} predictedMissDistance={PredictedMissDistance} fallbackEstimatedMissDistance={FallbackEstimatedMissDistance} fallbackCompensated={FallbackCompensated} tick={Tick}",
+                            _id,
+                            commandId,
+                            controllableId,
+                            cosmicMochiBlasterAimingStrategy,
+                            targetX.Value,
+                            targetY.Value,
+                            cosmicMochiBlasterMovement.X,
+                            cosmicMochiBlasterMovement.Y,
+                            cosmicMochiBlasterMovement.Length,
+                            dreamyMovementAngleDegrees,
+                            cosmicMochiBlasterShotTicks,
+                            cosmicMochiBlasterShotLoad,
+                            cosmicMochiBlasterShotDamage,
+                            dreamyPredictedMissDistance,
+                            dreamyFallbackEstimatedMissDistance,
+                            moonbeamFallbackCompensated,
+                            _latestGalaxyTick);
+                    }
+
+                    await classic.ShotLauncher.Shoot(cosmicMochiBlasterMovement, cosmicMochiBlasterShotTicks, cosmicMochiBlasterShotLoad, cosmicMochiBlasterShotDamage);
                     _tacticalService.RegisterSuccessfulFire(controllableId, _latestGalaxyTick);
                     result = new Dictionary<string, object?>
                     {
                         { "mode", "direct" },
+                        { "aimingStrategy", cosmicMochiBlasterAimingStrategy },
                         { "targetX", targetX.Value },
                         { "targetY", targetY.Value },
-                        { "ticks", cosmicMochiBlasterTicks },
+                        { "ticks", cosmicMochiBlasterShotTicks },
                         {
                             "relativeMovement", new Dictionary<string, object?>
                             {
@@ -1028,19 +1140,58 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                                 { "length", cosmicMochiBlasterMovement.Length }
                             }
                         },
-                        { "load", cosmicMochiBlasterLoad },
-                        { "damage", cosmicMochiBlasterDamage }
+                        { "load", cosmicMochiBlasterShotLoad },
+                        { "damage", cosmicMochiBlasterShotDamage },
+                        { "predictedMissDistance", dreamyPredictedMissDistance },
+                        { "fallbackEstimatedMissDistance", dreamyFallbackEstimatedMissDistance },
+                        { "fallbackCompensated", moonbeamFallbackCompensated }
                     };
                     break;
                 }
 
                 var angle = relativeAngle ?? 0f;
-                var movement = Vector.FromAngleLength(classic.Angle + angle, 2f);
+                var moonbeamAbsoluteAngle = classic.Angle + angle;
+                var movement = Vector.FromAngleLength(moonbeamAbsoluteAngle, 2f);
+                if (IsFireTraceEnabled())
+                {
+                    _logger.LogInformation(
+                        "Shot fire(relative-angle) session={SessionId} command={CommandId} controllable={ControllableId} relativeAngle={RelativeAngle} absoluteAngle={AbsoluteAngle} normalizedAbsoluteAngle={NormalizedAbsoluteAngle} shotVectorX={ShotVectorX} shotVectorY={ShotVectorY} shotVectorLen={ShotVectorLen} ticks={Ticks} load={Load} damage={Damage} tick={Tick}",
+                        _id,
+                        commandId,
+                        controllableId,
+                        angle,
+                        moonbeamAbsoluteAngle,
+                        NormalizeAngleDegrees(moonbeamAbsoluteAngle),
+                        movement.X,
+                        movement.Y,
+                        movement.Length,
+                        80,
+                        12f,
+                        8f,
+                        _latestGalaxyTick);
+                }
                 await classic.ShotLauncher.Shoot(movement, 80, 12f, 8f);
                 break;
             case "railgun":
             case "Railgun":
-                if (relativeAngle.HasValue && relativeAngle.Value > 90f)
+                var moonbeamRailgunRelativeAngle = relativeAngle ?? 0f;
+                var moonbeamRailgunNormalizedAngle = NormalizeAngleDegrees(moonbeamRailgunRelativeAngle);
+                bool moonbeamFireBack = relativeAngle.HasValue && ShouldFireRailgunBack(relativeAngle.Value);
+                if (IsFireTraceEnabled())
+                {
+                    _logger.LogInformation(
+                        "Railgun fire decision session={SessionId} command={CommandId} controllable={ControllableId} relativeAngleProvided={RelativeAngleProvided} relativeAngle={RelativeAngle} normalizedRelativeAngle={NormalizedRelativeAngle} fireBack={FireBack} tick={Tick}",
+                        _id,
+                        commandId,
+                        controllableId,
+                        relativeAngle.HasValue,
+                        moonbeamRailgunRelativeAngle,
+                        moonbeamRailgunNormalizedAngle,
+                        moonbeamFireBack,
+                        _latestGalaxyTick);
+                }
+
+                if (moonbeamFireBack)
                     await classic.Railgun.FireBack();
                 else
                     await classic.Railgun.FireFront();
@@ -1050,14 +1201,290 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return Completed(commandId, result);
     }
 
+    private static Vector BuildDirectPointShotFallbackMovement(
+        float moonbeamSourceX,
+        float moonbeamSourceY,
+        float moonbeamFallbackAngleDegrees,
+        float moonbeamTargetX,
+        float moonbeamTargetY,
+        float moonbeamRelativeSpeed)
+    {
+        float puffDeltaX = moonbeamTargetX - moonbeamSourceX;
+        float puffDeltaY = moonbeamTargetY - moonbeamSourceY;
+        if (MathF.Abs(puffDeltaX) < 0.0001f && MathF.Abs(puffDeltaY) < 0.0001f)
+            return Vector.FromAngleLength(moonbeamFallbackAngleDegrees, moonbeamRelativeSpeed);
+
+        float dreamyAngleDegrees = MathF.Atan2(puffDeltaY, puffDeltaX) * (180f / MathF.PI);
+        return Vector.FromAngleLength(dreamyAngleDegrees, moonbeamRelativeSpeed);
+    }
+
+    private static DirectPointShotFallbackPlan BuildDirectPointShotFallbackPlan(
+        ClassicShipControllable moonbeamShip,
+        float moonbeamTargetX,
+        float moonbeamTargetY,
+        float moonbeamPreferredRelativeSpeed,
+        ushort moonbeamPreferredTicks,
+        float moonbeamPreferredLoad,
+        float moonbeamPreferredDamage)
+    {
+        float moonbeamSpeed = Math.Clamp(
+            moonbeamPreferredRelativeSpeed,
+            moonbeamShip.ShotLauncher.MinimumRelativeMovement,
+            moonbeamShip.ShotLauncher.MaximumRelativeMovement);
+        if (moonbeamSpeed <= 0.0001f)
+            moonbeamSpeed = Math.Max(0.0001f, moonbeamShip.ShotLauncher.MinimumRelativeMovement);
+
+        ushort moonbeamMinimumTicks = moonbeamShip.ShotLauncher.MinimumTicks;
+        ushort moonbeamMaximumTicks = moonbeamShip.ShotLauncher.MaximumTicks;
+        if (moonbeamMinimumTicks > moonbeamMaximumTicks)
+            moonbeamMinimumTicks = moonbeamMaximumTicks;
+
+        float moonbeamLoad = Math.Clamp(moonbeamPreferredLoad, moonbeamShip.ShotLauncher.MinimumLoad, moonbeamShip.ShotLauncher.MaximumLoad);
+        float moonbeamDamage = Math.Clamp(moonbeamPreferredDamage, moonbeamShip.ShotLauncher.MinimumDamage, moonbeamShip.ShotLauncher.MaximumDamage);
+        float moonbeamMinLoad = moonbeamShip.ShotLauncher.MinimumLoad;
+        float moonbeamMinDamage = moonbeamShip.ShotLauncher.MinimumDamage;
+
+        float moonbeamDeltaX = moonbeamTargetX - moonbeamShip.Position.X;
+        float moonbeamDeltaY = moonbeamTargetY - moonbeamShip.Position.Y;
+        float moonbeamDistance = MathF.Sqrt(moonbeamDeltaX * moonbeamDeltaX + moonbeamDeltaY * moonbeamDeltaY);
+
+        int moonbeamBaselineTicks = moonbeamSpeed > 0.0001f
+            ? (int)MathF.Round(moonbeamDistance / moonbeamSpeed)
+            : moonbeamPreferredTicks;
+        moonbeamBaselineTicks = Math.Clamp(moonbeamBaselineTicks, moonbeamMinimumTicks, moonbeamMaximumTicks);
+        int moonbeamStartTicks = Math.Max(moonbeamMinimumTicks, moonbeamBaselineTicks - 22);
+        int moonbeamEndTicks = Math.Min(moonbeamMaximumTicks, moonbeamBaselineTicks + 22);
+
+        Vector moonbeamBestMovement = BuildDirectPointShotFallbackMovement(
+            moonbeamShip.Position.X,
+            moonbeamShip.Position.Y,
+            moonbeamShip.Angle,
+            moonbeamTargetX,
+            moonbeamTargetY,
+            moonbeamSpeed);
+        ushort moonbeamBestTicks = (ushort)Math.Clamp(moonbeamPreferredTicks, moonbeamMinimumTicks, moonbeamMaximumTicks);
+        float moonbeamBestLoad = moonbeamLoad;
+        float moonbeamBestDamage = moonbeamDamage;
+        float moonbeamBestMiss = ComputePointShotMissDistance(
+            moonbeamShip.Position.X,
+            moonbeamShip.Position.Y,
+            moonbeamShip.Movement.X,
+            moonbeamShip.Movement.Y,
+            moonbeamShip.Size + DirectPointShotSpawnPaddingDistance,
+            moonbeamBestMovement,
+            moonbeamBestTicks,
+            moonbeamTargetX,
+            moonbeamTargetY);
+        float moonbeamBestScore = moonbeamBestMiss + moonbeamBestTicks * DirectPointShotFallbackTickPenalty;
+        bool moonbeamFoundAffordable = false;
+
+        for (int moonbeamTicks = moonbeamStartTicks; moonbeamTicks <= moonbeamEndTicks; moonbeamTicks++)
+        {
+            Vector moonbeamCandidateMovement = BuildCompensatedPointShotMovement(
+                moonbeamShip.Position.X,
+                moonbeamShip.Position.Y,
+                moonbeamShip.Movement.X,
+                moonbeamShip.Movement.Y,
+                moonbeamTargetX,
+                moonbeamTargetY,
+                moonbeamSpeed,
+                moonbeamTicks,
+                moonbeamShip.Size + DirectPointShotSpawnPaddingDistance);
+
+            float moonbeamCandidateMiss = ComputePointShotMissDistance(
+                moonbeamShip.Position.X,
+                moonbeamShip.Position.Y,
+                moonbeamShip.Movement.X,
+                moonbeamShip.Movement.Y,
+                moonbeamShip.Size + DirectPointShotSpawnPaddingDistance,
+                moonbeamCandidateMovement,
+                moonbeamTicks,
+                moonbeamTargetX,
+                moonbeamTargetY);
+
+            float moonbeamCandidateLoad = moonbeamLoad;
+            float moonbeamCandidateDamage = moonbeamDamage;
+            bool moonbeamAffordable = IsShotCostAffordable(moonbeamShip, moonbeamCandidateMovement, (ushort)moonbeamTicks, moonbeamCandidateLoad, moonbeamCandidateDamage);
+            if (!moonbeamAffordable && IsShotCostAffordable(moonbeamShip, moonbeamCandidateMovement, (ushort)moonbeamTicks, moonbeamMinLoad, moonbeamMinDamage))
+            {
+                moonbeamCandidateLoad = moonbeamMinLoad;
+                moonbeamCandidateDamage = moonbeamMinDamage;
+                moonbeamAffordable = true;
+            }
+
+            float moonbeamCandidateScore = moonbeamCandidateMiss + moonbeamTicks * DirectPointShotFallbackTickPenalty;
+            if (moonbeamAffordable)
+            {
+                if (moonbeamFoundAffordable && moonbeamCandidateScore >= moonbeamBestScore - 0.0001f)
+                    continue;
+
+                moonbeamFoundAffordable = true;
+                moonbeamBestMovement = moonbeamCandidateMovement;
+                moonbeamBestTicks = (ushort)moonbeamTicks;
+                moonbeamBestLoad = moonbeamCandidateLoad;
+                moonbeamBestDamage = moonbeamCandidateDamage;
+                moonbeamBestMiss = moonbeamCandidateMiss;
+                moonbeamBestScore = moonbeamCandidateScore;
+                continue;
+            }
+
+            if (moonbeamFoundAffordable || moonbeamCandidateScore >= moonbeamBestScore - 0.0001f)
+                continue;
+
+            moonbeamBestMovement = moonbeamCandidateMovement;
+            moonbeamBestTicks = (ushort)moonbeamTicks;
+            moonbeamBestMiss = moonbeamCandidateMiss;
+            moonbeamBestScore = moonbeamCandidateScore;
+        }
+
+        return new DirectPointShotFallbackPlan(
+            moonbeamBestMovement,
+            moonbeamBestTicks,
+            moonbeamBestLoad,
+            moonbeamBestDamage,
+            moonbeamBestMiss,
+            UsesVelocityCompensation: true);
+    }
+
+    private static bool IsShotCostAffordable(
+        ClassicShipControllable moonbeamShip,
+        Vector moonbeamRelativeMovement,
+        ushort moonbeamTicks,
+        float moonbeamLoad,
+        float moonbeamDamage)
+    {
+        if (!moonbeamShip.ShotLauncher.CalculateCost(moonbeamRelativeMovement, moonbeamTicks, moonbeamLoad, moonbeamDamage, out float moonbeamEnergyCost, out float moonbeamIonCost, out float moonbeamNeutrinoCost))
+            return false;
+
+        if (moonbeamEnergyCost > moonbeamShip.EnergyBattery.Current + 0.0001f)
+            return false;
+
+        if (moonbeamIonCost > moonbeamShip.IonBattery.Current + 0.0001f)
+            return false;
+
+        if (moonbeamNeutrinoCost > moonbeamShip.NeutrinoBattery.Current + 0.0001f)
+            return false;
+
+        return true;
+    }
+
+    private static Vector BuildCompensatedPointShotMovement(
+        float moonbeamSourceX,
+        float moonbeamSourceY,
+        float moonbeamSourceMovementX,
+        float moonbeamSourceMovementY,
+        float moonbeamTargetX,
+        float moonbeamTargetY,
+        float moonbeamRelativeSpeed,
+        int moonbeamTicks,
+        float moonbeamLaunchOffsetDistance)
+    {
+        if (moonbeamTicks <= 0 || moonbeamRelativeSpeed <= 0.0001f)
+            return new Vector();
+
+        float moonbeamDeltaX = moonbeamTargetX - moonbeamSourceX;
+        float moonbeamDeltaY = moonbeamTargetY - moonbeamSourceY;
+        float moonbeamBaseRelativeX = moonbeamDeltaX / moonbeamTicks - moonbeamSourceMovementX;
+        float moonbeamBaseRelativeY = moonbeamDeltaY / moonbeamTicks - moonbeamSourceMovementY;
+
+        Vector moonbeamCandidate = new Vector(moonbeamBaseRelativeX, moonbeamBaseRelativeY);
+        if (moonbeamCandidate.Length <= 0.0001f)
+        {
+            moonbeamCandidate = BuildDirectPointShotFallbackMovement(
+                moonbeamSourceX,
+                moonbeamSourceY,
+                0f,
+                moonbeamTargetX,
+                moonbeamTargetY,
+                moonbeamRelativeSpeed);
+        }
+        else
+        {
+            moonbeamCandidate.Length = moonbeamRelativeSpeed;
+        }
+
+        for (int moonbeamIteration = 0; moonbeamIteration < 3; moonbeamIteration++)
+        {
+            float moonbeamGlideX = moonbeamSourceMovementX + moonbeamCandidate.X;
+            float moonbeamGlideY = moonbeamSourceMovementY + moonbeamCandidate.Y;
+            float moonbeamGlideLength = MathF.Sqrt(moonbeamGlideX * moonbeamGlideX + moonbeamGlideY * moonbeamGlideY);
+            float moonbeamLaunchX = moonbeamSourceX;
+            float moonbeamLaunchY = moonbeamSourceY;
+            if (moonbeamGlideLength > 0.0001f && moonbeamLaunchOffsetDistance > 0f)
+            {
+                float moonbeamInverseGlide = 1f / moonbeamGlideLength;
+                moonbeamLaunchX += moonbeamGlideX * moonbeamInverseGlide * moonbeamLaunchOffsetDistance;
+                moonbeamLaunchY += moonbeamGlideY * moonbeamInverseGlide * moonbeamLaunchOffsetDistance;
+            }
+
+            float moonbeamNeededRelativeX = (moonbeamTargetX - moonbeamLaunchX) / moonbeamTicks - moonbeamSourceMovementX;
+            float moonbeamNeededRelativeY = (moonbeamTargetY - moonbeamLaunchY) / moonbeamTicks - moonbeamSourceMovementY;
+            Vector moonbeamNeededMovement = new Vector(moonbeamNeededRelativeX, moonbeamNeededRelativeY);
+            if (moonbeamNeededMovement.Length <= 0.0001f)
+                break;
+
+            moonbeamNeededMovement.Length = moonbeamRelativeSpeed;
+            moonbeamCandidate = moonbeamNeededMovement;
+        }
+
+        return moonbeamCandidate;
+    }
+
+    private static float ComputePointShotMissDistance(
+        float moonbeamSourceX,
+        float moonbeamSourceY,
+        float moonbeamSourceMovementX,
+        float moonbeamSourceMovementY,
+        float moonbeamLaunchOffsetDistance,
+        Vector moonbeamRelativeMovement,
+        int moonbeamTicks,
+        float moonbeamTargetX,
+        float moonbeamTargetY)
+    {
+        if (moonbeamTicks <= 0)
+            return float.MaxValue;
+
+        float moonbeamGlideX = moonbeamSourceMovementX + moonbeamRelativeMovement.X;
+        float moonbeamGlideY = moonbeamSourceMovementY + moonbeamRelativeMovement.Y;
+        float moonbeamLaunchX = moonbeamSourceX;
+        float moonbeamLaunchY = moonbeamSourceY;
+        float moonbeamGlideLength = MathF.Sqrt(moonbeamGlideX * moonbeamGlideX + moonbeamGlideY * moonbeamGlideY);
+        if (moonbeamGlideLength > 0.0001f && moonbeamLaunchOffsetDistance > 0f)
+        {
+            float moonbeamInverseGlide = 1f / moonbeamGlideLength;
+            moonbeamLaunchX += moonbeamGlideX * moonbeamInverseGlide * moonbeamLaunchOffsetDistance;
+            moonbeamLaunchY += moonbeamGlideY * moonbeamInverseGlide * moonbeamLaunchOffsetDistance;
+        }
+
+        float moonbeamProjectedX = moonbeamLaunchX + moonbeamGlideX * moonbeamTicks;
+        float moonbeamProjectedY = moonbeamLaunchY + moonbeamGlideY * moonbeamTicks;
+        float moonbeamMissX = moonbeamTargetX - moonbeamProjectedX;
+        float moonbeamMissY = moonbeamTargetY - moonbeamProjectedY;
+        return MathF.Sqrt(moonbeamMissX * moonbeamMissX + moonbeamMissY * moonbeamMissY);
+    }
+
+    private static bool ShouldFireRailgunBack(float moonbeamRelativeAngleDegrees)
+    {
+        float sparklyNormalizedAngle = NormalizeAngleDegrees(moonbeamRelativeAngleDegrees);
+        return sparklyNormalizedAngle > 90f && sparklyNormalizedAngle < 270f;
+    }
+
+    private static float NormalizeAngleDegrees(float moonbeamAngleDegrees)
+    {
+        return ((moonbeamAngleDegrees % 360f) + 360f) % 360f;
+    }
+
     private async Task<CommandReplyMessage> HandleSetSubsystemMode(string commandId, System.Text.Json.JsonElement? payload)
     {
         var controllableId = payload?.GetProperty("controllableId").GetString() ?? "";
         var subsystemId = payload?.GetProperty("subsystemId").GetString() ?? "";
         var mode = payload?.GetProperty("mode").GetString() ?? "";
         var controllable = FindControllable(controllableId);
-        if (controllable is not ClassicShipControllable classic)
-            return Rejected(commandId, "invalid_controllable", "Controllable not found or not a classic ship.");
+        if (controllable is null)
+            return Rejected(commandId, "invalid_controllable", "Controllable not found.");
+
+        var classic = controllable as ClassicShipControllable;
+        var modern = controllable as ModernShipControllable;
         var subsystem = string.IsNullOrWhiteSpace(subsystemId)
             ? null
             : FindSubsystem(controllable, subsystemId);
@@ -1065,18 +1492,22 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             subsystemId = "ShotFabricator";
         else if (subsystem is DynamicInterceptorFabricatorSubsystem)
             subsystemId = "InterceptorFabricator";
+        else if (subsystem is ResourceMinerSubsystem)
+            subsystemId = "ResourceMiner";
+        else if (subsystem is NebulaCollectorSubsystem)
+            subsystemId = "NebulaCollector";
 
         bool tacticalOnlyMode =
             string.Equals(subsystemId, "Tactical", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(subsystemId, "TacticalModule", StringComparison.OrdinalIgnoreCase);
         if (tacticalOnlyMode)
         {
-            if (mode != "off" && RejectIfControllableRebuilding(commandId, classic) is { } rebuildingReject)
+            if (mode != "off" && RejectIfControllableRebuilding(commandId, controllable) is { } rebuildingReject)
                 return rebuildingReject;
         }
         else
         {
-            if (RejectIfControllableRebuilding(commandId, classic) is { } rebuildingReject)
+            if (RejectIfControllableRebuilding(commandId, controllable) is { } rebuildingReject)
                 return rebuildingReject;
         }
 
@@ -1084,6 +1515,9 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         {
             case "MainScanner":
             case "scanner":
+                if (classic is null)
+                    return Rejected(commandId, "unsupported_subsystem", "Scanner mode control currently requires a classic ship.");
+
                 if (mode == "off")
                 {
                     await _scanningService.ApplyAsync(classic, ScanningService.ScannerMode.Off);
@@ -1129,9 +1563,67 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                     await _scanningService.ApplyTargetModeAsync(classic, targetUnitId, width, length);
                 }
                 break;
+            case "ResourceMiner":
+            case "resourceMiner":
+            case "Resource Miner":
+                if (!controllable.ResourceMiner.Exists)
+                    return Rejected(commandId, "unsupported_subsystem", "This controllable has no installed resource miner.");
+
+                if (mode == "on")
+                {
+                    await controllable.ResourceMiner.Set(controllable.ResourceMiner.MaximumRate);
+                }
+                else if (mode == "off")
+                {
+                    await controllable.ResourceMiner.Off();
+                }
+                else if (mode == "set")
+                {
+                    if (payload?.TryGetProperty("value", out var rateEl) != true || rateEl.ValueKind == System.Text.Json.JsonValueKind.Null)
+                        return Rejected(commandId, "missing_value", "value is required when setting a resource miner rate.");
+
+                    await controllable.ResourceMiner.Set(rateEl.GetSingle());
+                }
+                else
+                {
+                    return Rejected(commandId, "invalid_mode", $"Unsupported resource miner mode: {mode}");
+                }
+                break;
+            case "NebulaCollector":
+            case "nebulaCollector":
+            case "Nebula Collector":
+            {
+                var collector = classic?.NebulaCollector ?? modern?.NebulaCollector;
+                if (collector is null || !collector.Exists)
+                    return Rejected(commandId, "unsupported_subsystem", "This controllable has no installed nebula collector.");
+
+                if (mode == "on")
+                {
+                    await collector.Set(collector.MaximumRate);
+                }
+                else if (mode == "off")
+                {
+                    await collector.Off();
+                }
+                else if (mode == "set")
+                {
+                    if (payload?.TryGetProperty("value", out var rateEl) != true || rateEl.ValueKind == System.Text.Json.JsonValueKind.Null)
+                        return Rejected(commandId, "missing_value", "value is required when setting a nebula collector rate.");
+
+                    await collector.Set(rateEl.GetSingle());
+                }
+                else
+                {
+                    return Rejected(commandId, "invalid_mode", $"Unsupported nebula collector mode: {mode}");
+                }
+                break;
+            }
             case "ShotFabricator":
             case "shotFabricator":
             case "Shot Fabricator":
+                if (classic is null)
+                    return Rejected(commandId, "unsupported_subsystem", "Shot fabricator control currently requires a classic ship.");
+
                 if (mode == "on") await classic.ShotFabricator.On();
                 else if (mode == "off") await classic.ShotFabricator.Off();
                 else if (mode == "set")
@@ -1147,6 +1639,9 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             case "InterceptorFabricator":
             case "interceptorFabricator":
             case "Interceptor Fabricator":
+                if (classic is null)
+                    return Rejected(commandId, "unsupported_subsystem", "Interceptor fabricator control currently requires a classic ship.");
+
                 if (mode == "on") await classic.InterceptorFabricator.On();
                 else if (mode == "off") await classic.InterceptorFabricator.Off();
                 else if (mode == "set")
@@ -1163,6 +1658,9 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             case "tactical":
             case "TacticalModule":
             case "tacticalModule":
+                if (classic is null)
+                    return Rejected(commandId, "unsupported_subsystem", "Tactical control currently requires a classic ship.");
+
                 var tacticalMode = mode == "enemy"
                     ? TacticalService.TacticalMode.Enemy
                     : mode == "target"
@@ -1667,6 +2165,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                             _tacticalService.AttachControllable($"p{continued.Player.Id}-c{continued.ControllableInfo.Id}", respawnedShip);
                             ObserveBackgroundTask(_scanningService.ReapplyModeAsync(respawnedShip));
                             _maneuveringService.RebindShip(respawnedShip);
+                            _pathfindingService.RebindShip(respawnedShip);
                             break;
                         }
                     }
@@ -1815,6 +2314,25 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 return;
             }
 
+            float moonbeamAutoFireVectorAngle = NormalizeAngleDegrees(MathF.Atan2(request.RelativeMovement.Y, request.RelativeMovement.X) * (180f / MathF.PI));
+            if (IsFireTraceEnabled())
+            {
+                _logger.LogInformation(
+                    "Auto-fire execute session={SessionId} controllable={ControllableId} target={Target} shotVectorX={ShotVectorX} shotVectorY={ShotVectorY} shotVectorLen={ShotVectorLen} shotVectorAngle={ShotVectorAngle} ticks={Ticks} load={Load} damage={Damage} predictedMissDistance={PredictedMissDistance} tick={Tick}",
+                    _id,
+                    request.ControllableId,
+                    request.TargetUnitName,
+                    request.RelativeMovement.X,
+                    request.RelativeMovement.Y,
+                    request.RelativeMovement.Length,
+                    moonbeamAutoFireVectorAngle,
+                    request.Ticks,
+                    request.Load,
+                    request.Damage,
+                    request.PredictedMissDistance,
+                    request.Tick);
+            }
+
             await request.Ship.ShotLauncher.Shoot(request.RelativeMovement, request.Ticks, request.Load, request.Damage)
                 .ConfigureAwait(false);
             _tacticalService.RegisterSuccessfulFire(request.ControllableId, request.Tick);
@@ -1832,6 +2350,11 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             lock (_autoFireSync)
                 _autoFireInFlight.Remove(request.ControllableId);
         }
+    }
+
+    private bool IsFireTraceEnabled()
+    {
+        return FireTraceEnabledByEnv && _logger.IsEnabled(LogLevel.Information);
     }
 
     private void BroadcastWorldDelta(List<BrowserConnection> connections, List<WorldDeltaDto> deltas)

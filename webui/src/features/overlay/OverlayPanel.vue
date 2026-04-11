@@ -276,12 +276,13 @@ function humanizeSubsystemName(value: string) {
         @click="selectControllable(entry.id)"
       >
         <div class="owner-overlay-summary">
-            <div class="owner-overlay-head">
-              <div class="owner-overlay-title-topline">
+              <div class="owner-overlay-head">
+              <div class="owner-overlay-title-block">
                 <h3>{{ entry.displayName }}</h3>
-                <span class="owner-overlay-inline-meta owner-overlay-inline-meta--type">{{ entry.kind }}</span>
-                <span class="owner-overlay-inline-meta">{{ compactClusterLabel(entry.clusterLabel) }}</span>
-                <span class="owner-overlay-inline-meta">{{ entry.statusLabel }}</span>
+                <div class="owner-overlay-title-topline">
+                  <span class="owner-overlay-inline-meta owner-overlay-inline-meta--type">{{ entry.kind }}</span>
+                  <span class="owner-overlay-inline-meta">{{ compactClusterLabel(entry.clusterLabel) }}</span>
+                </div>
               </div>
               <div class="owner-overlay-head-actions">
                 <div class="owner-overlay-badges">
@@ -439,31 +440,47 @@ function humanizeSubsystemName(value: string) {
 
 .owner-overlay-head {
   align-items: flex-start;
-  min-height: 24px;
+  min-height: 32px;
+  gap: 0.45rem;
 }
 
 .owner-overlay-title-topline {
   display: flex;
-  align-items: baseline;
-  gap: 0.32rem;
+  align-items: center;
+  gap: 0.32rem 0.4rem;
+  flex-wrap: wrap;
   min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
+  width: 100%;
+  max-width: none;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.owner-overlay-title-block {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.18rem;
+  align-items: flex-start;
+  text-align: left;
 }
 
 .owner-overlay-title-block h3 {
   margin: 0;
-  font-size: 0.82rem;
-  line-height: 1;
+  font-size: 0.76rem;
+  line-height: 1.05;
+  width: 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 1 1 auto;
+  min-width: 0;
 }
 
 .owner-overlay-inline-meta {
   flex: 0 0 auto;
-  max-width: 4.8rem;
+  max-width: none;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -475,7 +492,7 @@ function humanizeSubsystemName(value: string) {
 }
 
 .owner-overlay-inline-meta--type {
-  max-width: 7rem;
+  max-width: none;
 }
 
 .owner-overlay-badges {

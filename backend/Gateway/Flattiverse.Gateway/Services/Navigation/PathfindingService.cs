@@ -19,6 +19,9 @@ public sealed class PathfindingService : IConnectorEventHandler
     private const double MinimumArrivalDistance = 10d;
     private const double MaximumArrivalDistance = 34d;
 
+    /// <summary>Number of overlay cycles the pending target indicator stays visible after the goal is resolved.</summary>
+    private const int PendingTargetFadeoutCycles = 8;
+
     private sealed class PathState
     {
         public ClassicShipControllable? Ship { get; set; }
@@ -42,6 +45,23 @@ public sealed class PathfindingService : IConnectorEventHandler
 
         /// <summary>Obstacle unit ids passed to the last <see cref="Replan"/> attempt (success or failure).</summary>
         public HashSet<string> ObstacleIdsAtLastPlanAttempt { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>When set, the next tick will attempt to plan toward this goal. If the plan succeeds, it replaces
+        /// the active goal. If it fails, the active goal and plan are kept.</summary>
+        public bool HasPendingGoal { get; set; }
+        public NavigationPoint PendingGoal { get; set; }
+        public float PendingThrustPercentage { get; set; } = 1f;
+
+        /// <summary>Visible pending target for the overlay. Set when a pending goal is queued, cleared after
+        /// the remaining overlay cycles have been emitted.</summary>
+        public bool ShowPendingTarget { get; set; }
+        public NavigationPoint VisiblePendingTarget { get; set; }
+
+        /// <summary>Number of overlay cycles remaining to show the pending target after the goal is resolved.</summary>
+        public int PendingTargetCyclesRemaining { get; set; }
+
+        /// <summary>Whether the ship recently respawned and needs a reachability check.</summary>
+        public bool NeedsRespawnCheck { get; set; }
     }
 
     private readonly MappingService _mappingService;
@@ -100,7 +120,35 @@ public sealed class PathfindingService : IConnectorEventHandler
 
         var state = _states[ship.Id];
         state.Ship = ship;
+
+        // If there is already an active goal with a working plan, queue the new goal as pending.
+        // The next tick will attempt to plan toward it; on success it replaces the active goal,
+        // on failure the current navigation keeps running.
+        if (state.HasGoal && state.Plan is { Succeeded: true })
+        {
+            state.HasPendingGoal = true;
+            state.PendingGoal = new NavigationPoint(targetX, targetY);
+            state.PendingThrustPercentage = thrustPercentage;
+            state.ShowPendingTarget = true;
+            state.VisiblePendingTarget = new NavigationPoint(targetX, targetY);
+            state.PendingTargetCyclesRemaining = -1; // -1 = keep showing until goal is resolved
+
+            if (_enableLogging)
+            {
+                _logger.LogInformation(
+                    "[Pathfinding] SetNavigationGoal (pending) controllable={ControllableId} pendingGoal=({GoalX:F1},{GoalY:F1}) thrust={Thrust:F2}",
+                    ship.Id,
+                    targetX,
+                    targetY,
+                    thrustPercentage);
+            }
+
+            return;
+        }
+
+        // No active plan – apply immediately.
         state.HasGoal = true;
+        state.HasPendingGoal = false;
         state.Goal = new NavigationPoint(targetX, targetY);
         state.ThrustPercentage = thrustPercentage;
         state.Plan = null;
@@ -133,11 +181,41 @@ public sealed class PathfindingService : IConnectorEventHandler
         }
 
         state.HasGoal = false;
+        state.HasPendingGoal = false;
+        state.ShowPendingTarget = false;
         state.Plan = null;
         state.Status = "idle";
         state.ObstacleIdsFromSuccessfulPlan.Clear();
         state.ObstacleIdsAtLastPlanAttempt.Clear();
         _maneuveringService.ClearNavigationTarget(controllableId);
+    }
+
+    /// <summary>
+    /// Called on ship respawn. Updates the ship reference and marks the state so the next tick
+    /// can verify reachability of the old goal. If unreachable, the goal is replaced by the
+    /// ship's current (respawn) position.
+    /// </summary>
+    public void RebindShip(ClassicShipControllable ship)
+    {
+        if (_states.TryGetValue(ship.Id, out var existing))
+        {
+            existing.Ship = ship;
+            existing.NeedsRespawnCheck = true;
+            // Invalidate old plan so it gets re-evaluated from the new position
+            existing.Plan = null;
+            existing.PlannedClusterId = int.MinValue;
+            existing.ObstacleIdsFromSuccessfulPlan.Clear();
+            existing.ObstacleIdsAtLastPlanAttempt.Clear();
+            return;
+        }
+
+        _states[ship.Id] = new PathState
+        {
+            Ship = ship,
+            Goal = new NavigationPoint(ship.Position.X, ship.Position.Y),
+            PlannedStart = new NavigationPoint(ship.Position.X, ship.Position.Y),
+            Status = "idle",
+        };
     }
 
     public Dictionary<string, object?> BuildOverlay(int controllableId)
@@ -158,6 +236,33 @@ public sealed class PathfindingService : IConnectorEventHandler
             { "targetY", state.Goal.Y },
             { "pathStatus", state.Status ?? "planned" },
         };
+
+        if (state.ShowPendingTarget)
+        {
+            overlay["pendingTargetX"] = state.VisiblePendingTarget.X;
+            overlay["pendingTargetY"] = state.VisiblePendingTarget.Y;
+
+            if (_enableLogging)
+            {
+                _logger.LogInformation(
+                    "[Pathfinding] BuildOverlay emitting pendingTarget controllable={ControllableId} pending=({X:F1},{Y:F1}) cyclesRemaining={Cycles}",
+                    controllableId,
+                    state.VisiblePendingTarget.X,
+                    state.VisiblePendingTarget.Y,
+                    state.PendingTargetCyclesRemaining);
+            }
+
+            // While the pending goal is still unresolved, keep showing indefinitely (-1).
+            // Once resolved, UpdateState starts the countdown. Decrement each overlay cycle.
+            if (state.PendingTargetCyclesRemaining >= 0)
+            {
+                state.PendingTargetCyclesRemaining--;
+                if (state.PendingTargetCyclesRemaining < 0)
+                {
+                    state.ShowPendingTarget = false;
+                }
+            }
+        }
 
         if (plan is not null)
         {
@@ -207,6 +312,120 @@ public sealed class PathfindingService : IConnectorEventHandler
         }
 
         var currentPosition = new NavigationPoint(ship.Position.X, ship.Position.Y);
+
+        // --- Respawn reachability check ---
+        if (state.NeedsRespawnCheck)
+        {
+            state.NeedsRespawnCheck = false;
+
+            var clusterId = ship.Cluster?.Id ?? 0;
+            var obstacles = CircularObstacleExtractor.Extract(
+                _mappingService.BuildUnitSnapshots(),
+                clusterId,
+                ship.Size,
+                ClearanceMargin,
+                destinationUnitId: null,
+                shipPosition: currentPosition);
+
+            var respawnPlan = _planner.Plan(currentPosition, state.Goal, obstacles);
+            if (!respawnPlan.Succeeded)
+            {
+                // Old goal not reachable from respawn position – hold current position
+                if (_enableLogging)
+                {
+                    _logger.LogInformation(
+                        "[Pathfinding] Respawn goal unreachable controllable={ControllableId} – falling back to current position",
+                        ship.Id);
+                }
+
+                state.Goal = currentPosition;
+                state.Plan = null;
+                state.Status = "station-keeping";
+                state.HasPendingGoal = false;
+                _maneuveringService.SetNavigationTarget(
+                    ship,
+                    (float)currentPosition.X,
+                    (float)currentPosition.Y,
+                    state.ThrustPercentage,
+                    resetController: true,
+                    remainingPath: null);
+                return;
+            }
+
+            // Goal is still reachable – adopt the new plan and continue below
+            state.Plan = respawnPlan;
+            state.PlannedClusterId = clusterId;
+            state.PlannedStart = currentPosition;
+            state.Status = "planned";
+            state.ObstacleIdsFromSuccessfulPlan.Clear();
+            state.ObstacleIdsAtLastPlanAttempt.Clear();
+            foreach (var obstacle in obstacles)
+            {
+                state.ObstacleIdsFromSuccessfulPlan.Add(obstacle.Id);
+                state.ObstacleIdsAtLastPlanAttempt.Add(obstacle.Id);
+            }
+        }
+
+        // --- Process pending goal (new target requested while old navigation was running) ---
+        if (state.HasPendingGoal)
+        {
+            state.HasPendingGoal = false;
+
+            var clusterId = ship.Cluster?.Id ?? 0;
+            var obstacles = CircularObstacleExtractor.Extract(
+                _mappingService.BuildUnitSnapshots(),
+                clusterId,
+                ship.Size,
+                ClearanceMargin,
+                destinationUnitId: null,
+                shipPosition: currentPosition);
+
+            var pendingPlan = _planner.Plan(currentPosition, state.PendingGoal, obstacles);
+
+            // Start the fadeout countdown so the client sees the pending indicator for a few frames
+            state.PendingTargetCyclesRemaining = PendingTargetFadeoutCycles;
+
+            if (pendingPlan.Succeeded)
+            {
+                // New goal is reachable – adopt it (pending marker will fade out over the countdown)
+                state.Goal = state.PendingGoal;
+                state.ThrustPercentage = state.PendingThrustPercentage;
+                state.Plan = pendingPlan;
+                state.PlannedClusterId = clusterId;
+                state.PlannedStart = currentPosition;
+                state.Status = "planned";
+                state.ObstacleIdsFromSuccessfulPlan.Clear();
+                state.ObstacleIdsAtLastPlanAttempt.Clear();
+                foreach (var obstacle in obstacles)
+                {
+                    state.ObstacleIdsFromSuccessfulPlan.Add(obstacle.Id);
+                    state.ObstacleIdsAtLastPlanAttempt.Add(obstacle.Id);
+                }
+
+                if (_enableLogging)
+                {
+                    _logger.LogInformation(
+                        "[Pathfinding] Pending goal adopted controllable={ControllableId} goal=({GoalX:F1},{GoalY:F1})",
+                        ship.Id,
+                        state.Goal.X,
+                        state.Goal.Y);
+                }
+            }
+            else
+            {
+                // New goal is not reachable – keep old navigation (pending marker will fade out over the countdown)
+
+                if (_enableLogging)
+                {
+                    _logger.LogInformation(
+                        "[Pathfinding] Pending goal rejected (route blocked) controllable={ControllableId} pendingGoal=({GoalX:F1},{GoalY:F1}) – keeping current route",
+                        ship.Id,
+                        state.PendingGoal.X,
+                        state.PendingGoal.Y);
+                }
+            }
+        }
+
         var arrivalThreshold = ComputeArrivalThreshold(ship);
         if (currentPosition.DistanceTo(state.Goal) <= arrivalThreshold)
         {
@@ -222,16 +441,16 @@ public sealed class PathfindingService : IConnectorEventHandler
             return;
         }
 
-        var clusterId = ship.Cluster?.Id ?? 0;
-        var obstacles = CircularObstacleExtractor.Extract(
+        var currentClusterId = ship.Cluster?.Id ?? 0;
+        var currentObstacles = CircularObstacleExtractor.Extract(
             _mappingService.BuildUnitSnapshots(),
-            clusterId,
+            currentClusterId,
             ship.Size,
             ClearanceMargin,
             destinationUnitId: null,
             shipPosition: currentPosition);
 
-        var replanDecision = GetReplanDecision(state, obstacles, clusterId, currentPosition);
+        var replanDecision = GetReplanDecision(state, currentObstacles, currentClusterId, currentPosition);
         if (replanDecision.Replan)
         {
             if (_enableLogging)
@@ -240,15 +459,16 @@ public sealed class PathfindingService : IConnectorEventHandler
                     "[Pathfinding] Replan triggered controllable={ControllableId} reason={Reason} obstacleCount={ObstacleCount}",
                     ship.Id,
                     replanDecision.Reason,
-                    obstacles.Count);
+                    currentObstacles.Count);
             }
 
-            Replan(state, ship, currentPosition, clusterId, obstacles);
+            Replan(state, ship, currentPosition, currentClusterId, currentObstacles);
         }
 
         if (state.Plan is null || !state.Plan.Succeeded || state.Plan.PathPoints.Count == 0)
         {
-            _maneuveringService.ClearNavigationTarget(ship.Id);
+            // Plan failed – do NOT clear the maneuvering target; let the ship coast on its
+            // current trajectory rather than killing the engines and drifting.
             return;
         }
 

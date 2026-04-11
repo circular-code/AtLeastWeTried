@@ -269,7 +269,7 @@ h2 {
 
 .overlay-top {
   display: grid;
-  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr) minmax(240px, 300px);
+  grid-template-columns: minmax(255px, 335px) minmax(0, 1fr) minmax(240px, 300px);
   grid-template-areas: 'left . right';
   align-items: start;
   gap: 0.6rem;
@@ -279,7 +279,7 @@ h2 {
 
 /* No selection: drop the third track so the empty right column does not reserve ~240px. */
 .overlay-top:not(.overlay-top--has-selection) {
-  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  grid-template-columns: minmax(255px, 335px) minmax(0, 1fr);
   grid-template-areas: 'left .';
 }
 
@@ -306,6 +306,7 @@ h2 {
 
 .overlay-column-left {
   grid-area: left;
+  align-self: stretch;
 }
 
 .overlay-column-right {
@@ -314,7 +315,7 @@ h2 {
 }
 
 .overlay-shell.is-debug-log-ingame-active .overlay-top {
-  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  grid-template-columns: minmax(255px, 335px) minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   grid-template-areas:
     'left .'
@@ -338,13 +339,13 @@ h2 {
 }
 
 .overlay-shell.is-debug-log-ingame-active.has-multiple-owned-ships .overlay-top {
-  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr) minmax(240px, 300px);
+  grid-template-columns: minmax(255px, 335px) minmax(0, 1fr) minmax(240px, 300px);
   grid-template-rows: minmax(0, 1fr);
   grid-template-areas: 'left . right';
 }
 
 .overlay-shell.is-debug-log-ingame-active.has-multiple-owned-ships .overlay-top:not(.overlay-top--has-selection) {
-  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  grid-template-columns: minmax(255px, 335px) minmax(0, 1fr);
   grid-template-areas: 'left .';
 }
 
@@ -364,9 +365,11 @@ h2 {
   display: grid;
   background: none!important;
   gap: 0.45rem;
-  width: min(100%, 260px);
-  max-height: 84vh;
-  overflow: auto;
+  width: min(100%, 275px);
+  height: 100%;
+  max-height: none;
+  overflow-y: auto;
+  overflow-x: hidden;
   pointer-events: auto;
 }
 
@@ -538,7 +541,7 @@ h2 {
   display: block;
   max-width: 100%;
   color: var(--text-muted);
-  font-size: 0.46rem;
+   font-size: 0.54rem;
   line-height: 1.1;
   text-align: center;
   word-break: break-word;
@@ -1112,6 +1115,14 @@ h2 {
   white-space: nowrap;
 }
 
+.status-bar-resource-chip {
+  padding: 0.15rem 0.38rem;
+  border-radius: 999px;
+  background: rgba(124, 179, 221, 0.12);
+  border: 1px solid rgba(124, 179, 221, 0.18);
+  color: #e9f5ff;
+}
+
 .status-bar-system-actions {
   flex: 0 0 auto;
   gap: 0.28rem;
@@ -1259,6 +1270,19 @@ h2 {
   margin-left: auto;
 }
 
+.dock-group-stack--utility {
+  align-items: stretch;
+}
+
+.dock-group-stack--utility > .dock-group {
+  width: 100%;
+}
+
+.dock-group-stack--utility .dock-group--lock {
+  margin-left: 0;
+  justify-content: stretch;
+}
+
 .dock-group-stack {
   display: flex;
   flex-direction: column;
@@ -1279,9 +1303,34 @@ h2 {
   margin-right: 0.45rem;
 }
 
+.dock-group-stack--harvest {
+  gap: 0.24rem;
+}
+
 .dock-group--scanner-metrics {
   gap: 0.55rem;
   flex-wrap: nowrap;
+}
+
+.dock-group--harvest-metric {
+  gap: 0.4rem;
+  padding: 0;
+}
+
+.dock-group--harvest-metric .dock-slider {
+  width: 86px;
+}
+
+.dock-group--harvest-status {
+  gap: 0.28rem;
+  padding: 0;
+  flex-wrap: wrap;
+}
+
+.dock-group--harvest-sources {
+  gap: 0.32rem;
+  padding: 0;
+  flex-wrap: wrap;
 }
 
 .dock-group--scanner-metric {
@@ -1336,6 +1385,39 @@ h2 {
   background: rgba(124, 179, 221, 0.22);
   border-color: var(--accent, #7cb3dd);
   color: var(--accent, #7cb3dd);
+}
+
+.dock-btn--chip {
+  padding-inline: 0.4rem;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.dock-btn--wide {
+  width: 100%;
+}
+
+.dock-harvest-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.18rem 0.42rem;
+  border-radius: 999px;
+  background: rgba(124, 179, 221, 0.08);
+  border: 1px solid rgba(124, 179, 221, 0.16);
+  font-size: 0.62rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.dock-harvest-chip strong {
+  font-size: 0.63rem;
+  color: #eef7ff;
+}
+
+.dock-harvest-chip span {
+  color: rgba(235, 242, 255, 0.8);
 }
 
 .dock-sep {

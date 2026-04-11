@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue';
 import { useGateway } from '../../composables/useGateway';
 import { formatMetric } from '../../lib/formatting';
+import { buildHarvestLabels } from '../../lib/harvesting';
 import { isShipKind, normalizeKind } from '../../renderer/unitVisuals';
 import { useGameStore } from '../../stores/game';
 import { useSessionStore } from '../../stores/session';
@@ -26,6 +27,7 @@ type SystemEntry = {
   isCurrent: boolean;
   isSeen: boolean;
   isVisible: boolean;
+  harvestLabels?: string[];
 };
 
 const gateway = useGateway();
@@ -155,6 +157,7 @@ const unitsInCurrentSystem = computed(() => {
         isSeen,
         isVisible: visibleUnitIds.value.has(unit.unitId),
         clusterName,
+        harvestLabels: buildHarvestLabels(unit),
       };
     })
     .sort((left, right) => compareTrackedSystemEntries(left, right));
@@ -707,6 +710,13 @@ function formatPlayerSessionOptionLabel(player: PlayerSessionSummaryDto): string
                     <span>{{ unit.distance === null ? 'Current' : `${formatMetric(unit.distance)} away` }}</span>
                     <span>x {{ formatMetric(unit.x) }}</span>
                     <span>y {{ formatMetric(unit.y) }}</span>
+                    <span
+                      v-for="label in unit.harvestLabels ?? []"
+                      :key="`${unit.unitId}-${label}`"
+                      class="status-bar-resource-chip"
+                    >
+                      {{ label }}
+                    </span>
                   </div>
                 </div>
                 <div class="status-bar-system-actions">

@@ -22,6 +22,8 @@ export interface NavigationOverlayState {
   pathStatus?: string;
   targetX?: number;
   targetY?: number;
+  pendingTargetX?: number;
+  pendingTargetY?: number;
   vectorX?: number;
   vectorY?: number;
   pointerX?: number;

@@ -5,7 +5,7 @@ import { type NormalizedUnit, type UnitShaderMaterial, type UnitBodyMesh, create
 import { type UnitVisual, normalizeKind, getRenderRadius, getFallbackRenderRadius, getRenderScale, getColorForUnit, getShaderKindCode, getOpacityForUnit, toSceneRotation, isDirectionalKind, isShipKind, getHeadingPoints, shouldPersistTraceForUnit, isUnseenDynamicUnit } from './unitVisuals';
 import { type ScannerConeVisual, createScannerConeMesh } from './scannerCone';
 import { createSelectionRing } from './selectionRing';
-import { createNavigationMarker } from './navigationMarker';
+import { createNavigationMarker, createPendingNavigationMarker } from './navigationMarker';
 import { createNavigationPointer } from './navigationPointer';
 import { type TrackedTargetVisual, createTrackedTargetVisual, disposeTrackedTargetVisual } from './trackOverlay';
 import { createNavigationLookaheadMarker } from './navigationLookaheadMarker';
@@ -98,6 +98,7 @@ export class WorldScene {
   private readonly tacticalTargetRing: THREE.LineLoop;
   private readonly selectedCenterDot: THREE.Mesh;
   private readonly navigationMarker: THREE.Group;
+  private readonly pendingNavigationMarker: THREE.Group;
   private readonly navigationPointer: THREE.LineSegments;
   private readonly trackedTargetVisuals: Map<string, TrackedTargetVisual>;
   private readonly navigationPathPreview: THREE.Line;
@@ -188,6 +189,7 @@ export class WorldScene {
       }),
     );
     this.navigationMarker = createNavigationMarker();
+    this.pendingNavigationMarker = createPendingNavigationMarker();
     this.navigationPointer = createNavigationPointer();
     this.trackedTargetVisuals = new Map();
     this.navigationPathPreview = new THREE.Line(
@@ -253,6 +255,7 @@ export class WorldScene {
     this.root.add(this.tacticalTargetRing);
     this.root.add(this.selectedCenterDot);
     this.root.add(this.navigationMarker);
+    this.root.add(this.pendingNavigationMarker);
     this.root.add(this.navigationPointer);
     this.root.add(this.navigationSearchPreview);
     this.root.add(this.navigationPathPreview);
@@ -401,6 +404,7 @@ export class WorldScene {
 
       if (selectedControllableChanged || navigationTargetChanged) {
         this.updateNavigationMarker();
+        this.updatePendingNavigationMarker();
         this.updateNavigationPointer();
         this.updateNavigationPathPreview();
         this.updateNavigationSearchPreview();
@@ -699,6 +703,7 @@ export class WorldScene {
     this.updateTacticalTargetRing();
     this.updateFocusSelection();
     this.updateNavigationMarker();
+    this.updatePendingNavigationMarker();
     this.updateNavigationPointer();
     this.updateNavigationPathPreview();
     this.updateNavigationSearchPreview();
@@ -943,21 +948,21 @@ export class WorldScene {
   private updateSelectionRing() {
     const selectedUnit = this.renderableUnitsById.get(this.selectedUnitId)
       ?? this.renderableUnitsById.get(this.selectedControllableId);
+    const selectedControllableUnit = this.renderableUnitsById.get(this.selectedControllableId) ?? null;
+
     if (!selectedUnit) {
       this.selectedRing.visible = false;
-      this.selectedCenterDot.visible = false;
-      return;
+    } else {
+      const selectionRadius = Math.max(selectedUnit.renderRadius * 1.18, 4);
+      this.selectedRing.visible = true;
+      this.selectedRing.position.set(selectedUnit.x, -selectedUnit.y, 0);
+      this.selectedRing.scale.set(selectionRadius / 1.25, selectionRadius / 1.25, 1);
     }
 
-    const selectionRadius = Math.max(selectedUnit.renderRadius * 1.18, 4);
-    this.selectedRing.visible = true;
-    this.selectedRing.position.set(selectedUnit.x, -selectedUnit.y, 0);
-    this.selectedRing.scale.set(selectionRadius / 1.25, selectionRadius / 1.25, 1);
-
-    if (selectedUnit.unitId === this.selectedControllableId) {
-      const dotRadius = Math.max(selectedUnit.renderRadius * 0.16, 0.9) + this.getWorldUnitsPerPixel() * 2;
+    if (selectedControllableUnit) {
+      const dotRadius = Math.max(selectedControllableUnit.renderRadius * 0.16, 0.9) + this.getWorldUnitsPerPixel() * 2;
       this.selectedCenterDot.visible = true;
-      this.selectedCenterDot.position.set(selectedUnit.x, -selectedUnit.y, 2);
+      this.selectedCenterDot.position.set(selectedControllableUnit.x, -selectedControllableUnit.y, 2);
       this.selectedCenterDot.scale.set(dotRadius, dotRadius, 1);
     } else {
       this.selectedCenterDot.visible = false;
@@ -992,6 +997,23 @@ export class WorldScene {
     this.navigationMarker.visible = true;
     this.navigationMarker.position.set(this.selectedNavigationTarget.x, -this.selectedNavigationTarget.y, 0);
     this.navigationMarker.scale.set(markerScale, markerScale, 1);
+  }
+
+  private updatePendingNavigationMarker() {
+    const pendingTarget = readPendingNavigationTarget(this.ownerOverlay, this.selectedControllableId);
+    if (!pendingTarget) {
+      if (this.pendingNavigationMarker.visible) {
+        console.debug('[PendingMarker] hiding – no pending target in overlay');
+      }
+      this.pendingNavigationMarker.visible = false;
+      return;
+    }
+
+    console.debug('[PendingMarker] showing at', pendingTarget.x, pendingTarget.y);
+    const markerScale = Math.max(10, this.getWorldUnitsPerPixel() * 22);
+    this.pendingNavigationMarker.visible = true;
+    this.pendingNavigationMarker.position.set(pendingTarget.x, -pendingTarget.y, 0);
+    this.pendingNavigationMarker.scale.set(markerScale, markerScale, 1);
   }
 
   private updateNavigationPointer() {
@@ -1521,6 +1543,12 @@ export class WorldScene {
         (child.material as THREE.Material).dispose();
       }
     }
+    for (const child of this.pendingNavigationMarker.children) {
+      if (child instanceof THREE.Line || child instanceof THREE.LineLoop || child instanceof THREE.LineSegments) {
+        child.geometry.dispose();
+        (child.material as THREE.Material).dispose();
+      }
+    }
     this.navigationPointer.geometry.dispose();
     (this.navigationPointer.material as THREE.Material).dispose();
     this.navigationPathPreview.geometry.dispose();
@@ -1710,6 +1738,35 @@ export function readNavigationTarget(ownerOverlay: Record<string, unknown>, cont
     x: numberValue(navigationState.targetX, 0),
     y: numberValue(navigationState.targetY, 0),
   };
+}
+
+let _lastPendingLogKey = '';
+
+export function readPendingNavigationTarget(ownerOverlay: Record<string, unknown>, controllableId: string): WorldSceneNavigationTarget {
+  const navigationState = readNavigationOverlay(ownerOverlay, controllableId);
+  if (!navigationState || navigationState.active !== true) {
+    if (_lastPendingLogKey !== 'inactive') {
+      console.debug('[PendingMarker:read] nav overlay inactive or missing');
+      _lastPendingLogKey = 'inactive';
+    }
+    return null;
+  }
+
+  const raw = navigationState as unknown as Record<string, unknown>;
+  const px = raw.pendingTargetX;
+  const py = raw.pendingTargetY;
+  const logKey = `${px},${py}`;
+
+  if (logKey !== _lastPendingLogKey) {
+    console.debug('[PendingMarker:read] overlay keys:', Object.keys(raw), 'pendingTargetX:', px, 'pendingTargetY:', py);
+    _lastPendingLogKey = logKey;
+  }
+
+  if (typeof px !== 'number' || typeof py !== 'number' || !Number.isFinite(px) || !Number.isFinite(py)) {
+    return null;
+  }
+
+  return { x: px, y: py };
 }
 
 export function readNavigationPointer(ownerOverlay: Record<string, unknown>, controllableId: string): WorldSceneNavigationPointer {

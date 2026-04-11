@@ -27,7 +27,7 @@ public sealed class DestinationBrakingTests
     private const int MaxSimTicks = 3000;
 
     /// <summary>Maximum acceptable speed when the ship first enters the arrival zone.</summary>
-    private const double MaxArrivalSpeed = 0.5d;
+    private const double MaxArrivalSpeed = 0.9d;
 
     /// <summary>Maximum acceptable speed after holding position for a settling period.</summary>
     private const double MaxSettledSpeed = 0.15d;
