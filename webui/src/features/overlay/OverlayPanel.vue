@@ -15,6 +15,7 @@ const openSubsystemsForId = ref('');
 const activeControllableId = computed(() => uiStore.selectedControllableId || (gameStore.ownedControllables[0]?.controllableId ?? ''));
 const ownerOverlay = computed(() => gameStore.ownerOverlay as Record<string, Record<string, unknown> | undefined>);
 const customShipColors = computed(() => uiStore.customShipColors);
+const removingControllableIds = computed(() => uiStore.removingControllableIds);
 const entries = computed(() => gameStore.ownedControllables
   .map((entry) => gameStore.overlayEntry(entry.controllableId))
   .filter((entry): entry is NonNullable<ReturnType<typeof gameStore.overlayEntry>> => !!entry));
@@ -97,6 +98,10 @@ function compactClusterLabel(clusterLabel: string) {
 
 function toggleSubsystems(controllableId: string) {
   openSubsystemsForId.value = openSubsystemsForId.value === controllableId ? '' : controllableId;
+}
+
+function isRemoving(controllableId: string) {
+  return removingControllableIds.value.has(controllableId);
 }
 
 function hasAvailableSubsystemUpgrade(controllableId: string) {
@@ -267,15 +272,19 @@ function humanizeSubsystemName(value: string) {
 <template>
   <aside class="overlay-column overlay-column-left">
     <section class="owner-overlay-panel panel-glass">
-      <button
-        v-for="entry in entries"
-        :key="entry.id"
-        class="owner-overlay-item"
-        :class="{ 'is-selected': entry.id === activeControllableId }"
-        type="button"
-        @click="selectControllable(entry.id)"
-      >
-        <div class="owner-overlay-summary">
+        <button
+          v-for="entry in entries"
+          :key="entry.id"
+          class="owner-overlay-item"
+          :class="{ 'is-selected': entry.id === activeControllableId, 'is-removing': isRemoving(entry.id) }"
+          type="button"
+          @click="selectControllable(entry.id)"
+        >
+          <div v-if="isRemoving(entry.id)" class="owner-overlay-removing">
+            <span class="owner-overlay-removing-spinner" aria-hidden="true" />
+            <span>Removing ship...</span>
+          </div>
+          <div class="owner-overlay-summary">
               <div class="owner-overlay-head">
               <div class="owner-overlay-title-block">
                 <h3>{{ entry.displayName }}</h3>
@@ -343,7 +352,7 @@ function humanizeSubsystemName(value: string) {
               @input.stop="updateShipColor(entry.id, $event)"
             />
           </label>
-          <button class="button-danger button-compact" type="button" @click.stop="gateway.removeShip(entry.id)">Remove</button>
+          <button class="button-danger button-compact" type="button" :disabled="isRemoving(entry.id)" @click.stop="gateway.removeShip(entry.id)">Remove</button>
         </div>
       </button>
 

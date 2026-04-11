@@ -38,6 +38,7 @@ export const useUiStore = defineStore('ui', {
 
     return ({
     selectedControllableId: '',
+    removingControllableIds: new Set<string>(),
     navigationMaxSpeedFraction: 1,
     viewportJumpTargetId: '',
     focusSelectionRequestToken: 0,
@@ -95,6 +96,31 @@ export const useUiStore = defineStore('ui', {
   actions: {
     setSelectedControllable(controllableId: string) {
       this.selectedControllableId = controllableId;
+    },
+    markControllableRemoving(controllableId: string) {
+      if (!controllableId) {
+        return;
+      }
+
+      const next = new Set(this.removingControllableIds);
+      next.add(controllableId);
+      this.removingControllableIds = next;
+    },
+    clearControllableRemoving(controllableId: string) {
+      if (!controllableId || !this.removingControllableIds.has(controllableId)) {
+        return;
+      }
+
+      const next = new Set(this.removingControllableIds);
+      next.delete(controllableId);
+      this.removingControllableIds = next;
+    },
+    pruneRemovingControllables(visibleControllableIds: Iterable<string>) {
+      const visible = new Set(visibleControllableIds);
+      const next = new Set(
+        Array.from(this.removingControllableIds).filter((controllableId) => visible.has(controllableId)),
+      );
+      this.removingControllableIds = next;
     },
     requestViewportJump(unitId: string) {
       this.viewportJumpTargetId = unitId;
