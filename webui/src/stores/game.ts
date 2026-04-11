@@ -26,7 +26,7 @@ import {
   readSubsystemMetric,
   type ShipSubsystemEntry,
 } from '../lib/harvesting';
-import { isPlayerShipUnitKind, isShortLivedTransientUnitKind } from '../lib/unitKinds';
+import { canonicalUnitKind, isPlayerShipUnitKind, isShortLivedTransientUnitKind } from '../lib/unitKinds';
 import type { WorldSceneSelection } from '../renderer/WorldScene';
 import type {
   ChatEntryDto,
@@ -325,6 +325,7 @@ export const useGameStore = defineStore('game', {
     },
     addChatEntry(entry: ChatEntryDto) {
       this.chatEntries = [entry, ...this.chatEntries].slice(0, 12);
+      applyDominationPointOwnershipFromChat(this, entry);
     },
     trackCommand(commandId: string, descriptor: PendingCommandDescriptor) {
       const next = new Map(this.pendingCommands);
@@ -863,6 +864,64 @@ function dedupeUnitsById(units: UnitSnapshotDto[]) {
   }
 
   return Array.from(unitsById.values());
+}
+
+function applyDominationPointOwnershipFromChat(state: GameState, entry: ChatEntryDto) {
+  const ownership = parseDominationPointOwnershipChat(entry.message);
+  if (!ownership) {
+    return;
+  }
+
+  const matchedEntry = Array.from(state.unitsById.entries()).find(([, unit]) =>
+    canonicalUnitKind(unit.kind) === 'dominationpoint'
+    && unit.unitId === ownership.pointName,
+  );
+  if (!matchedEntry) {
+    return;
+  }
+
+  const [unitId, unit] = matchedEntry;
+  if (unit.teamName === ownership.teamName) {
+    return;
+  }
+
+  const nextUnit: UnitSnapshotDto = {
+    ...unit,
+    teamName: ownership.teamName,
+  };
+
+  const nextUnitsById = new Map(state.unitsById);
+  nextUnitsById.set(unitId, nextUnit);
+  state.unitsById = nextUnitsById;
+
+  if (state.galaxy) {
+    state.galaxy = {
+      ...state.galaxy,
+      units: state.galaxy.units.map((candidate) => candidate.unitId === unitId
+        ? { ...candidate, teamName: ownership.teamName }
+        : candidate),
+    };
+  }
+}
+
+function parseDominationPointOwnershipChat(message: string) {
+  const scoredMatch = message.match(/^Team\s+(.+?)\s+scored domination point\s+"(.+?)"\.?$/i);
+  if (scoredMatch) {
+    return {
+      teamName: scoredMatch[1]?.trim() ?? '',
+      pointName: scoredMatch[2]?.trim() ?? '',
+    };
+  }
+
+  const capturedMatch = message.match(/^Team\s+(.+?)\s+captured domination point\s+"(.+?)"\.?$/i);
+  if (capturedMatch) {
+    return {
+      teamName: capturedMatch[1]?.trim() ?? '',
+      pointName: capturedMatch[2]?.trim() ?? '',
+    };
+  }
+
+  return null;
 }
 
 function pruneTransientHiddenUnits(units: UnitSnapshotDto[]) {

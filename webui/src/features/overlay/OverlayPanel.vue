@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useGateway } from '../../composables/useGateway';
 import { useGameStore } from '../../stores/game';
 import { useUiStore } from '../../stores/ui';
@@ -12,6 +12,7 @@ const uiStore = useUiStore();
 const gateway = useGateway();
 const openSubsystemsForId = ref('');
 const sampledOwnerOverlay = ref<Record<string, Record<string, unknown> | undefined>>({});
+const overlayPanelRef = ref<HTMLElement | null>(null);
 let overlayRefreshTimer: number | null = null;
 
 const activeControllableId = computed(() => uiStore.selectedControllableId || (gameStore.ownedControllables[0]?.controllableId ?? ''));
@@ -274,12 +275,44 @@ function refreshSampledOwnerOverlay() {
   sampledOwnerOverlay.value = { ...ownerOverlay.value };
 }
 
+function scrollSelectedControllableIntoView() {
+  const container = overlayPanelRef.value;
+  const selectedId = activeControllableId.value;
+  if (!container || !selectedId || container.scrollHeight <= container.clientHeight) {
+    return;
+  }
+
+  const selectedEntry = container.querySelector<HTMLElement>(`[data-controllable-id="${CSS.escape(selectedId)}"]`);
+  if (!selectedEntry) {
+    return;
+  }
+
+  const targetTop = Math.max(0, Math.min(selectedEntry.offsetTop, container.scrollHeight - container.clientHeight));
+  if (Math.abs(container.scrollTop - targetTop) < 1) {
+    return;
+  }
+
+  container.scrollTo({
+    top: targetTop,
+    behavior: 'smooth',
+  });
+}
+
 onMounted(() => {
   refreshSampledOwnerOverlay();
   overlayRefreshTimer = window.setInterval(() => {
     refreshSampledOwnerOverlay();
   }, 500);
 });
+
+watch(
+  () => activeControllableId.value,
+  async () => {
+    await nextTick();
+    scrollSelectedControllableIntoView();
+  },
+  { immediate: true },
+);
 
 onBeforeUnmount(() => {
   if (overlayRefreshTimer !== null) {
@@ -291,10 +324,11 @@ onBeforeUnmount(() => {
 
 <template>
   <aside class="overlay-column overlay-column-left">
-    <section class="owner-overlay-panel panel-glass">
+    <section ref="overlayPanelRef" class="owner-overlay-panel panel-glass">
         <button
           v-for="entry in entries"
           :key="entry.id"
+          :data-controllable-id="entry.id"
           class="owner-overlay-item"
           :class="{ 'is-selected': entry.id === activeControllableId, 'is-removing': isRemoving(entry.id) }"
           type="button"

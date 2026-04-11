@@ -4,6 +4,11 @@ import { TRACE_OPACITY_SCALE, UNIT_KIND_CODE, UNSEEN_OPACITY_SCALE } from './con
 
 export type UnitVisual = {
   heading?: THREE.Line;
+  dominationRing?: THREE.LineLoop;
+  dominationFill?: THREE.Mesh;
+  dominationLabel?: THREE.Sprite;
+  lastDominationProgress?: number;
+  lastDominationScoreCountdown?: number;
   status?: import('./shipStatusOverlay').ShipStatusVisual;
   instanceIndex: number;
 };

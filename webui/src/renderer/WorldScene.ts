@@ -4,7 +4,7 @@ import { DEFAULT_VIEW_HALF_HEIGHT, DEBUG_SUN_COUNT, MIN_PICK_RADIUS_PX, PICK_RAD
 import { type NormalizedUnit, type UnitShaderMaterial, type UnitBodyMesh, createUnitBodyMaterial, createUnitBodyMesh, createDebugSuns } from './unitBody';
 import { type UnitVisual, normalizeKind, getRenderRadius, getFallbackRenderRadius, getRenderScale, getColorForUnit, getShaderKindCode, getOpacityForUnit, toSceneRotation, isDirectionalKind, isShipKind, getHeadingPoints, shouldPersistTraceForUnit, isUnseenDynamicUnit } from './unitVisuals';
 import { type ScannerConeVisual, createScannerConeMesh } from './scannerCone';
-import { createSelectionRing } from './selectionRing';
+import { createRingPoints, createSelectionRing } from './selectionRing';
 import { createNavigationMarker, createPendingNavigationMarker } from './navigationMarker';
 import { createNavigationPointer } from './navigationPointer';
 import { type TrackedTargetVisual, createTrackedTargetVisual, disposeTrackedTargetVisual } from './trackOverlay';
@@ -13,6 +13,8 @@ import { type GravitySource, type GravityStrengthGrid, createGrid, createGlowFie
 import { type ShipStatusVisual, createShipStatusVisual, disposeShipStatusVisual, hideShipStatusVisual, updateShipStatusVisual } from './shipStatusOverlay';
 import type { NavigationOverlayPoint, NavigationOverlaySegment, NavigationOverlayState as TypedNavigationOverlayState } from '../types/navigation';
 import { isPlayerShipUnitKind, isShortLivedTransientUnitKind } from '../lib/unitKinds';
+
+const DEFAULT_DOMINATION_CAPTURE_RADIUS = 350;
 
 export type WorldSceneSelection = {
   worldX: number;
@@ -69,6 +71,8 @@ type RawRenderableUnit = {
   angle: number;
   radius: number;
   gravity?: number;
+  dominationRadius?: number | null;
+  domination?: number | null;
   teamName?: string;
 };
 
@@ -657,19 +661,29 @@ export class WorldScene {
     }
 
     const liveDirectionalIds = new Set<string>();
-    for (const unit of dynamicUnits) {
-      if (isDirectionalKind(unit.renderKind)) {
+    const liveDominationIds = new Set<string>();
+    for (const unit of this.renderableUnits) {
+      if (!unit.isStatic && isDirectionalKind(unit.renderKind)) {
         liveDirectionalIds.add(unit.unitId);
+      }
+      if (getDominationCaptureRadius(unit) > 0) {
+        liveDominationIds.add(unit.unitId);
       }
     }
 
     for (const [unitId, visual] of this.unitVisuals.entries()) {
-      if (liveDirectionalIds.has(unitId)) {
+      if (liveDirectionalIds.has(unitId) || liveDominationIds.has(unitId)) {
         continue;
       }
 
       if (visual.heading) {
         this.root.remove(visual.heading);
+      }
+      if (visual.dominationRing) {
+        this.root.remove(visual.dominationRing);
+      }
+      if (visual.dominationFill) {
+        this.root.remove(visual.dominationFill);
       }
       this.disposeVisual(visual);
       this.unitVisuals.delete(unitId);
@@ -683,9 +697,9 @@ export class WorldScene {
 
     this.syncBodyInstances(this.dynamicBodies, dynamicUnits);
 
-    for (let index = 0; index < dynamicUnits.length; index++) {
-      const unit = dynamicUnits[index];
-      if (!isDirectionalKind(unit.renderKind)) {
+    for (let index = 0; index < this.renderableUnits.length; index++) {
+      const unit = this.renderableUnits[index];
+      if (!isDirectionalKind(unit.renderKind) && getDominationCaptureRadius(unit) <= 0) {
         continue;
       }
 
@@ -696,9 +710,18 @@ export class WorldScene {
         if (visual.heading) {
           this.root.add(visual.heading);
         }
+        if (visual.dominationRing) {
+          this.root.add(visual.dominationRing);
+        }
+        if (visual.dominationFill) {
+          this.root.add(visual.dominationFill);
+        }
+        if (visual.dominationLabel) {
+          this.root.add(visual.dominationLabel);
+        }
       }
 
-      this.updateVisual(visual, unit, index);
+      this.updateVisual(visual, unit, unit.isStatic ? -1 : index);
     }
 
     this.updateSelectionRing();
@@ -903,6 +926,34 @@ export class WorldScene {
         new THREE.BufferGeometry().setFromPoints(getHeadingPoints('shot')),
         new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8 }),
       ),
+      dominationRing: new THREE.LineLoop(
+        new THREE.BufferGeometry().setFromPoints(createRingPoints(64, 1)),
+        new THREE.LineBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.42,
+          depthTest: false,
+          depthWrite: false,
+        }),
+      ),
+      dominationFill: new THREE.Mesh(
+        new THREE.CircleGeometry(1, 48, Math.PI / 2, Math.PI * 2),
+        new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.3,
+          depthTest: false,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        }),
+      ),
+      dominationLabel: new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          transparent: true,
+          depthTest: false,
+          depthWrite: false,
+        }),
+      ),
       instanceIndex: -1,
     };
   }
@@ -914,13 +965,107 @@ export class WorldScene {
 
     if (visual.heading) {
       const headingMaterial = visual.heading.material as THREE.LineBasicMaterial;
-      visual.heading.position.set(unit.x, -unit.y, 0);
-      visual.heading.rotation.z = toSceneRotation(unit.angle);
-      headingMaterial.color.copy(bodyColor);
-      headingMaterial.opacity = isUnseenDynamicUnit(unit) ? 0.34 : 0.8;
-      const headingScale = isShipKind(unit.renderKind) ? scale * 0.85 : scale * 1.8;
-      visual.heading.scale.set(headingScale, headingScale, 1);
+      if (instanceIndex >= 0 && isDirectionalKind(unit.renderKind)) {
+        visual.heading.visible = true;
+        visual.heading.position.set(unit.x, -unit.y, 0);
+        visual.heading.rotation.z = toSceneRotation(unit.angle);
+        headingMaterial.color.copy(bodyColor);
+        headingMaterial.opacity = isUnseenDynamicUnit(unit) ? 0.34 : 0.8;
+        const headingScale = isShipKind(unit.renderKind) ? scale * 0.85 : scale * 1.8;
+        visual.heading.scale.set(headingScale, headingScale, 1);
+      } else {
+        visual.heading.visible = false;
+      }
     }
+
+    if (visual.dominationRing) {
+      const ringMaterial = visual.dominationRing.material as THREE.LineBasicMaterial;
+      const dominationRadius = getDominationCaptureRadius(unit);
+      if (dominationRadius > 0) {
+        visual.dominationRing.visible = true;
+        visual.dominationRing.position.set(unit.x, -unit.y, 0.12);
+        visual.dominationRing.scale.set(dominationRadius, dominationRadius, 1);
+        ringMaterial.color.copy(bodyColor);
+        ringMaterial.opacity = isUnseenDynamicUnit(unit) ? 0.2 : 0.42;
+        visual.dominationRing.renderOrder = 18;
+      } else {
+        visual.dominationRing.visible = false;
+      }
+    }
+
+    if (visual.dominationFill) {
+      const fillMaterial = visual.dominationFill.material as THREE.MeshBasicMaterial;
+      const dominationRadius = getDominationCaptureRadius(unit);
+      const progress = getDominationProgress(unit, visual.lastDominationProgress);
+      if (dominationRadius > 0 && progress > 0) {
+        visual.lastDominationProgress = progress;
+        this.updateDominationFillGeometry(visual.dominationFill, progress);
+        visual.dominationFill.visible = true;
+        visual.dominationFill.position.set(unit.x, -unit.y, 0.08);
+        visual.dominationFill.scale.set(dominationRadius, dominationRadius, 1);
+        fillMaterial.color.copy(bodyColor);
+        fillMaterial.opacity = 0.3;
+        visual.dominationFill.renderOrder = 17;
+      } else {
+        visual.dominationFill.visible = false;
+      }
+    }
+
+    if (visual.dominationLabel) {
+      const dominationRadius = getDominationCaptureRadius(unit);
+      const countdown = getDominationScoreCountdown(unit, visual.lastDominationScoreCountdown);
+      if (dominationRadius > 0 && countdown !== null) {
+        if (visual.lastDominationScoreCountdown !== countdown) {
+          this.updateDominationLabel(visual.dominationLabel, countdown);
+          visual.lastDominationScoreCountdown = countdown;
+        }
+
+        visual.dominationLabel.visible = true;
+        visual.dominationLabel.position.set(unit.x, -unit.y - Math.max(unit.renderRadius * 2.2, 18), 0.14);
+        const labelScale = Math.max(this.getWorldUnitsPerPixel() * 42, 18);
+        visual.dominationLabel.scale.set(labelScale * 1.8, labelScale, 1);
+        visual.dominationLabel.renderOrder = 19;
+      } else {
+        visual.dominationLabel.visible = false;
+      }
+    }
+  }
+
+  private updateDominationFillGeometry(mesh: THREE.Mesh, progress: number) {
+    const currentGeometry = mesh.geometry as THREE.CircleGeometry;
+    const currentProgress = currentGeometry.parameters.thetaLength / (Math.PI * 2);
+    if (Math.abs(currentProgress - progress) < 0.0001) {
+      return;
+    }
+
+    currentGeometry.dispose();
+    mesh.geometry = new THREE.CircleGeometry(1, 48, Math.PI / 2, Math.PI * 2 * progress);
+  }
+
+  private updateDominationLabel(sprite: THREE.Sprite, countdown: number) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 72;
+
+    const context = canvas.getContext('2d');
+    if (!context) {
+      return;
+    }
+
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = 'rgba(255, 255, 255, 0.96)';
+    context.font = '600 34px "Segoe UI", sans-serif';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText(`${countdown}`, canvas.width / 2, canvas.height / 2);
+
+    const material = sprite.material as THREE.SpriteMaterial;
+    const previousTexture = material.map;
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    material.map = texture;
+    material.needsUpdate = true;
+    previousTexture?.dispose();
   }
 
   private updateBodyInstance(bodies: BodyMeshResources, index: number, unit: NormalizedUnit) {
@@ -1563,6 +1708,12 @@ export class WorldScene {
   private disposeVisual(visual: UnitVisual) {
     visual.heading?.geometry.dispose();
     (visual.heading?.material as THREE.Material | undefined)?.dispose();
+    visual.dominationRing?.geometry.dispose();
+    (visual.dominationRing?.material as THREE.Material | undefined)?.dispose();
+    visual.dominationFill?.geometry.dispose();
+    (visual.dominationFill?.material as THREE.Material | undefined)?.dispose();
+    (visual.dominationLabel?.material as THREE.SpriteMaterial | undefined)?.map?.dispose();
+    (visual.dominationLabel?.material as THREE.Material | undefined)?.dispose();
   }
 
   private disposeVisuals() {
@@ -1743,6 +1894,8 @@ export class WorldScene {
       angle: unit.angle,
       radius: unit.radius,
       gravity: unit.gravity,
+      dominationRadius: unit.dominationRadius,
+      domination: unit.domination,
       teamName: unit.teamName,
       isTrace,
       renderKind,
@@ -2014,6 +2167,8 @@ function sameRenderableUnits(left: NormalizedUnit[], right: NormalizedUnit[]) {
       || leftUnit.angle !== rightUnit.angle
       || leftUnit.radius !== rightUnit.radius
       || (leftUnit.gravity ?? 0) !== (rightUnit.gravity ?? 0)
+      || (leftUnit.dominationRadius ?? 0) !== (rightUnit.dominationRadius ?? 0)
+      || (leftUnit.domination ?? 0) !== (rightUnit.domination ?? 0)
       || leftUnit.teamName !== rightUnit.teamName
       || leftUnit.isTrace !== rightUnit.isTrace
       || leftUnit.renderKind !== rightUnit.renderKind
@@ -2040,9 +2195,45 @@ function buildRenderableUnitSignature(unit: RawRenderableUnit | NormalizedUnit, 
     unit.angle,
     unit.radius,
     unit.gravity ?? 0,
+    unit.dominationRadius ?? 0,
+    unit.domination ?? 0,
     unit.teamName ?? '',
     isTrace ? 1 : 0,
   ].join('|');
+}
+
+function getDominationCaptureRadius(unit: NormalizedUnit) {
+  if (unit.isTrace) {
+    return 0;
+  }
+
+  if ((unit.dominationRadius ?? 0) > 0) {
+    return unit.dominationRadius ?? 0;
+  }
+
+  return isDominationPointKind(unit) ? DEFAULT_DOMINATION_CAPTURE_RADIUS : 0;
+}
+
+function isDominationPointKind(unit: NormalizedUnit) {
+  return unit.renderKind.includes('domination') || unit.kind.toLowerCase().includes('domination');
+}
+
+function getDominationProgress(unit: NormalizedUnit, fallback?: number) {
+  if (typeof unit.domination === 'number' && Number.isFinite(unit.domination)) {
+    return THREE.MathUtils.clamp(unit.domination / 100, 0, 1);
+  }
+
+  return THREE.MathUtils.clamp(fallback ?? 0, 0, 1);
+}
+
+function getDominationScoreCountdown(unit: NormalizedUnit, fallback?: number) {
+  if (typeof unit.dominationScoreCountdown === 'number' && Number.isFinite(unit.dominationScoreCountdown)) {
+    return Math.max(0, Math.round(unit.dominationScoreCountdown));
+  }
+
+  return typeof fallback === 'number' && Number.isFinite(fallback)
+    ? Math.max(0, Math.round(fallback))
+    : null;
 }
 
 function getViewEdgeIntersection(
