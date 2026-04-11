@@ -1163,7 +1163,9 @@ function buildClickedUnitEntry(
   const unitY = publicUnit?.y ?? numberValue(positionState?.y, -selection.worldY);
   const angle = publicUnit?.angle ?? numberValue(positionState?.angle, 0);
   const kind = publicUnit?.kind ?? stringValue(overlayState.kind, selection.kind ?? 'unknown');
+  const overlaySubsystems = readSubsystemEntries(overlayState.subsystems ?? overlayState.modules);
   const scannedSubsystems = readScannedSubsystems(publicUnit);
+  const detailSubsystems = overlaySubsystems.length > 0 ? overlaySubsystems : scannedSubsystems;
   const badges = [] as ClickedUnitEntry['badges'];
 
   if (publicControllable) {
@@ -1213,9 +1215,9 @@ function buildClickedUnitEntry(
 
   const meters: OverlayMeter[] = [];
   if (hullState || publicControllable) {
-    meters.push(buildOverlayMeter('Hull', hullState, 'hull', alive ? 'offline' : 'destroyed'));
+      meters.push(buildOverlayMeter('Hull', hullState, 'hull', alive ? 'offline' : 'destroyed'));
   } else {
-    const meter = buildScannedSubsystemMeter('Hull', findScannedSubsystem(scannedSubsystems, 'Hull'), 'Integrity', 'hull', alive ? 'offline' : 'destroyed');
+    const meter = buildScannedSubsystemMeter('Hull', findScannedSubsystem(detailSubsystems, 'Hull'), 'Integrity', 'hull', alive ? 'offline' : 'destroyed');
     if (meter) {
       meters.push(meter);
     }
@@ -1223,7 +1225,7 @@ function buildClickedUnitEntry(
   if (shieldState || publicControllable) {
     meters.push(buildOverlayMeter('Shield', shieldState, 'shield', booleanValue(shieldState?.active, false) ? 'charging' : 'offline'));
   } else {
-    const meter = buildScannedSubsystemMeter('Shield', findScannedSubsystem(scannedSubsystems, 'Shield'), 'Integrity', 'shield', 'offline');
+    const meter = buildScannedSubsystemMeter('Shield', findScannedSubsystem(detailSubsystems, 'Shield'), 'Integrity', 'shield', 'offline');
     if (meter) {
       meters.push(meter);
     }
@@ -1231,7 +1233,7 @@ function buildClickedUnitEntry(
   if (batteryState || publicControllable) {
     meters.push(buildOverlayMeter('Battery', batteryState, 'energy', 'offline'));
   } else {
-    const meter = buildScannedSubsystemMeter('Battery', findScannedSubsystem(scannedSubsystems, 'Energy Battery'), 'Charge', 'energy', 'offline');
+    const meter = buildScannedSubsystemMeter('Battery', findScannedSubsystem(detailSubsystems, 'Energy Battery'), 'Charge', 'energy', 'offline');
     if (meter) {
       meters.push(meter);
     }
@@ -1247,14 +1249,14 @@ function buildClickedUnitEntry(
     badges,
     meters,
     stats,
-    detailGroups: buildDetailGroups(publicUnit, kind),
+    detailGroups: buildDetailGroups(publicUnit, kind, detailSubsystems),
   };
 }
 
-function buildDetailGroups(unit: UnitSnapshotDto | undefined | null, kindHint?: string) {
+function buildDetailGroups(unit: UnitSnapshotDto | undefined | null, kindHint?: string, subsystemEntries: ShipSubsystemEntry[] = []) {
   const groups = [] as OverlayDetailGroup[];
   const normalizedKind = (kindHint ?? unit?.kind ?? '').toLowerCase();
-  const scannedSubsystemGroups = buildScannedSubsystemGroups(unit);
+  const scannedSubsystemGroups = buildSubsystemGroups(subsystemEntries.length > 0 ? subsystemEntries : readScannedSubsystems(unit));
   const hasScannedPropulsion = scannedSubsystemGroups.some((group) => group.title.toLowerCase().includes('engine'));
 
   groups.push(...scannedSubsystemGroups);
@@ -1494,8 +1496,8 @@ function buildScannedSubsystemMeter(
   return buildMeterFromValues(label, current, maximum, tone, emptyLabel);
 }
 
-function buildScannedSubsystemGroups(unit: UnitSnapshotDto | null | undefined) {
-  return readScannedSubsystems(unit)
+function buildSubsystemGroups(subsystems: ShipSubsystemEntry[]) {
+  return subsystems
     .filter((subsystem) => subsystem.exists && subsystem.stats.length > 0)
     .map((subsystem) => ({
       title: subsystem.name,
