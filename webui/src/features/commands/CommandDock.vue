@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue';
 import { useGateway } from '../../composables/useGateway';
-import { buildHarvestSourceSummaries, formatHarvestDistance, readSubsystemEntries, readSubsystemMaximumMetric, readSubsystemMetric } from '../../lib/harvesting';
+import { readSubsystemEntries, readSubsystemMaximumMetric, readSubsystemMetric } from '../../lib/harvesting';
 import type { ShipSubsystemEntry } from '../../lib/harvesting';
 import { useGameStore } from '../../stores/game';
 import { useUiStore } from '../../stores/ui';
@@ -50,29 +50,6 @@ const nebulaCollector = computed(() => activeSubsystems.value.find((entry) => en
 const nebulaCollectorRate = computed(() => readSubsystemMetric(nebulaCollector.value, 'Rate') ?? 0);
 const nebulaCollectorMaximumRate = computed(() => readSubsystemMaximumMetric(nebulaCollector.value, 'Rate') ?? 0);
 const nebulaCollectorRunning = computed(() => nebulaCollectorRate.value > 0.0001);
-const activePosition = computed(() => {
-  const position = activeOverlayState.value.position;
-  const record = position && typeof position === 'object'
-    ? position as Record<string, unknown>
-    : undefined;
-
-  if (!record) {
-    return null;
-  }
-
-  return {
-    x: readNumeric(record.x) ?? 0,
-    y: readNumeric(record.y) ?? 0,
-  };
-});
-const activeClusterId = computed(() => {
-  const clusterId = readNumeric(activeOverlayState.value.clusterId);
-  return clusterId ?? null;
-});
-const harvestSources = computed(() => buildHarvestSourceSummaries(gameStore.snapshot?.units ?? [], activeClusterId.value, activePosition.value));
-const bestSolarSource = computed(() => harvestSources.value.find((source) => source.labels.some((label) => label.startsWith('Energy') || label.startsWith('Ions') || label.startsWith('Neutrinos'))) ?? null);
-const bestPlanetSource = computed(() => harvestSources.value.find((source) => source.labels.some((label) => label.startsWith('Metal') || label.startsWith('Carbon') || label.startsWith('Hydrogen') || label.startsWith('Silicon'))) ?? null);
-const bestNebulaSource = computed(() => harvestSources.value.find((source) => source.kind === 'nebula') ?? null);
 const isFocusSelectionActive = computed(() => ('isFocusSelectionActive' in uiStore ? !!uiStore.isFocusSelectionActive : false));
 const scannerWidth = computed({
   get: () => uiStore.scannerWidth,
@@ -229,19 +206,6 @@ function setNebulaCollectorRate(value: number) {
   gateway.setSubsystemMode(controllableId, subsystem.id, 'set', clampedRate);
 }
 
-function navigateToHarvestSource(source: { x: number; y: number } | null) {
-  if (!source || !activeControllableId.value) {
-    return;
-  }
-
-  gateway.setNavigationTarget(
-    activeControllableId.value,
-    source.x,
-    source.y,
-    uiStore.navigationThrustPercentage,
-  );
-}
-
 function requestFocusSelectionToggle() {
   if (typeof uiStore.requestToggleFocusSelection === 'function') {
     uiStore.requestToggleFocusSelection();
@@ -261,19 +225,6 @@ function isShotFabricatorRunning(subsystem: ShipSubsystemEntry) {
   }
 
   return false;
-}
-
-function readNumeric(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value;
-  }
-
-  if (typeof value === 'string' && value.trim() !== '') {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-
-  return null;
 }
 </script>
 
@@ -338,7 +289,7 @@ function readNumeric(value: unknown): number | null {
     <span class="dock-sep" aria-hidden="true"></span>
 
     <div
-      v-if="resourceMiner || nebulaCollector || bestSolarSource || bestPlanetSource || bestNebulaSource"
+      v-if="resourceMiner || nebulaCollector"
       class="dock-group-stack dock-group-stack--harvest"
     >
       <div class="dock-group">
@@ -388,29 +339,9 @@ function readNumeric(value: unknown): number | null {
         />
         <span class="dock-value">{{ nebulaCollectorRate.toFixed(3) }}</span>
       </div>
-      <div class="dock-group dock-group--harvest-sources">
-        <button
-          v-if="bestPlanetSource"
-          class="dock-btn dock-btn--chip"
-          type="button"
-          :title="`${bestPlanetSource.labels.join(' · ')} · ${formatHarvestDistance(bestPlanetSource.distance)}`"
-          @click="navigateToHarvestSource(bestPlanetSource)"
-        >
-          Planet
-        </button>
-        <button
-          v-if="bestNebulaSource"
-          class="dock-btn dock-btn--chip"
-          type="button"
-          :title="`${bestNebulaSource.labels.join(' · ')} · ${formatHarvestDistance(bestNebulaSource.distance)}`"
-          @click="navigateToHarvestSource(bestNebulaSource)"
-        >
-          Nebula
-        </button>
-      </div>
     </div>
 
-    <span v-if="resourceMiner || nebulaCollector || bestSolarSource || bestPlanetSource || bestNebulaSource" class="dock-sep" aria-hidden="true"></span>
+    <span v-if="resourceMiner || nebulaCollector" class="dock-sep" aria-hidden="true"></span>
 
     <div class="dock-group-stack dock-group-stack--utility">
       <div class="dock-group">

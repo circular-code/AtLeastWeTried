@@ -945,7 +945,7 @@ function buildDetailGroups(unit: UnitSnapshotDto | undefined | null, kindHint?: 
     );
   }
 
-  if (hasPlanetTelemetry(unit) || normalizedKind === 'planet') {
+  if (hasPlanetTelemetry(unit)) {
     groups.push({
       title: 'Planetary Composition',
       tone: 'solar' as const,
@@ -974,7 +974,7 @@ function formatOptionalMetric(value: number | null | undefined) {
 }
 
 function formatPlanetMetric(value: number | null | undefined) {
-  return formatMetric(typeof value === 'number' ? value : 0);
+  return typeof value === 'number' ? formatMetric(value) : 'Unknown';
 }
 
 function deriveScannerMode(scannerState: Record<string, unknown> | undefined): ScannerMode {
