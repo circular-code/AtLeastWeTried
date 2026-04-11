@@ -879,21 +879,6 @@ export class WorldScene {
       if (liveUnitIds.has(controllable.controllableId)) {
         continue;
       }
-
-      dynamicUnits.push({
-        unitId: controllable.controllableId,
-        clusterId: 0,
-        kind: 'controllable_marker',
-        isStatic: false,
-        isSeen: true,
-        lastSeenTick: 0,
-        x: 0,
-        y: 0,
-        angle: 0,
-        radius: getFallbackRenderRadius('ship'),
-        teamName: controllable.teamName,
-      });
-      liveUnitIds.add(controllable.controllableId);
     }
 
     this.pruneShortLivedUnitCache(liveUnitIds);
