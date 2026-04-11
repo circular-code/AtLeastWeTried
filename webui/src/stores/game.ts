@@ -116,6 +116,9 @@ export const useGameStore = defineStore('game', {
         .filter(([, overlay]) => isOverlayCommandable(objectValue(overlay) ?? {}))
         .map(([controllableId, overlay]) => {
         const publicControllable = state.galaxy?.controllables.find((item) => item.controllableId === controllableId);
+        if (!publicControllable) {
+          return null;
+        }
         const overlayState = objectValue(overlay) ?? {};
 
         return {
@@ -126,7 +129,8 @@ export const useGameStore = defineStore('game', {
           score: publicControllable?.score ?? 0,
           kind: stringValue(overlayState.kind, 'unknown'),
         };
-        });
+        })
+        .filter((entry): entry is OwnedControllableSummary => !!entry);
     },
     activeControllable: (state) => (controllableId: string) => {
       if (!controllableId) {
@@ -281,6 +285,8 @@ export const useGameStore = defineStore('game', {
   actions: {
     applySnapshot(snapshot: GalaxySnapshotDto) {
       this.galaxy = cloneSnapshot(snapshot);
+      const uiStore = useUiStore();
+      uiStore.pruneRemovingControllables(this.galaxy.controllables.map((entry) => entry.controllableId));
       rebuildIndexes(this);
     },
     applyWorldDelta(message: WorldDeltaMessage) {
@@ -291,6 +297,8 @@ export const useGameStore = defineStore('game', {
       const previousGalaxy = this.galaxy;
       const nextGalaxy = applyWorldDeltaToSnapshot(previousGalaxy, message);
       this.galaxy = nextGalaxy;
+      const uiStore = useUiStore();
+      uiStore.pruneRemovingControllables(nextGalaxy.controllables.map((entry) => entry.controllableId));
       rebuildIndexes(this);
       this.recordTeamScoreActivities(previousGalaxy, nextGalaxy);
     },
@@ -300,6 +308,12 @@ export const useGameStore = defineStore('game', {
       const nextOverlayBySessionId = new Map(this.overlayBySessionId);
       nextOverlayBySessionId.set(message.playerSessionId, new Map(Object.entries(next) as Array<[string, ControllableOverlayState]>));
       this.overlayBySessionId = nextOverlayBySessionId;
+      const uiStore = useUiStore();
+      const selectedSessionId = useSessionStore().selectedPlayerSession?.playerSessionId ?? '';
+      if (selectedSessionId) {
+        const overlayById = nextOverlayBySessionId.get(selectedSessionId) ?? new Map();
+        uiStore.pruneRemovingControllables(overlayById.keys());
+      }
     },
     syncAttachedPlayerSessions(playerSessions: PlayerSessionSummaryDto[]) {
       this.overlayBySessionId = pruneOverlaySessions(this.overlayBySessionId, playerSessions);
@@ -553,6 +567,7 @@ function applyWorldDeltaToSnapshot(current: GalaxySnapshotDto, message: WorldDel
 
     if (event.eventType === 'unit.removed') {
       next.units = next.units.filter((item) => item.unitId !== event.entityId);
+      next.controllables = next.controllables.filter((item) => item.controllableId !== event.entityId);
       continue;
     }
 
@@ -614,6 +629,39 @@ function createUnitFromChanges(unitId: string, changes: Record<string, unknown>)
     planetCarbon: undefined,
     planetHydrogen: undefined,
     planetSilicon: undefined,
+    missionTargetSequenceNumber: undefined,
+    missionTargetVectorCount: undefined,
+    missionTargetVectors: undefined,
+    flagActive: undefined,
+    flagGraceTicks: undefined,
+    dominationRadius: undefined,
+    domination: undefined,
+    dominationScoreCountdown: undefined,
+    wormHoleTargetClusterName: undefined,
+    wormHoleTargetLeft: undefined,
+    wormHoleTargetTop: undefined,
+    wormHoleTargetRight: undefined,
+    wormHoleTargetBottom: undefined,
+    currentFieldMode: undefined,
+    currentFieldFlowX: undefined,
+    currentFieldFlowY: undefined,
+    currentFieldRadialForce: undefined,
+    currentFieldTangentialForce: undefined,
+    nebulaHue: undefined,
+    stormSpawnChancePerTick: undefined,
+    stormMinAnnouncementTicks: undefined,
+    stormMaxAnnouncementTicks: undefined,
+    stormMinActiveTicks: undefined,
+    stormMaxActiveTicks: undefined,
+    stormMinWhirlRadius: undefined,
+    stormMaxWhirlRadius: undefined,
+    stormMinWhirlSpeed: undefined,
+    stormMaxWhirlSpeed: undefined,
+    stormMinWhirlGravity: undefined,
+    stormMaxWhirlGravity: undefined,
+    stormDamage: undefined,
+    stormWhirlRemainingTicks: undefined,
+    powerUpAmount: undefined,
   };
 
   applyUnitChanges(unit, changes);
@@ -666,6 +714,105 @@ function applyUnitChanges(unit: UnitSnapshotDto, changes: Record<string, unknown
   applyKnownUnitIntelMetric(unit, 'planetCarbon', changes.planetCarbon);
   applyKnownUnitIntelMetric(unit, 'planetHydrogen', changes.planetHydrogen);
   applyKnownUnitIntelMetric(unit, 'planetSilicon', changes.planetSilicon);
+  if (hasRecordKey(changes, 'missionTargetSequenceNumber')) {
+    unit.missionTargetSequenceNumber = optionalNumberValue(changes.missionTargetSequenceNumber);
+  }
+  if (hasRecordKey(changes, 'missionTargetVectorCount')) {
+    unit.missionTargetVectorCount = optionalNumberValue(changes.missionTargetVectorCount);
+  }
+  if (hasRecordKey(changes, 'missionTargetVectors')) {
+    unit.missionTargetVectors = normalizeTrajectoryPoints(changes.missionTargetVectors);
+  }
+  if (hasRecordKey(changes, 'flagActive')) {
+    unit.flagActive = typeof changes.flagActive === 'boolean' ? changes.flagActive : unit.flagActive;
+  }
+  if (hasRecordKey(changes, 'flagGraceTicks')) {
+    unit.flagGraceTicks = optionalNumberValue(changes.flagGraceTicks);
+  }
+  if (hasRecordKey(changes, 'dominationRadius')) {
+    unit.dominationRadius = optionalNumberValue(changes.dominationRadius);
+  }
+  if (hasRecordKey(changes, 'domination')) {
+    unit.domination = optionalNumberValue(changes.domination);
+  }
+  if (hasRecordKey(changes, 'dominationScoreCountdown')) {
+    unit.dominationScoreCountdown = optionalNumberValue(changes.dominationScoreCountdown);
+  }
+  if (hasRecordKey(changes, 'wormHoleTargetClusterName')) {
+    unit.wormHoleTargetClusterName = optionalStringValue(changes.wormHoleTargetClusterName);
+  }
+  if (hasRecordKey(changes, 'wormHoleTargetLeft')) {
+    unit.wormHoleTargetLeft = optionalNumberValue(changes.wormHoleTargetLeft);
+  }
+  if (hasRecordKey(changes, 'wormHoleTargetTop')) {
+    unit.wormHoleTargetTop = optionalNumberValue(changes.wormHoleTargetTop);
+  }
+  if (hasRecordKey(changes, 'wormHoleTargetRight')) {
+    unit.wormHoleTargetRight = optionalNumberValue(changes.wormHoleTargetRight);
+  }
+  if (hasRecordKey(changes, 'wormHoleTargetBottom')) {
+    unit.wormHoleTargetBottom = optionalNumberValue(changes.wormHoleTargetBottom);
+  }
+  if (hasRecordKey(changes, 'currentFieldMode')) {
+    unit.currentFieldMode = optionalStringValue(changes.currentFieldMode);
+  }
+  if (hasRecordKey(changes, 'currentFieldFlowX')) {
+    unit.currentFieldFlowX = optionalNumberValue(changes.currentFieldFlowX);
+  }
+  if (hasRecordKey(changes, 'currentFieldFlowY')) {
+    unit.currentFieldFlowY = optionalNumberValue(changes.currentFieldFlowY);
+  }
+  if (hasRecordKey(changes, 'currentFieldRadialForce')) {
+    unit.currentFieldRadialForce = optionalNumberValue(changes.currentFieldRadialForce);
+  }
+  if (hasRecordKey(changes, 'currentFieldTangentialForce')) {
+    unit.currentFieldTangentialForce = optionalNumberValue(changes.currentFieldTangentialForce);
+  }
+  if (hasRecordKey(changes, 'nebulaHue')) {
+    unit.nebulaHue = optionalNumberValue(changes.nebulaHue);
+  }
+  if (hasRecordKey(changes, 'stormSpawnChancePerTick')) {
+    unit.stormSpawnChancePerTick = optionalNumberValue(changes.stormSpawnChancePerTick);
+  }
+  if (hasRecordKey(changes, 'stormMinAnnouncementTicks')) {
+    unit.stormMinAnnouncementTicks = optionalNumberValue(changes.stormMinAnnouncementTicks);
+  }
+  if (hasRecordKey(changes, 'stormMaxAnnouncementTicks')) {
+    unit.stormMaxAnnouncementTicks = optionalNumberValue(changes.stormMaxAnnouncementTicks);
+  }
+  if (hasRecordKey(changes, 'stormMinActiveTicks')) {
+    unit.stormMinActiveTicks = optionalNumberValue(changes.stormMinActiveTicks);
+  }
+  if (hasRecordKey(changes, 'stormMaxActiveTicks')) {
+    unit.stormMaxActiveTicks = optionalNumberValue(changes.stormMaxActiveTicks);
+  }
+  if (hasRecordKey(changes, 'stormMinWhirlRadius')) {
+    unit.stormMinWhirlRadius = optionalNumberValue(changes.stormMinWhirlRadius);
+  }
+  if (hasRecordKey(changes, 'stormMaxWhirlRadius')) {
+    unit.stormMaxWhirlRadius = optionalNumberValue(changes.stormMaxWhirlRadius);
+  }
+  if (hasRecordKey(changes, 'stormMinWhirlSpeed')) {
+    unit.stormMinWhirlSpeed = optionalNumberValue(changes.stormMinWhirlSpeed);
+  }
+  if (hasRecordKey(changes, 'stormMaxWhirlSpeed')) {
+    unit.stormMaxWhirlSpeed = optionalNumberValue(changes.stormMaxWhirlSpeed);
+  }
+  if (hasRecordKey(changes, 'stormMinWhirlGravity')) {
+    unit.stormMinWhirlGravity = optionalNumberValue(changes.stormMinWhirlGravity);
+  }
+  if (hasRecordKey(changes, 'stormMaxWhirlGravity')) {
+    unit.stormMaxWhirlGravity = optionalNumberValue(changes.stormMaxWhirlGravity);
+  }
+  if (hasRecordKey(changes, 'stormDamage')) {
+    unit.stormDamage = optionalNumberValue(changes.stormDamage);
+  }
+  if (hasRecordKey(changes, 'stormWhirlRemainingTicks')) {
+    unit.stormWhirlRemainingTicks = optionalNumberValue(changes.stormWhirlRemainingTicks);
+  }
+  if (hasRecordKey(changes, 'powerUpAmount')) {
+    unit.powerUpAmount = optionalNumberValue(changes.powerUpAmount);
+  }
 }
 
 function dedupeUnitsById(units: UnitSnapshotDto[]) {
@@ -1059,28 +1206,119 @@ function buildDetailGroups(unit: UnitSnapshotDto | undefined | null, kindHint?: 
     });
   }
 
-  if (false) {
+  if (normalizedKind === 'mission-target' || hasMissionTargetTelemetry(unit)) {
+    groups.push({
+      title: 'Mission Data',
+      tone: 'tech',
+      stats: [
+        { label: 'Sequence', value: formatOptionalWhole(unit?.missionTargetSequenceNumber) },
+        { label: 'Vectors', value: formatOptionalWhole(unit?.missionTargetVectorCount) },
+        { label: 'Waypoint Set', value: formatMissionVectors(unit?.missionTargetVectors) },
+      ],
+    });
+  }
+
+  if (normalizedKind === 'flag' || hasFlagTelemetry(unit)) {
+    groups.push({
+      title: 'Flag State',
+      tone: 'hazard',
+      stats: [
+        { label: 'Status', value: formatOptionalBooleanState(unit?.flagActive, 'Active', 'Inactive') },
+        { label: 'Grace Ticks', value: formatOptionalWhole(unit?.flagGraceTicks) },
+      ],
+    });
+  }
+
+  if (normalizedKind === 'domination-point' || hasDominationTelemetry(unit)) {
+    groups.push({
+      title: 'Domination State',
+      tone: 'hazard',
+      stats: [
+        { label: 'Capture Radius', value: formatOptionalMetric(unit?.dominationRadius) },
+        { label: 'Progress', value: formatOptionalWhole(unit?.domination) },
+        { label: 'Score Countdown', value: formatOptionalWhole(unit?.dominationScoreCountdown) },
+      ],
+    });
+  }
+
+  if (normalizedKind === 'wormhole' || hasWormHoleTelemetry(unit)) {
+    groups.push({
+      title: 'Wormhole Exit',
+      tone: 'tech',
+      stats: [
+        { label: 'Target Cluster', value: unit?.wormHoleTargetClusterName?.trim() || 'Unknown' },
+        { label: 'Target Region', value: formatTargetRegion(unit) },
+      ],
+    });
+  }
+
+  if (normalizedKind === 'current-field' || hasCurrentFieldTelemetry(unit)) {
+    groups.push({
+      title: 'Current Field',
+      tone: 'tech',
+      stats: [
+        { label: 'Mode', value: formatOptionalText(unit?.currentFieldMode) },
+        { label: 'Flow', value: formatVector(unit?.currentFieldFlowX, unit?.currentFieldFlowY) },
+        { label: 'Radial Force', value: formatOptionalMetric(unit?.currentFieldRadialForce) },
+        { label: 'Tangential Force', value: formatOptionalMetric(unit?.currentFieldTangentialForce) },
+      ],
+    });
+  }
+
+  if (normalizedKind === 'nebula' || hasNebulaTelemetry(unit)) {
+    groups.push({
+      title: 'Nebula Signature',
+      tone: 'tech',
+      stats: [
+        { label: 'Hue', value: formatOptionalMetric(unit?.nebulaHue) },
+      ],
+    });
+  }
+
+  if (normalizedKind === 'storm' || hasStormTelemetry(unit)) {
     groups.push(
       {
-        title: 'Stellar Output',
-        tone: 'solar',
+        title: 'Storm Profile',
+        tone: 'hazard',
         stats: [
-          { label: 'Photon Flux', value: formatOptionalMetric(unit?.sunEnergy) },
-          { label: 'Plasma Wind', value: formatOptionalMetric(unit?.sunIons) },
-          { label: 'Neutrino Flux', value: formatOptionalMetric(unit?.sunNeutrinos) },
+          { label: 'Spawn Chance', value: formatOptionalPercent(unit?.stormSpawnChancePerTick) },
+          { label: 'Announcement', value: formatRangeWhole(unit?.stormMinAnnouncementTicks, unit?.stormMaxAnnouncementTicks, 'ticks') },
+          { label: 'Active Window', value: formatRangeWhole(unit?.stormMinActiveTicks, unit?.stormMaxActiveTicks, 'ticks') },
+          { label: 'Damage', value: formatOptionalMetric(unit?.stormDamage) },
         ],
       },
       {
-        title: 'Environmental Hazard',
+        title: 'Whirl Envelope',
         tone: 'hazard',
         stats: [
-          { label: 'Heat', value: `${formatMetric(unit?.sunHeat ?? 0)} · ${formatMetric((unit?.sunHeat ?? 0) * 15)} energy/tick` },
-          { label: 'Radiation', value: `${formatMetric(unit?.sunDrain ?? 0)} · ${formatMetric((unit?.sunDrain ?? 0) * 0.125)} hull/tick` },
+          { label: 'Radius', value: formatRangeMetric(unit?.stormMinWhirlRadius, unit?.stormMaxWhirlRadius) },
+          { label: 'Speed', value: formatRangeMetric(unit?.stormMinWhirlSpeed, unit?.stormMaxWhirlSpeed) },
+          { label: 'Gravity', value: formatRangeMetric(unit?.stormMinWhirlGravity, unit?.stormMaxWhirlGravity) },
         ],
       },
     );
   }
 
+  if ((normalizedKind === 'storm-whirl' || normalizedKind === 'storm-whirl-active') && hasStormWhirlTelemetry(unit)) {
+    groups.push({
+      title: 'Whirl State',
+      tone: 'hazard',
+      stats: [
+        { label: 'Remaining Ticks', value: formatOptionalWhole(unit?.stormWhirlRemainingTicks) },
+        { label: 'Damage', value: formatOptionalMetric(unit?.stormDamage) },
+      ],
+    });
+  }
+
+  if (normalizedKind.startsWith('powerup-') || hasPowerUpTelemetry(unit)) {
+    groups.push({
+      title: 'Pickup Payload',
+      tone: 'tech',
+      stats: [
+        { label: 'Amount', value: formatOptionalMetric(unit?.powerUpAmount) },
+      ],
+    });
+  }
   return groups;
 }
 
@@ -1090,6 +1328,42 @@ function hasSunTelemetry(unit: UnitSnapshotDto | null | undefined) {
 
 function hasPlanetTelemetry(unit: UnitSnapshotDto | null | undefined) {
   return !!unit && [unit.planetMetal, unit.planetCarbon, unit.planetHydrogen, unit.planetSilicon].some((value) => typeof value === 'number');
+}
+
+function hasMissionTargetTelemetry(unit: UnitSnapshotDto | null | undefined) {
+  return !!unit && (typeof unit.missionTargetSequenceNumber === 'number' || typeof unit.missionTargetVectorCount === 'number');
+}
+
+function hasFlagTelemetry(unit: UnitSnapshotDto | null | undefined) {
+  return !!unit && (typeof unit.flagGraceTicks === 'number' || typeof unit.flagActive === 'boolean');
+}
+
+function hasDominationTelemetry(unit: UnitSnapshotDto | null | undefined) {
+  return !!unit && [unit.dominationRadius, unit.domination, unit.dominationScoreCountdown].some((value) => typeof value === 'number');
+}
+
+function hasWormHoleTelemetry(unit: UnitSnapshotDto | null | undefined) {
+  return !!unit && (!!unit.wormHoleTargetClusterName || [unit.wormHoleTargetLeft, unit.wormHoleTargetTop, unit.wormHoleTargetRight, unit.wormHoleTargetBottom].some((value) => typeof value === 'number'));
+}
+
+function hasCurrentFieldTelemetry(unit: UnitSnapshotDto | null | undefined) {
+  return !!unit && (!!unit.currentFieldMode || [unit.currentFieldFlowX, unit.currentFieldFlowY, unit.currentFieldRadialForce, unit.currentFieldTangentialForce].some((value) => typeof value === 'number'));
+}
+
+function hasNebulaTelemetry(unit: UnitSnapshotDto | null | undefined) {
+  return !!unit && typeof unit.nebulaHue === 'number';
+}
+
+function hasStormTelemetry(unit: UnitSnapshotDto | null | undefined) {
+  return !!unit && [unit.stormSpawnChancePerTick, unit.stormDamage, unit.stormMinAnnouncementTicks, unit.stormMaxAnnouncementTicks, unit.stormMinActiveTicks, unit.stormMaxActiveTicks, unit.stormMinWhirlRadius, unit.stormMaxWhirlRadius, unit.stormMinWhirlSpeed, unit.stormMaxWhirlSpeed, unit.stormMinWhirlGravity, unit.stormMaxWhirlGravity].some((value) => typeof value === 'number');
+}
+
+function hasStormWhirlTelemetry(unit: UnitSnapshotDto | null | undefined) {
+  return !!unit && (typeof unit.stormWhirlRemainingTicks === 'number' || typeof unit.stormDamage === 'number');
+}
+
+function hasPowerUpTelemetry(unit: UnitSnapshotDto | null | undefined) {
+  return !!unit && typeof unit.powerUpAmount === 'number';
 }
 
 function hasPropulsionTelemetry(unit: UnitSnapshotDto | null | undefined) {
@@ -1140,6 +1414,84 @@ function formatOptionalMetric(value: number | null | undefined) {
 
 function formatPlanetMetric(value: number | null | undefined) {
   return formatOptionalMetric(value);
+}
+
+function formatOptionalWhole(value: number | null | undefined) {
+  return typeof value === 'number' ? formatWholeValue(value) : 'Unknown';
+}
+
+function formatOptionalText(value: string | null | undefined) {
+  if (!value) {
+    return 'Unknown';
+  }
+
+  return value.replace(/[-_]+/g, ' ').replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function formatOptionalBooleanState(value: boolean | null | undefined, trueLabel: string, falseLabel: string) {
+  if (typeof value !== 'boolean') {
+    return 'Unknown';
+  }
+
+  return value ? trueLabel : falseLabel;
+}
+
+function formatOptionalPercent(value: number | null | undefined) {
+  if (typeof value !== 'number') {
+    return 'Unknown';
+  }
+
+  return `${Math.round(clamp01(value) * 100)}%`;
+}
+
+function formatRangeMetric(minimum: number | null | undefined, maximum: number | null | undefined) {
+  if (typeof minimum !== 'number' || typeof maximum !== 'number') {
+    return 'Unknown';
+  }
+
+  return `${formatMetric(minimum)} - ${formatMetric(maximum)}`;
+}
+
+function formatRangeWhole(minimum: number | null | undefined, maximum: number | null | undefined, suffix = '') {
+  if (typeof minimum !== 'number' || typeof maximum !== 'number') {
+    return 'Unknown';
+  }
+
+  const suffixText = suffix ? ` ${suffix}` : '';
+  return `${formatWholeValue(minimum)} - ${formatWholeValue(maximum)}${suffixText}`;
+}
+
+function formatVector(x: number | null | undefined, y: number | null | undefined) {
+  if (typeof x !== 'number' || typeof y !== 'number') {
+    return 'Unknown';
+  }
+
+  return `${formatMetric(x)}, ${formatMetric(y)}`;
+}
+
+function formatTargetRegion(unit: UnitSnapshotDto | null | undefined) {
+  if (!unit) {
+    return 'Unknown';
+  }
+
+  const left = unit.wormHoleTargetLeft;
+  const top = unit.wormHoleTargetTop;
+  const right = unit.wormHoleTargetRight;
+  const bottom = unit.wormHoleTargetBottom;
+  if ([left, top, right, bottom].some((value) => typeof value !== 'number')) {
+    return 'Unknown';
+  }
+
+  return `${formatMetric(left as number)}, ${formatMetric(top as number)} -> ${formatMetric(right as number)}, ${formatMetric(bottom as number)}`;
+}
+
+function formatMissionVectors(vectors: TrajectoryPointDto[] | null | undefined) {
+  if (!vectors || vectors.length === 0) {
+    return 'None';
+  }
+
+  const preview = vectors.slice(0, 3).map((vector) => `${formatMetric(vector.x)}, ${formatMetric(vector.y)}`);
+  return vectors.length > 3 ? `${preview.join(' | ')} +${vectors.length - 3}` : preview.join(' | ');
 }
 
 function formatOptionalRatio(current: number | null | undefined, maximum: number | null | undefined) {
@@ -1293,3 +1645,4 @@ function buildMeterFromValues(label: string, current: number, maximum: number, t
     inactive: maximum <= 0,
   };
 }
+

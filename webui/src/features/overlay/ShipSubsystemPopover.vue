@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useGateway } from '../../composables/useGateway';
 import { formatMetric } from '../../lib/formatting';
+import { useGameStore } from '../../stores/game';
 import ModalBackdrop from '../../shared/ModalBackdrop.vue';
 
 type ShipSubsystemStat = {
@@ -55,10 +56,17 @@ const emit = defineEmits<{
   close: [];
 }>();
 
+const gameStore = useGameStore();
 const gateway = useGateway();
 const hideUninstalledSubsystems = ref(false);
+const refreshToken = ref(0);
+let refreshTimer: number | null = null;
 
-const subsystems = computed(() => readSubsystemEntries(props.overlayState?.subsystems ?? props.overlayState?.modules));
+const liveOverlayState = computed(() => {
+  refreshToken.value;
+  return (gameStore.ownerOverlay as Record<string, Record<string, unknown> | undefined>)[props.controllableId] ?? props.overlayState;
+});
+const subsystems = computed(() => readSubsystemEntries(liveOverlayState.value?.subsystems ?? liveOverlayState.value?.modules));
 const installedSubsystemCount = computed(() => subsystems.value.filter((subsystem) => subsystem.exists).length);
 const visibleSubsystems = computed(() => (
   hideUninstalledSubsystems.value
@@ -74,6 +82,19 @@ const upgradeResources = computed(() => ({
   ions: readSubsystemResourceValue(subsystems.value, 'Ion Battery', 'Charge'),
   neutrinos: readSubsystemResourceValue(subsystems.value, 'Neutrino Battery', 'Charge'),
 }));
+
+onMounted(() => {
+  refreshTimer = window.setInterval(() => {
+    refreshToken.value += 1;
+  }, 500);
+});
+
+onBeforeUnmount(() => {
+  if (refreshTimer !== null) {
+    window.clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+});
 
 function onUpgradeSubsystem(subsystemId: string) {
   if (!props.controllableId || !subsystemId) {

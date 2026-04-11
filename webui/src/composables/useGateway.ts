@@ -47,6 +47,8 @@ function createGatewayApi() {
   const savedConnections = ref<SavedGatewayConnection[]>(loadSavedConnections());
   const pendingAttachments = ref<PendingAttachment[]>([]);
   const pendingAutoSpawnCommandIds = new Set<string>();
+  const pendingViewportFocusCommandIds = new Map<string, string>();
+  const pendingRemoveCommandIds = new Map<string, string>();
   let initialized = false;
 
   const client = createGatewayClient(sessionStore.gatewayUrl, {
@@ -61,6 +63,10 @@ function createGatewayApi() {
       if (nextState === 'closed' || nextState === 'error') {
         sessionStore.clearSession();
         gameStore.clearOverlay();
+        for (const controllableId of pendingRemoveCommandIds.values()) {
+          uiStore.clearControllableRemoving(controllableId);
+        }
+        pendingRemoveCommandIds.clear();
       }
     },
     onSend(message) {
@@ -105,17 +111,36 @@ function createGatewayApi() {
         gameStore.addChatEntry(message.entry);
         break;
       case 'command.reply': {
+        const pendingRemoveControllableId = pendingRemoveCommandIds.get(message.commandId);
+        const pendingViewportFocusControllableId = pendingViewportFocusCommandIds.get(message.commandId);
         const selectedControllableId = gameStore.resolveCommand(message);
         if (message.status === 'completed' && pendingAutoSpawnCommandIds.delete(message.commandId)) {
           const createdControllableId = typeof message.result?.controllableId === 'string'
             ? message.result.controllableId
             : '';
           if (createdControllableId) {
+            uiStore.setSelectedControllable(createdControllableId);
             continueShip(createdControllableId);
           }
         }
         if (selectedControllableId) {
           uiStore.setSelectedControllable(selectedControllableId);
+          if (message.status === 'completed' && pendingViewportFocusControllableId === selectedControllableId) {
+            uiStore.requestViewportJump(selectedControllableId);
+          }
+        }
+        if (message.status === 'completed' && pendingViewportFocusControllableId) {
+          uiStore.setSelectedControllable(pendingViewportFocusControllableId);
+          uiStore.requestViewportJump(pendingViewportFocusControllableId);
+          pendingViewportFocusCommandIds.delete(message.commandId);
+        } else if ((message.error || message.status === 'rejected') && pendingViewportFocusControllableId) {
+          pendingViewportFocusCommandIds.delete(message.commandId);
+        }
+        if (pendingRemoveControllableId && (message.error || message.status === 'rejected')) {
+          uiStore.clearControllableRemoving(pendingRemoveControllableId);
+        }
+        if (pendingRemoveControllableId && (message.error || message.status === 'completed' || message.status === 'rejected')) {
+          pendingRemoveCommandIds.delete(message.commandId);
         }
         break;
       }
@@ -286,6 +311,7 @@ function createGatewayApi() {
     }
 
     const envelope = buildContinueShipCommand(controllableId);
+    pendingViewportFocusCommandIds.set(envelope.commandId, controllableId);
     gameStore.trackCommand(envelope.commandId, {
       label: 'Spawn ship',
       subject: gameStore.getControllableLabel(controllableId),
@@ -299,6 +325,8 @@ function createGatewayApi() {
     }
 
     const envelope = buildRemoveShipCommand(controllableId);
+    uiStore.markControllableRemoving(controllableId);
+    pendingRemoveCommandIds.set(envelope.commandId, controllableId);
     gameStore.trackCommand(envelope.commandId, {
       label: 'Remove ship',
       subject: gameStore.getControllableLabel(controllableId),

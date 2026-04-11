@@ -374,6 +374,7 @@ h2 {
 }
 
 .owner-overlay-item {
+  position: relative;
   display: grid;
   grid-template-columns: 1fr;
   grid-template-areas:
@@ -397,6 +398,14 @@ h2 {
     transform 0.18s ease;
 }
 
+.owner-overlay-item.is-removing {
+  cursor: progress;
+}
+
+.owner-overlay-item.is-removing > *:not(.owner-overlay-removing) {
+  opacity: 0.36;
+}
+
 .owner-overlay-item:hover {
   transform: translateY(-1px);
   border-color: rgba(124, 179, 221, 0.28);
@@ -413,6 +422,36 @@ h2 {
   box-shadow:
     0 18px 38px rgba(0, 0, 0, 0.24),
     inset 0 0 0 1px rgba(239, 191, 132, 0.18);
+}
+
+.owner-overlay-removing {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  border-radius: inherit;
+  background: rgba(5, 9, 12, 0.72);
+  color: #f5f8fb;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+}
+
+.owner-overlay-removing-spinner {
+  width: 0.95rem;
+  height: 0.95rem;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.24);
+  border-top-color: rgba(255, 255, 255, 0.95);
+  animation: owner-overlay-spin 0.8s linear infinite;
+}
+
+@keyframes owner-overlay-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .owner-overlay-summary {

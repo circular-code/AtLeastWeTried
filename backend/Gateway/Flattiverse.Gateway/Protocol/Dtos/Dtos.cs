@@ -108,6 +108,39 @@ public sealed class UnitSnapshotDto
     public float? PlanetCarbon { get; set; }
     public float? PlanetHydrogen { get; set; }
     public float? PlanetSilicon { get; set; }
+    public int? MissionTargetSequenceNumber { get; set; }
+    public int? MissionTargetVectorCount { get; set; }
+    public List<TrajectoryPointDto>? MissionTargetVectors { get; set; }
+    public bool? FlagActive { get; set; }
+    public int? FlagGraceTicks { get; set; }
+    public float? DominationRadius { get; set; }
+    public int? Domination { get; set; }
+    public int? DominationScoreCountdown { get; set; }
+    public string? WormHoleTargetClusterName { get; set; }
+    public float? WormHoleTargetLeft { get; set; }
+    public float? WormHoleTargetTop { get; set; }
+    public float? WormHoleTargetRight { get; set; }
+    public float? WormHoleTargetBottom { get; set; }
+    public string? CurrentFieldMode { get; set; }
+    public float? CurrentFieldFlowX { get; set; }
+    public float? CurrentFieldFlowY { get; set; }
+    public float? CurrentFieldRadialForce { get; set; }
+    public float? CurrentFieldTangentialForce { get; set; }
+    public float? NebulaHue { get; set; }
+    public float? StormSpawnChancePerTick { get; set; }
+    public int? StormMinAnnouncementTicks { get; set; }
+    public int? StormMaxAnnouncementTicks { get; set; }
+    public int? StormMinActiveTicks { get; set; }
+    public int? StormMaxActiveTicks { get; set; }
+    public float? StormMinWhirlRadius { get; set; }
+    public float? StormMaxWhirlRadius { get; set; }
+    public float? StormMinWhirlSpeed { get; set; }
+    public float? StormMaxWhirlSpeed { get; set; }
+    public float? StormMinWhirlGravity { get; set; }
+    public float? StormMaxWhirlGravity { get; set; }
+    public float? StormDamage { get; set; }
+    public int? StormWhirlRemainingTicks { get; set; }
+    public float? PowerUpAmount { get; set; }
 }
 
 public sealed class PublicControllableSnapshotDto

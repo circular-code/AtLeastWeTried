@@ -434,17 +434,18 @@ export class WorldScene {
 
   jumpToUnit(unitId: string) {
     if (!unitId) {
-      return;
+      return false;
     }
 
     const targetUnit = this.renderableUnitsById.get(unitId);
-    if (!targetUnit) {
-      return;
+    if (!targetUnit || this.isSpawnPlaceholder(targetUnit)) {
+      return false;
     }
 
     this.camera.position.x = targetUnit.x;
     this.camera.position.y = -targetUnit.y;
     this.requestRender();
+    return true;
   }
 
   private readonly handlePointerDown = (event: PointerEvent) => {
@@ -937,7 +938,7 @@ export class WorldScene {
   private updateSelectionRing() {
     const selectedUnit = this.renderableUnitsById.get(this.selectedUnitId)
       ?? this.renderableUnitsById.get(this.selectedControllableId);
-    const selectedControllableUnit = this.renderableUnitsById.get(this.selectedControllableId) ?? null;
+    const selectedControllableUnit = this.getRenderableSelectedControllableUnit();
 
     if (!selectedUnit) {
       this.selectedRing.visible = false;
@@ -956,6 +957,27 @@ export class WorldScene {
     } else {
       this.selectedCenterDot.visible = false;
     }
+  }
+
+  private getRenderableSelectedControllableUnit(): NormalizedUnit | null {
+    if (!this.selectedControllableId) {
+      return null;
+    }
+
+    const unit = this.renderableUnitsById.get(this.selectedControllableId) ?? null;
+    if (!unit) {
+      return null;
+    }
+
+    if (this.isSpawnPlaceholder(unit)) {
+      return null;
+    }
+
+    return unit;
+  }
+
+  private isSpawnPlaceholder(unit: NormalizedUnit) {
+    return unit.clusterId === 0 && unit.x === 0 && unit.y === 0;
   }
 
   private updateTacticalTargetRing() {

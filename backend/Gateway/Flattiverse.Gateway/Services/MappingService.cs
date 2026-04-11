@@ -693,6 +693,83 @@ public sealed class MappingService : IConnectorEventHandler
             dto.PlanetSilicon = planet.Silicon;
         }
 
+        if (unit.FullStateKnown)
+        {
+            switch (unit)
+            {
+                case MissionTarget missionTarget:
+                    dto.MissionTargetSequenceNumber = missionTarget.SequenceNumber;
+                    dto.MissionTargetVectorCount = missionTarget.VectorCount;
+                    dto.MissionTargetVectors = missionTarget.Vectors
+                        .Select(vector => new TrajectoryPointDto { X = vector.X, Y = vector.Y })
+                        .ToList();
+                    break;
+
+                case Flag flag:
+                    dto.FlagActive = flag.Active;
+                    dto.FlagGraceTicks = flag.GraceTicks;
+                    break;
+
+                case DominationPoint dominationPoint:
+                    dto.DominationRadius = dominationPoint.DominationRadius;
+                    dto.Domination = dominationPoint.Domination;
+                    dto.DominationScoreCountdown = dominationPoint.ScoreCountdown;
+                    break;
+
+                case WormHole wormHole:
+                    dto.WormHoleTargetClusterName = wormHole.TargetCluster?.Name;
+                    dto.WormHoleTargetLeft = wormHole.TargetLeft;
+                    dto.WormHoleTargetTop = wormHole.TargetTop;
+                    dto.WormHoleTargetRight = wormHole.TargetRight;
+                    dto.WormHoleTargetBottom = wormHole.TargetBottom;
+                    break;
+
+                case CurrentField currentField:
+                    dto.CurrentFieldMode = currentField.Mode switch
+                    {
+                        CurrentFieldMode.Relative => "relative",
+                        _ => "directional"
+                    };
+                    dto.CurrentFieldFlowX = currentField.Flow.X;
+                    dto.CurrentFieldFlowY = currentField.Flow.Y;
+                    dto.CurrentFieldRadialForce = currentField.RadialForce;
+                    dto.CurrentFieldTangentialForce = currentField.TangentialForce;
+                    break;
+
+                case Nebula nebula:
+                    dto.NebulaHue = nebula.Hue;
+                    break;
+
+                case Storm storm:
+                    dto.StormSpawnChancePerTick = storm.SpawnChancePerTick;
+                    dto.StormMinAnnouncementTicks = storm.MinAnnouncementTicks;
+                    dto.StormMaxAnnouncementTicks = storm.MaxAnnouncementTicks;
+                    dto.StormMinActiveTicks = storm.MinActiveTicks;
+                    dto.StormMaxActiveTicks = storm.MaxActiveTicks;
+                    dto.StormMinWhirlRadius = storm.MinWhirlRadius;
+                    dto.StormMaxWhirlRadius = storm.MaxWhirlRadius;
+                    dto.StormMinWhirlSpeed = storm.MinWhirlSpeed;
+                    dto.StormMaxWhirlSpeed = storm.MaxWhirlSpeed;
+                    dto.StormMinWhirlGravity = storm.MinWhirlGravity;
+                    dto.StormMaxWhirlGravity = storm.MaxWhirlGravity;
+                    dto.StormDamage = storm.Damage;
+                    break;
+
+                case StormCommencingWhirl commencingWhirl:
+                    dto.StormWhirlRemainingTicks = commencingWhirl.RemainingTicks;
+                    break;
+
+                case StormActiveWhirl activeWhirl:
+                    dto.StormWhirlRemainingTicks = activeWhirl.RemainingTicks;
+                    dto.StormDamage = activeWhirl.Damage;
+                    break;
+
+                case PowerUp powerUp:
+                    dto.PowerUpAmount = powerUp.Amount;
+                    break;
+            }
+        }
+
         return dto;
     }
 
@@ -1223,6 +1300,105 @@ public sealed class MappingService : IConnectorEventHandler
         if (unit.PlanetSilicon.HasValue)
             changes["planetSilicon"] = unit.PlanetSilicon;
 
+        if (unit.MissionTargetSequenceNumber.HasValue)
+            changes["missionTargetSequenceNumber"] = unit.MissionTargetSequenceNumber;
+
+        if (unit.MissionTargetVectorCount.HasValue)
+            changes["missionTargetVectorCount"] = unit.MissionTargetVectorCount;
+
+        if (unit.MissionTargetVectors is not null)
+            changes["missionTargetVectors"] = unit.MissionTargetVectors.Select(CloneTrajectoryPoint).ToArray();
+
+        if (unit.FlagActive.HasValue)
+            changes["flagActive"] = unit.FlagActive;
+
+        if (unit.FlagGraceTicks.HasValue)
+            changes["flagGraceTicks"] = unit.FlagGraceTicks;
+
+        if (unit.DominationRadius.HasValue)
+            changes["dominationRadius"] = unit.DominationRadius;
+
+        if (unit.Domination.HasValue)
+            changes["domination"] = unit.Domination;
+
+        if (unit.DominationScoreCountdown.HasValue)
+            changes["dominationScoreCountdown"] = unit.DominationScoreCountdown;
+
+        if (unit.WormHoleTargetClusterName is not null)
+            changes["wormHoleTargetClusterName"] = unit.WormHoleTargetClusterName;
+
+        if (unit.WormHoleTargetLeft.HasValue)
+            changes["wormHoleTargetLeft"] = unit.WormHoleTargetLeft;
+
+        if (unit.WormHoleTargetTop.HasValue)
+            changes["wormHoleTargetTop"] = unit.WormHoleTargetTop;
+
+        if (unit.WormHoleTargetRight.HasValue)
+            changes["wormHoleTargetRight"] = unit.WormHoleTargetRight;
+
+        if (unit.WormHoleTargetBottom.HasValue)
+            changes["wormHoleTargetBottom"] = unit.WormHoleTargetBottom;
+
+        if (unit.CurrentFieldMode is not null)
+            changes["currentFieldMode"] = unit.CurrentFieldMode;
+
+        if (unit.CurrentFieldFlowX.HasValue)
+            changes["currentFieldFlowX"] = unit.CurrentFieldFlowX;
+
+        if (unit.CurrentFieldFlowY.HasValue)
+            changes["currentFieldFlowY"] = unit.CurrentFieldFlowY;
+
+        if (unit.CurrentFieldRadialForce.HasValue)
+            changes["currentFieldRadialForce"] = unit.CurrentFieldRadialForce;
+
+        if (unit.CurrentFieldTangentialForce.HasValue)
+            changes["currentFieldTangentialForce"] = unit.CurrentFieldTangentialForce;
+
+        if (unit.NebulaHue.HasValue)
+            changes["nebulaHue"] = unit.NebulaHue;
+
+        if (unit.StormSpawnChancePerTick.HasValue)
+            changes["stormSpawnChancePerTick"] = unit.StormSpawnChancePerTick;
+
+        if (unit.StormMinAnnouncementTicks.HasValue)
+            changes["stormMinAnnouncementTicks"] = unit.StormMinAnnouncementTicks;
+
+        if (unit.StormMaxAnnouncementTicks.HasValue)
+            changes["stormMaxAnnouncementTicks"] = unit.StormMaxAnnouncementTicks;
+
+        if (unit.StormMinActiveTicks.HasValue)
+            changes["stormMinActiveTicks"] = unit.StormMinActiveTicks;
+
+        if (unit.StormMaxActiveTicks.HasValue)
+            changes["stormMaxActiveTicks"] = unit.StormMaxActiveTicks;
+
+        if (unit.StormMinWhirlRadius.HasValue)
+            changes["stormMinWhirlRadius"] = unit.StormMinWhirlRadius;
+
+        if (unit.StormMaxWhirlRadius.HasValue)
+            changes["stormMaxWhirlRadius"] = unit.StormMaxWhirlRadius;
+
+        if (unit.StormMinWhirlSpeed.HasValue)
+            changes["stormMinWhirlSpeed"] = unit.StormMinWhirlSpeed;
+
+        if (unit.StormMaxWhirlSpeed.HasValue)
+            changes["stormMaxWhirlSpeed"] = unit.StormMaxWhirlSpeed;
+
+        if (unit.StormMinWhirlGravity.HasValue)
+            changes["stormMinWhirlGravity"] = unit.StormMinWhirlGravity;
+
+        if (unit.StormMaxWhirlGravity.HasValue)
+            changes["stormMaxWhirlGravity"] = unit.StormMaxWhirlGravity;
+
+        if (unit.StormDamage.HasValue)
+            changes["stormDamage"] = unit.StormDamage;
+
+        if (unit.StormWhirlRemainingTicks.HasValue)
+            changes["stormWhirlRemainingTicks"] = unit.StormWhirlRemainingTicks;
+
+        if (unit.PowerUpAmount.HasValue)
+            changes["powerUpAmount"] = unit.PowerUpAmount;
+
         return changes;
     }
 
@@ -1744,7 +1920,40 @@ public sealed class MappingService : IConnectorEventHandler
             PlanetMetal = source.PlanetMetal,
             PlanetCarbon = source.PlanetCarbon,
             PlanetHydrogen = source.PlanetHydrogen,
-            PlanetSilicon = source.PlanetSilicon
+            PlanetSilicon = source.PlanetSilicon,
+            MissionTargetSequenceNumber = source.MissionTargetSequenceNumber,
+            MissionTargetVectorCount = source.MissionTargetVectorCount,
+            MissionTargetVectors = source.MissionTargetVectors?.Select(CloneTrajectoryPoint).ToList(),
+            FlagActive = source.FlagActive,
+            FlagGraceTicks = source.FlagGraceTicks,
+            DominationRadius = source.DominationRadius,
+            Domination = source.Domination,
+            DominationScoreCountdown = source.DominationScoreCountdown,
+            WormHoleTargetClusterName = source.WormHoleTargetClusterName,
+            WormHoleTargetLeft = source.WormHoleTargetLeft,
+            WormHoleTargetTop = source.WormHoleTargetTop,
+            WormHoleTargetRight = source.WormHoleTargetRight,
+            WormHoleTargetBottom = source.WormHoleTargetBottom,
+            CurrentFieldMode = source.CurrentFieldMode,
+            CurrentFieldFlowX = source.CurrentFieldFlowX,
+            CurrentFieldFlowY = source.CurrentFieldFlowY,
+            CurrentFieldRadialForce = source.CurrentFieldRadialForce,
+            CurrentFieldTangentialForce = source.CurrentFieldTangentialForce,
+            NebulaHue = source.NebulaHue,
+            StormSpawnChancePerTick = source.StormSpawnChancePerTick,
+            StormMinAnnouncementTicks = source.StormMinAnnouncementTicks,
+            StormMaxAnnouncementTicks = source.StormMaxAnnouncementTicks,
+            StormMinActiveTicks = source.StormMinActiveTicks,
+            StormMaxActiveTicks = source.StormMaxActiveTicks,
+            StormMinWhirlRadius = source.StormMinWhirlRadius,
+            StormMaxWhirlRadius = source.StormMaxWhirlRadius,
+            StormMinWhirlSpeed = source.StormMinWhirlSpeed,
+            StormMaxWhirlSpeed = source.StormMaxWhirlSpeed,
+            StormMinWhirlGravity = source.StormMinWhirlGravity,
+            StormMaxWhirlGravity = source.StormMaxWhirlGravity,
+            StormDamage = source.StormDamage,
+            StormWhirlRemainingTicks = source.StormWhirlRemainingTicks,
+            PowerUpAmount = source.PowerUpAmount
         };
     }
 

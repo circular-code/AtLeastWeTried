@@ -328,6 +328,39 @@ export interface UnitSnapshotDto {
   planetCarbon?: number | null;
   planetHydrogen?: number | null;
   planetSilicon?: number | null;
+  missionTargetSequenceNumber?: number | null;
+  missionTargetVectorCount?: number | null;
+  missionTargetVectors?: TrajectoryPointDto[] | null;
+  flagActive?: boolean | null;
+  flagGraceTicks?: number | null;
+  dominationRadius?: number | null;
+  domination?: number | null;
+  dominationScoreCountdown?: number | null;
+  wormHoleTargetClusterName?: string | null;
+  wormHoleTargetLeft?: number | null;
+  wormHoleTargetTop?: number | null;
+  wormHoleTargetRight?: number | null;
+  wormHoleTargetBottom?: number | null;
+  currentFieldMode?: string | null;
+  currentFieldFlowX?: number | null;
+  currentFieldFlowY?: number | null;
+  currentFieldRadialForce?: number | null;
+  currentFieldTangentialForce?: number | null;
+  nebulaHue?: number | null;
+  stormSpawnChancePerTick?: number | null;
+  stormMinAnnouncementTicks?: number | null;
+  stormMaxAnnouncementTicks?: number | null;
+  stormMinActiveTicks?: number | null;
+  stormMaxActiveTicks?: number | null;
+  stormMinWhirlRadius?: number | null;
+  stormMaxWhirlRadius?: number | null;
+  stormMinWhirlSpeed?: number | null;
+  stormMaxWhirlSpeed?: number | null;
+  stormMinWhirlGravity?: number | null;
+  stormMaxWhirlGravity?: number | null;
+  stormDamage?: number | null;
+  stormWhirlRemainingTicks?: number | null;
+  powerUpAmount?: number | null;
 }
 
 export interface WorldDeltaDto {

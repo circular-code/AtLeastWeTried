@@ -191,14 +191,15 @@ watch(
 );
 
 watch(
-  () => uiStore.viewportJumpTargetId,
-  (targetUnitId) => {
+  () => [uiStore.viewportJumpTargetId, snapshot.value, ownerOverlay.value] as const,
+  ([targetUnitId]) => {
     if (!targetUnitId) {
       return;
     }
 
-    worldScene?.jumpToUnit(targetUnitId);
-    uiStore.clearViewportJump();
+    if (worldScene?.jumpToUnit(targetUnitId)) {
+      uiStore.clearViewportJump();
+    }
   },
 );
 
