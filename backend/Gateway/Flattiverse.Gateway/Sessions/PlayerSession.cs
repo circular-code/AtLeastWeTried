@@ -529,7 +529,13 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         var stats = new List<Dictionary<string, object?>>();
         AddPerTickRatioStat(stats, "Rate", miner.Rate, miner.MaximumRate);
         AddRateStat(stats, "Yield", miner.MinedMetalThisTick + miner.MinedCarbonThisTick + miner.MinedHydrogenThisTick + miner.MinedSiliconThisTick);
+        AddRateStat(stats, "Metal", miner.MinedMetalThisTick);
+        AddRateStat(stats, "Carbon", miner.MinedCarbonThisTick);
+        AddRateStat(stats, "Hydrogen", miner.MinedHydrogenThisTick);
         AddRateStat(stats, "Silicon", miner.MinedSiliconThisTick);
+        AddRateStat(stats, "Energy use", miner.ConsumedEnergyThisTick);
+        AddRateStat(stats, "Ion use", miner.ConsumedIonsThisTick);
+        AddRateStat(stats, "Neutrino use", miner.ConsumedNeutrinosThisTick);
         return stats;
     }
 
@@ -539,6 +545,9 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         AddPerTickRatioStat(stats, "Rate", collector.Rate, collector.MaximumRate);
         AddRateStat(stats, "Yield", collector.CollectedThisTick);
         AddStat(stats, "Hue", FormatFloat(collector.CollectedHueThisTick));
+        AddRateStat(stats, "Energy use", collector.ConsumedEnergyThisTick);
+        AddRateStat(stats, "Ion use", collector.ConsumedIonsThisTick);
+        AddRateStat(stats, "Neutrino use", collector.ConsumedNeutrinosThisTick);
         return stats;
     }
 
@@ -1056,8 +1065,11 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         var subsystemId = payload?.GetProperty("subsystemId").GetString() ?? "";
         var mode = payload?.GetProperty("mode").GetString() ?? "";
         var controllable = FindControllable(controllableId);
-        if (controllable is not ClassicShipControllable classic)
-            return Rejected(commandId, "invalid_controllable", "Controllable not found or not a classic ship.");
+        if (controllable is null)
+            return Rejected(commandId, "invalid_controllable", "Controllable not found.");
+
+        var classic = controllable as ClassicShipControllable;
+        var modern = controllable as ModernShipControllable;
         var subsystem = string.IsNullOrWhiteSpace(subsystemId)
             ? null
             : FindSubsystem(controllable, subsystemId);
@@ -1065,18 +1077,22 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             subsystemId = "ShotFabricator";
         else if (subsystem is DynamicInterceptorFabricatorSubsystem)
             subsystemId = "InterceptorFabricator";
+        else if (subsystem is ResourceMinerSubsystem)
+            subsystemId = "ResourceMiner";
+        else if (subsystem is NebulaCollectorSubsystem)
+            subsystemId = "NebulaCollector";
 
         bool tacticalOnlyMode =
             string.Equals(subsystemId, "Tactical", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(subsystemId, "TacticalModule", StringComparison.OrdinalIgnoreCase);
         if (tacticalOnlyMode)
         {
-            if (mode != "off" && RejectIfControllableRebuilding(commandId, classic) is { } rebuildingReject)
+            if (mode != "off" && RejectIfControllableRebuilding(commandId, controllable) is { } rebuildingReject)
                 return rebuildingReject;
         }
         else
         {
-            if (RejectIfControllableRebuilding(commandId, classic) is { } rebuildingReject)
+            if (RejectIfControllableRebuilding(commandId, controllable) is { } rebuildingReject)
                 return rebuildingReject;
         }
 
@@ -1084,6 +1100,9 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         {
             case "MainScanner":
             case "scanner":
+                if (classic is null)
+                    return Rejected(commandId, "unsupported_subsystem", "Scanner mode control currently requires a classic ship.");
+
                 if (mode == "off")
                 {
                     await _scanningService.ApplyAsync(classic, ScanningService.ScannerMode.Off);
@@ -1129,9 +1148,67 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                     await _scanningService.ApplyTargetModeAsync(classic, targetUnitId, width, length);
                 }
                 break;
+            case "ResourceMiner":
+            case "resourceMiner":
+            case "Resource Miner":
+                if (!controllable.ResourceMiner.Exists)
+                    return Rejected(commandId, "unsupported_subsystem", "This controllable has no installed resource miner.");
+
+                if (mode == "on")
+                {
+                    await controllable.ResourceMiner.Set(controllable.ResourceMiner.MaximumRate);
+                }
+                else if (mode == "off")
+                {
+                    await controllable.ResourceMiner.Off();
+                }
+                else if (mode == "set")
+                {
+                    if (payload?.TryGetProperty("value", out var rateEl) != true || rateEl.ValueKind == System.Text.Json.JsonValueKind.Null)
+                        return Rejected(commandId, "missing_value", "value is required when setting a resource miner rate.");
+
+                    await controllable.ResourceMiner.Set(rateEl.GetSingle());
+                }
+                else
+                {
+                    return Rejected(commandId, "invalid_mode", $"Unsupported resource miner mode: {mode}");
+                }
+                break;
+            case "NebulaCollector":
+            case "nebulaCollector":
+            case "Nebula Collector":
+            {
+                var collector = classic?.NebulaCollector ?? modern?.NebulaCollector;
+                if (collector is null || !collector.Exists)
+                    return Rejected(commandId, "unsupported_subsystem", "This controllable has no installed nebula collector.");
+
+                if (mode == "on")
+                {
+                    await collector.Set(collector.MaximumRate);
+                }
+                else if (mode == "off")
+                {
+                    await collector.Off();
+                }
+                else if (mode == "set")
+                {
+                    if (payload?.TryGetProperty("value", out var rateEl) != true || rateEl.ValueKind == System.Text.Json.JsonValueKind.Null)
+                        return Rejected(commandId, "missing_value", "value is required when setting a nebula collector rate.");
+
+                    await collector.Set(rateEl.GetSingle());
+                }
+                else
+                {
+                    return Rejected(commandId, "invalid_mode", $"Unsupported nebula collector mode: {mode}");
+                }
+                break;
+            }
             case "ShotFabricator":
             case "shotFabricator":
             case "Shot Fabricator":
+                if (classic is null)
+                    return Rejected(commandId, "unsupported_subsystem", "Shot fabricator control currently requires a classic ship.");
+
                 if (mode == "on") await classic.ShotFabricator.On();
                 else if (mode == "off") await classic.ShotFabricator.Off();
                 else if (mode == "set")
@@ -1147,6 +1224,9 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             case "InterceptorFabricator":
             case "interceptorFabricator":
             case "Interceptor Fabricator":
+                if (classic is null)
+                    return Rejected(commandId, "unsupported_subsystem", "Interceptor fabricator control currently requires a classic ship.");
+
                 if (mode == "on") await classic.InterceptorFabricator.On();
                 else if (mode == "off") await classic.InterceptorFabricator.Off();
                 else if (mode == "set")
@@ -1163,6 +1243,9 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             case "tactical":
             case "TacticalModule":
             case "tacticalModule":
+                if (classic is null)
+                    return Rejected(commandId, "unsupported_subsystem", "Tactical control currently requires a classic ship.");
+
                 var tacticalMode = mode == "enemy"
                     ? TacticalService.TacticalMode.Enemy
                     : mode == "target"

@@ -74,7 +74,7 @@ public sealed class GalaxyConnectionManager : IDisposable
     /// </summary>
     public async Task ConnectAsync(IReadOnlyList<IConnectorEventHandler> eventHandlers)
     {
-                BuildDisclosure buildDisclosure = new(
+        BuildDisclosure buildDisclosure = new(
             softwareDesign:    BuildDisclosureLevel.IntegratedLlm,
             ui:                BuildDisclosureLevel.IntegratedLlm,
             universeRendering: BuildDisclosureLevel.IntegratedLlm,
@@ -83,7 +83,7 @@ public sealed class GalaxyConnectionManager : IDisposable
             navigation:        BuildDisclosureLevel.IntegratedLlm,
             scannerControl:    BuildDisclosureLevel.IntegratedLlm,
             weaponSystems:     BuildDisclosureLevel.IntegratedLlm,
-            resourceControl:   BuildDisclosureLevel.None,
+            resourceControl:   BuildDisclosureLevel.IntegratedLlm,
             fleetControl:      BuildDisclosureLevel.None,
             missionControl:    BuildDisclosureLevel.None,
             chat:              BuildDisclosureLevel.IntegratedLlm
@@ -95,7 +95,7 @@ public sealed class GalaxyConnectionManager : IDisposable
             scannerControl:        RuntimeDisclosureLevel.Automated,
             weaponAiming:          RuntimeDisclosureLevel.Automated,
             weaponTargetSelection: RuntimeDisclosureLevel.Automated,
-            resourceControl:       RuntimeDisclosureLevel.Unsupported,
+            resourceControl:       RuntimeDisclosureLevel.Automated,
             fleetControl:          RuntimeDisclosureLevel.Unsupported,
             missionControl:        RuntimeDisclosureLevel.Unsupported,
             loadoutControl:        RuntimeDisclosureLevel.Manual,

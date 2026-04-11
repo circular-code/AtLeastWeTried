@@ -1112,6 +1112,14 @@ h2 {
   white-space: nowrap;
 }
 
+.status-bar-resource-chip {
+  padding: 0.15rem 0.38rem;
+  border-radius: 999px;
+  background: rgba(124, 179, 221, 0.12);
+  border: 1px solid rgba(124, 179, 221, 0.18);
+  color: #e9f5ff;
+}
+
 .status-bar-system-actions {
   flex: 0 0 auto;
   gap: 0.28rem;
@@ -1259,6 +1267,19 @@ h2 {
   margin-left: auto;
 }
 
+.dock-group-stack--utility {
+  align-items: stretch;
+}
+
+.dock-group-stack--utility > .dock-group {
+  width: 100%;
+}
+
+.dock-group-stack--utility .dock-group--lock {
+  margin-left: 0;
+  justify-content: stretch;
+}
+
 .dock-group-stack {
   display: flex;
   flex-direction: column;
@@ -1279,9 +1300,28 @@ h2 {
   margin-right: 0.45rem;
 }
 
+.dock-group-stack--harvest {
+  gap: 0.24rem;
+}
+
 .dock-group--scanner-metrics {
   gap: 0.55rem;
   flex-wrap: nowrap;
+}
+
+.dock-group--harvest-metric {
+  gap: 0.4rem;
+  padding: 0;
+}
+
+.dock-group--harvest-metric .dock-slider {
+  width: 86px;
+}
+
+.dock-group--harvest-sources {
+  gap: 0.32rem;
+  padding: 0;
+  flex-wrap: wrap;
 }
 
 .dock-group--scanner-metric {
@@ -1336,6 +1376,17 @@ h2 {
   background: rgba(124, 179, 221, 0.22);
   border-color: var(--accent, #7cb3dd);
   color: var(--accent, #7cb3dd);
+}
+
+.dock-btn--chip {
+  padding-inline: 0.4rem;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.dock-btn--wide {
+  width: 100%;
 }
 
 .dock-sep {

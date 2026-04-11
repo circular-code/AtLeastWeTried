@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue';
 import { useGateway } from '../../composables/useGateway';
+import { buildHarvestSourceSummaries, formatHarvestDistance, readSubsystemEntries, readSubsystemMaximumMetric, readSubsystemMetric } from '../../lib/harvesting';
+import type { ShipSubsystemEntry } from '../../lib/harvesting';
 import { useGameStore } from '../../stores/game';
 import { useUiStore } from '../../stores/ui';
 import type { ScannerMode, TacticalMode } from '../../types/client';
@@ -39,7 +41,38 @@ const activeOverlayState = computed<Record<string, unknown>>(() => {
 const activeSubsystems = computed(() => readSubsystemEntries(activeOverlayState.value.subsystems ?? activeOverlayState.value.modules));
 const shotFabricator = computed(() => activeSubsystems.value.find((entry) => entry.name === 'Shot Fabricator' && entry.exists) ?? null);
 const shotFabricatorRunning = computed(() => shotFabricator.value ? isShotFabricatorRunning(shotFabricator.value) : false);
-const shotFabricatorMaximumRate = computed(() => shotFabricator.value ? readSubsystemStatMaximumMetric(shotFabricator.value, 'Rate') : null);
+const shotFabricatorMaximumRate = computed(() => shotFabricator.value ? readSubsystemMaximumMetric(shotFabricator.value, 'Rate') : null);
+const resourceMiner = computed(() => activeSubsystems.value.find((entry) => entry.name === 'Resource Miner' && entry.exists) ?? null);
+const resourceMinerRate = computed(() => readSubsystemMetric(resourceMiner.value, 'Rate') ?? 0);
+const resourceMinerMaximumRate = computed(() => readSubsystemMaximumMetric(resourceMiner.value, 'Rate') ?? 0);
+const resourceMinerRunning = computed(() => resourceMinerRate.value > 0.0001);
+const nebulaCollector = computed(() => activeSubsystems.value.find((entry) => entry.name === 'Nebula Collector' && entry.exists) ?? null);
+const nebulaCollectorRate = computed(() => readSubsystemMetric(nebulaCollector.value, 'Rate') ?? 0);
+const nebulaCollectorMaximumRate = computed(() => readSubsystemMaximumMetric(nebulaCollector.value, 'Rate') ?? 0);
+const nebulaCollectorRunning = computed(() => nebulaCollectorRate.value > 0.0001);
+const activePosition = computed(() => {
+  const position = activeOverlayState.value.position;
+  const record = position && typeof position === 'object'
+    ? position as Record<string, unknown>
+    : undefined;
+
+  if (!record) {
+    return null;
+  }
+
+  return {
+    x: readNumeric(record.x) ?? 0,
+    y: readNumeric(record.y) ?? 0,
+  };
+});
+const activeClusterId = computed(() => {
+  const clusterId = readNumeric(activeOverlayState.value.clusterId);
+  return clusterId ?? null;
+});
+const harvestSources = computed(() => buildHarvestSourceSummaries(gameStore.snapshot?.units ?? [], activeClusterId.value, activePosition.value));
+const bestSolarSource = computed(() => harvestSources.value.find((source) => source.labels.some((label) => label.startsWith('Energy') || label.startsWith('Ions') || label.startsWith('Neutrinos'))) ?? null);
+const bestPlanetSource = computed(() => harvestSources.value.find((source) => source.labels.some((label) => label.startsWith('Metal') || label.startsWith('Carbon') || label.startsWith('Hydrogen') || label.startsWith('Silicon'))) ?? null);
+const bestNebulaSource = computed(() => harvestSources.value.find((source) => source.kind === 'nebula') ?? null);
 const isFocusSelectionActive = computed(() => ('isFocusSelectionActive' in uiStore ? !!uiStore.isFocusSelectionActive : false));
 const scannerWidth = computed({
   get: () => uiStore.scannerWidth,
@@ -156,6 +189,59 @@ function toggleShotRegeneration() {
   gateway.setSubsystemMode(controllableId, subsystem.id, 'on');
 }
 
+function toggleResourceMiner() {
+  const controllableId = activeControllableId.value;
+  if (!controllableId || !resourceMiner.value) {
+    return;
+  }
+
+  gateway.setSubsystemMode(controllableId, resourceMiner.value.id, resourceMinerRunning.value ? 'off' : 'on');
+}
+
+function setResourceMinerRate(value: number) {
+  const controllableId = activeControllableId.value;
+  const subsystem = resourceMiner.value;
+  if (!controllableId || !subsystem) {
+    return;
+  }
+
+  const clampedRate = Math.min(Math.max(value, 0), resourceMinerMaximumRate.value);
+  gateway.setSubsystemMode(controllableId, subsystem.id, 'set', clampedRate);
+}
+
+function toggleNebulaCollector() {
+  const controllableId = activeControllableId.value;
+  if (!controllableId || !nebulaCollector.value) {
+    return;
+  }
+
+  gateway.setSubsystemMode(controllableId, nebulaCollector.value.id, nebulaCollectorRunning.value ? 'off' : 'on');
+}
+
+function setNebulaCollectorRate(value: number) {
+  const controllableId = activeControllableId.value;
+  const subsystem = nebulaCollector.value;
+  if (!controllableId || !subsystem) {
+    return;
+  }
+
+  const clampedRate = Math.min(Math.max(value, 0), nebulaCollectorMaximumRate.value);
+  gateway.setSubsystemMode(controllableId, subsystem.id, 'set', clampedRate);
+}
+
+function navigateToHarvestSource(source: { x: number; y: number } | null) {
+  if (!source || !activeControllableId.value) {
+    return;
+  }
+
+  gateway.setNavigationTarget(
+    activeControllableId.value,
+    source.x,
+    source.y,
+    uiStore.navigationThrustPercentage,
+  );
+}
+
 function requestFocusSelectionToggle() {
   if (typeof uiStore.requestToggleFocusSelection === 'function') {
     uiStore.requestToggleFocusSelection();
@@ -168,49 +254,6 @@ function requestFocusSelectionToggle() {
   uiStore.focusSelectionRequestToken = currentToken + 1;
 }
 
-type ShipSubsystemStat = {
-  label: string;
-  value: string;
-};
-
-type ShipSubsystemEntry = {
-  id: string;
-  name: string;
-  exists: boolean;
-  stats: ShipSubsystemStat[];
-};
-
-function readSubsystemEntries(value: unknown): ShipSubsystemEntry[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value
-    .map((entry) => readRecord(entry))
-    .filter((entry): entry is Record<string, unknown> => !!entry)
-    .map((entry) => ({
-      id: readText(entry.id, readText(entry.slot, readText(entry.name, 'subsystem'))),
-      name: humanizeSubsystemName(readText(entry.name, readText(entry.slot, 'Subsystem'))),
-      exists: readBoolean(entry.exists, (readNumeric(entry.tier) ?? 0) > 0),
-      stats: readSubsystemStats(entry.stats),
-    }));
-}
-
-function readSubsystemStats(value: unknown): ShipSubsystemStat[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value
-    .map((entry) => readRecord(entry))
-    .filter((entry): entry is Record<string, unknown> => !!entry)
-    .map((entry) => ({
-      label: readText(entry.label, 'Stat'),
-      value: readText(entry.value),
-    }))
-    .filter((entry) => entry.value.trim().length > 0);
-}
-
 function isShotFabricatorRunning(subsystem: ShipSubsystemEntry) {
   const mode = subsystem.stats.find((entry) => entry.label === 'Mode')?.value.trim().toLowerCase();
   if (mode) {
@@ -218,26 +261,6 @@ function isShotFabricatorRunning(subsystem: ShipSubsystemEntry) {
   }
 
   return false;
-}
-
-function readSubsystemStatMaximumMetric(subsystem: ShipSubsystemEntry, statLabel: string) {
-  const stat = subsystem.stats.find((entry) => entry.label === statLabel);
-  if (!stat) {
-    return null;
-  }
-
-  const metrics = readMetrics(stat.value);
-  if (metrics.length >= 2) {
-    return metrics[1] ?? null;
-  }
-
-  return metrics[0] ?? null;
-}
-
-function readMetrics(value: string) {
-  return Array.from(value.matchAll(/-?\d+(?:[.,]\d+)?/g))
-    .map((match) => Number(match[0].replace(',', '.')))
-    .filter((metric) => Number.isFinite(metric));
 }
 
 function readNumeric(value: unknown): number | null {
@@ -251,34 +274,6 @@ function readNumeric(value: unknown): number | null {
   }
 
   return null;
-}
-
-function readText(value: unknown, fallback = '') {
-  return typeof value === 'string' ? value : fallback;
-}
-
-function readBoolean(value: unknown, fallback = false) {
-  return typeof value === 'boolean' ? value : fallback;
-}
-
-function readRecord(value: unknown) {
-  return typeof value === 'object' && value !== null
-    ? value as Record<string, unknown>
-    : undefined;
-}
-
-function humanizeSubsystemName(value: string) {
-  const normalized = value
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
-    .replace(/[_-]+/g, ' ')
-    .trim();
-
-  if (!normalized) {
-    return 'Unknown subsystem';
-  }
-
-  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 </script>
 
@@ -342,25 +337,99 @@ function humanizeSubsystemName(value: string) {
 
     <span class="dock-sep" aria-hidden="true"></span>
 
-    <div class="dock-group">
-      <button class="dock-btn" type="button" @click="gateway.clearNavigationTarget(activeControllableId)">Clear Nav</button>
-      <button v-if="shotFabricator" class="dock-btn" :class="{ active: shotFabricatorRunning }" type="button" @click="toggleShotRegeneration">
-        {{ shotFabricatorRunning ? 'Stop Regen' : 'Regen Shots' }}
-      </button>
+    <div
+      v-if="resourceMiner || nebulaCollector || bestSolarSource || bestPlanetSource || bestNebulaSource"
+      class="dock-group-stack dock-group-stack--harvest"
+    >
+      <div class="dock-group">
+        <span class="dock-label">Harvest</span>
+        <button
+          v-if="resourceMiner"
+          class="dock-btn"
+          :class="{ active: resourceMinerRunning }"
+          type="button"
+          @click="toggleResourceMiner"
+        >
+          {{ resourceMinerRunning ? 'Stop Mining' : 'Start Mining' }}
+        </button>
+        <button
+          v-if="nebulaCollector"
+          class="dock-btn"
+          :class="{ active: nebulaCollectorRunning }"
+          type="button"
+          @click="toggleNebulaCollector"
+        >
+          {{ nebulaCollectorRunning ? 'Stop Neb' : 'Nebula' }}
+        </button>
+      </div>
+      <div v-if="resourceMiner" class="dock-group dock-group--harvest-metric">
+        <span class="dock-label">Mine</span>
+        <input
+          :value="resourceMinerRate"
+          class="dock-slider"
+          type="range"
+          min="0"
+          :max="resourceMinerMaximumRate"
+          step="0.0001"
+          @input="setResourceMinerRate(Number(($event.target as HTMLInputElement).value))"
+        />
+        <span class="dock-value">{{ resourceMinerRate.toFixed(4) }}</span>
+      </div>
+      <div v-if="nebulaCollector" class="dock-group dock-group--harvest-metric">
+        <span class="dock-label">Neb</span>
+        <input
+          :value="nebulaCollectorRate"
+          class="dock-slider"
+          type="range"
+          min="0"
+          :max="nebulaCollectorMaximumRate"
+          step="0.001"
+          @input="setNebulaCollectorRate(Number(($event.target as HTMLInputElement).value))"
+        />
+        <span class="dock-value">{{ nebulaCollectorRate.toFixed(3) }}</span>
+      </div>
+      <div class="dock-group dock-group--harvest-sources">
+        <button
+          v-if="bestPlanetSource"
+          class="dock-btn dock-btn--chip"
+          type="button"
+          :title="`${bestPlanetSource.labels.join(' · ')} · ${formatHarvestDistance(bestPlanetSource.distance)}`"
+          @click="navigateToHarvestSource(bestPlanetSource)"
+        >
+          Planet
+        </button>
+        <button
+          v-if="bestNebulaSource"
+          class="dock-btn dock-btn--chip"
+          type="button"
+          :title="`${bestNebulaSource.labels.join(' · ')} · ${formatHarvestDistance(bestNebulaSource.distance)}`"
+          @click="navigateToHarvestSource(bestNebulaSource)"
+        >
+          Nebula
+        </button>
+      </div>
     </div>
 
-    <span class="dock-sep" aria-hidden="true"></span>
+    <span v-if="resourceMiner || nebulaCollector || bestSolarSource || bestPlanetSource || bestNebulaSource" class="dock-sep" aria-hidden="true"></span>
 
-    <div class="dock-group dock-group--lock">
-      <button
-        class="dock-btn"
-        :class="{ active: isFocusSelectionActive }"
-        :aria-pressed="isFocusSelectionActive"
-        type="button"
-        @click="requestFocusSelectionToggle()"
-      >
-        Lock onto ship
-      </button>
+    <div class="dock-group-stack dock-group-stack--utility">
+      <div class="dock-group">
+        <button class="dock-btn" type="button" @click="gateway.clearNavigationTarget(activeControllableId)">Clear Nav</button>
+        <button v-if="shotFabricator" class="dock-btn" :class="{ active: shotFabricatorRunning }" type="button" @click="toggleShotRegeneration">
+          {{ shotFabricatorRunning ? 'Stop Regen' : 'Regen Shots' }}
+        </button>
+      </div>
+      <div class="dock-group dock-group--lock">
+        <button
+          class="dock-btn dock-btn--wide"
+          :class="{ active: isFocusSelectionActive }"
+          :aria-pressed="isFocusSelectionActive"
+          type="button"
+          @click="requestFocusSelectionToggle()"
+        >
+          Lock onto ship
+        </button>
+      </div>
     </div>
   </section>
 </template>
