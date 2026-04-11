@@ -206,7 +206,7 @@ public sealed class LiveNavigationProbeTests
                     spawnedShip,
                     (float)follow.Target.X,
                     (float)follow.Target.Y,
-                    thrustPercentage: 1f,
+                    maxSpeedFraction: 1f,
                     resetController: false);
 
                 await Task.Delay(SampleInterval);

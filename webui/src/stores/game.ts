@@ -240,7 +240,7 @@ export const useGameStore = defineStore('game', {
       if (mode === 'target') return 'target';
       return 'off';
     },
-    thrustPercentageFor: (state) => (controllableId: string): number => {
+    maxSpeedFractionFor: (state) => (controllableId: string): number => {
       if (!controllableId) {
         return 1;
       }
@@ -251,7 +251,7 @@ export const useGameStore = defineStore('game', {
         return 1;
       }
 
-      return numberValue(navigationState.thrustPercentage, 1);
+      return numberValue(navigationState.maxSpeedFraction, 1);
     },
     recentActivity: (state) => (lifetimeMs: number) => {
       const now = Date.now();

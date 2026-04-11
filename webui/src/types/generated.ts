@@ -244,7 +244,7 @@ export interface SetNavigationTargetCommandPayloadDto {
   controllableId: string;
   targetX: number;
   targetY: number;
-  thrustPercentage?: number | null;
+  maxSpeedFraction?: number | null;
   direct?: boolean | null;
 }
 

@@ -188,7 +188,7 @@ export function buildSetNavigationTargetCommand(
   controllableId: string,
   targetX: number,
   targetY: number,
-  thrustPercentage?: number,
+  maxSpeedFraction?: number,
   direct?: boolean,
 ): CommandEnvelope<SetNavigationTargetCommandMessage> {
   const commandId = createCommandId();
@@ -201,7 +201,7 @@ export function buildSetNavigationTargetCommand(
         controllableId,
         targetX,
         targetY,
-        thrustPercentage,
+        maxSpeedFraction,
         direct: direct ?? false,
       },
     },

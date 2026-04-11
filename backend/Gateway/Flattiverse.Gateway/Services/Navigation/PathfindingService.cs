@@ -30,7 +30,7 @@ public sealed class PathfindingService : IConnectorEventHandler
 
         public NavigationPoint Goal { get; set; }
 
-        public float ThrustPercentage { get; set; } = 1f;
+        public float MaxSpeedFraction { get; set; } = 1f;
 
         public int PlannedClusterId { get; set; } = int.MinValue;
 
@@ -50,7 +50,7 @@ public sealed class PathfindingService : IConnectorEventHandler
         /// the active goal. If it fails, the active goal and plan are kept.</summary>
         public bool HasPendingGoal { get; set; }
         public NavigationPoint PendingGoal { get; set; }
-        public float PendingThrustPercentage { get; set; } = 1f;
+        public float PendingMaxSpeedFraction { get; set; } = 1f;
 
         /// <summary>Visible pending target for the overlay. Set when a pending goal is queued, cleared after
         /// the remaining overlay cycles have been emitted.</summary>
@@ -114,7 +114,7 @@ public sealed class PathfindingService : IConnectorEventHandler
         };
     }
 
-    public void SetNavigationGoal(ClassicShipControllable ship, float targetX, float targetY, float thrustPercentage)
+    public void SetNavigationGoal(ClassicShipControllable ship, float targetX, float targetY, float maxSpeedFraction)
     {
         TrackShip(ship);
 
@@ -123,12 +123,12 @@ public sealed class PathfindingService : IConnectorEventHandler
 
         // If there is already an active goal with a working plan, queue the new goal as pending.
         // The next tick will attempt to plan toward it; on success it replaces the active goal,
-        // on failure the current navigation keeps running.
+        // on failure the active goal and plan are kept.
         if (state.HasGoal && state.Plan is { Succeeded: true })
         {
             state.HasPendingGoal = true;
             state.PendingGoal = new NavigationPoint(targetX, targetY);
-            state.PendingThrustPercentage = thrustPercentage;
+            state.PendingMaxSpeedFraction = maxSpeedFraction;
             state.ShowPendingTarget = true;
             state.VisiblePendingTarget = new NavigationPoint(targetX, targetY);
             state.PendingTargetCyclesRemaining = -1; // -1 = keep showing until goal is resolved
@@ -136,11 +136,11 @@ public sealed class PathfindingService : IConnectorEventHandler
             if (_enableLogging)
             {
                 _logger.LogInformation(
-                    "[Pathfinding] SetNavigationGoal (pending) controllable={ControllableId} pendingGoal=({GoalX:F1},{GoalY:F1}) thrust={Thrust:F2}",
+                    "[Pathfinding] SetNavigationGoal (pending) controllable={ControllableId} pendingGoal=({GoalX:F1},{GoalY:F1}) maxSpeed={MaxSpeed:F2}",
                     ship.Id,
                     targetX,
                     targetY,
-                    thrustPercentage);
+                    maxSpeedFraction);
             }
 
             return;
@@ -150,7 +150,7 @@ public sealed class PathfindingService : IConnectorEventHandler
         state.HasGoal = true;
         state.HasPendingGoal = false;
         state.Goal = new NavigationPoint(targetX, targetY);
-        state.ThrustPercentage = thrustPercentage;
+        state.MaxSpeedFraction = maxSpeedFraction;
         state.Plan = null;
         state.PlannedClusterId = int.MinValue;
         state.Status = "planning";
@@ -160,11 +160,11 @@ public sealed class PathfindingService : IConnectorEventHandler
         if (_enableLogging)
         {
             _logger.LogInformation(
-                "[Pathfinding] SetNavigationGoal controllable={ControllableId} goal=({GoalX:F1},{GoalY:F1}) thrust={Thrust:F2}",
+                "[Pathfinding] SetNavigationGoal controllable={ControllableId} goal=({GoalX:F1},{GoalY:F1}) maxSpeed={MaxSpeed:F2}",
                 ship.Id,
                 targetX,
                 targetY,
-                thrustPercentage);
+                maxSpeedFraction);
         }
     }
 
@@ -346,7 +346,7 @@ public sealed class PathfindingService : IConnectorEventHandler
                     ship,
                     (float)currentPosition.X,
                     (float)currentPosition.Y,
-                    state.ThrustPercentage,
+                    state.MaxSpeedFraction,
                     resetController: true,
                     remainingPath: null);
                 return;
@@ -389,7 +389,7 @@ public sealed class PathfindingService : IConnectorEventHandler
             {
                 // New goal is reachable – adopt it (pending marker will fade out over the countdown)
                 state.Goal = state.PendingGoal;
-                state.ThrustPercentage = state.PendingThrustPercentage;
+                state.MaxSpeedFraction = state.PendingMaxSpeedFraction;
                 state.Plan = pendingPlan;
                 state.PlannedClusterId = clusterId;
                 state.PlannedStart = currentPosition;
@@ -435,7 +435,7 @@ public sealed class PathfindingService : IConnectorEventHandler
                 ship,
                 (float)state.Goal.X,
                 (float)state.Goal.Y,
-                state.ThrustPercentage,
+                state.MaxSpeedFraction,
                 resetController: false,
                 remainingPath: null);
             return;
@@ -487,7 +487,7 @@ public sealed class PathfindingService : IConnectorEventHandler
                 ship,
                 (float)state.Goal.X,
                 (float)state.Goal.Y,
-                state.ThrustPercentage,
+                state.MaxSpeedFraction,
                 resetController: false,
                 remainingPath: null);
             return;
@@ -502,13 +502,13 @@ public sealed class PathfindingService : IConnectorEventHandler
             ship,
             (float)followResult.Target.X,
             (float)followResult.Target.Y,
-            state.ThrustPercentage,
+            state.MaxSpeedFraction,
             resetController: false,
             remainingPath: remainingPath);
 
         if (_enableLogging)
         {
-            LogTrajectory(ship, currentPosition, followResult.Target, state.ThrustPercentage, remainingPath);
+            LogTrajectory(ship, currentPosition, followResult.Target, state.MaxSpeedFraction, remainingPath);
         }
     }
 
@@ -702,7 +702,7 @@ public sealed class PathfindingService : IConnectorEventHandler
         ClassicShipControllable ship,
         NavigationPoint currentPosition,
         NavigationPoint target,
-        float thrustPercentage,
+        float maxSpeedFraction,
         IReadOnlyList<(double X, double Y)> remainingPath)
     {
         const int trajectoryTicks = 200;
@@ -724,12 +724,12 @@ public sealed class PathfindingService : IConnectorEventHandler
                 gravitySources.Add(new GravitySource(unit.X, unit.Y, unit.Gravity));
         }
 
-        // Compute the engine vector (same as ManeuveringService will)
+        // Compute the engine vector (same as ManeuveringService will — full thrust, speed-limited)
         var (engineX, engineY) = TrajectoryAligner.ComputeEngineVector(
             shipX, shipY, velX, velY,
             target.X, target.Y,
             gravitySources, engineMax,
-            thrustPercentage, defaultSpeedLimit,
+            1.0d, defaultSpeedLimit * Math.Clamp(maxSpeedFraction, 0d, 1d),
             remainingPath);
 
         var engineMag = Math.Sqrt(engineX * engineX + engineY * engineY);

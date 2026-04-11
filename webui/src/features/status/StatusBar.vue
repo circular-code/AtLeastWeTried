@@ -339,7 +339,7 @@ function onNavigateUnit(worldX: number | null, worldY: number | null): void {
     controllableId,
     worldX,
     worldY,
-    uiStore.navigationThrustPercentage,
+    uiStore.navigationMaxSpeedFraction,
   );
 }
 
