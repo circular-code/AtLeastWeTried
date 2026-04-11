@@ -41,6 +41,7 @@ import type {
   ActivityEntry,
   ClickedUnitEntry,
   ControllableOverlayState,
+  OverlayDetailGroup,
   OverlayEntry,
   OverlayMeter,
   OverlayMeterTone,
@@ -450,7 +451,18 @@ function cloneSnapshot(source: GalaxySnapshotDto): GalaxySnapshotDto {
       movementX: optionalNumberValue(unit.movementX),
       movementY: optionalNumberValue(unit.movementY),
       speedLimit: optionalNumberValue(unit.speedLimit),
+      currentThrust: normalizeKnownUnitIntelMetric(unit.currentThrust),
+      maximumThrust: normalizeKnownUnitIntelMetric(unit.maximumThrust),
       predictedTrajectory: normalizeTrajectoryPoints(unit.predictedTrajectory),
+      sunEnergy: normalizeKnownUnitIntelMetric(unit.sunEnergy),
+      sunIons: normalizeKnownUnitIntelMetric(unit.sunIons),
+      sunNeutrinos: normalizeKnownUnitIntelMetric(unit.sunNeutrinos),
+      sunHeat: normalizeKnownUnitIntelMetric(unit.sunHeat),
+      sunDrain: normalizeKnownUnitIntelMetric(unit.sunDrain),
+      planetMetal: normalizeKnownUnitIntelMetric(unit.planetMetal),
+      planetCarbon: normalizeKnownUnitIntelMetric(unit.planetCarbon),
+      planetHydrogen: normalizeKnownUnitIntelMetric(unit.planetHydrogen),
+      planetSilicon: normalizeKnownUnitIntelMetric(unit.planetSilicon),
     })))),
     controllables: source.controllables.map((controllable) => ({ ...controllable })),
   };
@@ -568,6 +580,8 @@ function createUnitFromChanges(unitId: string, changes: Record<string, unknown>)
     radius: 3,
     gravity: 0,
     speedLimit: undefined,
+    currentThrust: undefined,
+    maximumThrust: undefined,
     predictedTrajectory: undefined,
     teamName: undefined,
     sunEnergy: undefined,
@@ -607,19 +621,25 @@ function applyUnitChanges(unit: UnitSnapshotDto, changes: Record<string, unknown
   if (hasRecordKey(changes, 'speedLimit')) {
     unit.speedLimit = optionalNumberValue(changes.speedLimit);
   }
+  if (hasRecordKey(changes, 'currentThrust')) {
+    unit.currentThrust = mergeKnownUnitIntelMetric(unit.currentThrust, changes.currentThrust);
+  }
+  if (hasRecordKey(changes, 'maximumThrust')) {
+    unit.maximumThrust = mergeKnownUnitIntelMetric(unit.maximumThrust, changes.maximumThrust);
+  }
   if (hasRecordKey(changes, 'predictedTrajectory')) {
     unit.predictedTrajectory = normalizeTrajectoryPoints(changes.predictedTrajectory);
   }
   unit.teamName = hasRecordKey(changes, 'teamName') ? optionalStringValue(changes.teamName) : unit.teamName;
-  applyOptionalUnitMetric(unit, 'sunEnergy', changes.sunEnergy);
-  applyOptionalUnitMetric(unit, 'sunIons', changes.sunIons);
-  applyOptionalUnitMetric(unit, 'sunNeutrinos', changes.sunNeutrinos);
-  applyOptionalUnitMetric(unit, 'sunHeat', changes.sunHeat);
-  applyOptionalUnitMetric(unit, 'sunDrain', changes.sunDrain);
-  applyOptionalUnitMetric(unit, 'planetMetal', changes.planetMetal);
-  applyOptionalUnitMetric(unit, 'planetCarbon', changes.planetCarbon);
-  applyOptionalUnitMetric(unit, 'planetHydrogen', changes.planetHydrogen);
-  applyOptionalUnitMetric(unit, 'planetSilicon', changes.planetSilicon);
+  applyKnownUnitIntelMetric(unit, 'sunEnergy', changes.sunEnergy);
+  applyKnownUnitIntelMetric(unit, 'sunIons', changes.sunIons);
+  applyKnownUnitIntelMetric(unit, 'sunNeutrinos', changes.sunNeutrinos);
+  applyKnownUnitIntelMetric(unit, 'sunHeat', changes.sunHeat);
+  applyKnownUnitIntelMetric(unit, 'sunDrain', changes.sunDrain);
+  applyKnownUnitIntelMetric(unit, 'planetMetal', changes.planetMetal);
+  applyKnownUnitIntelMetric(unit, 'planetCarbon', changes.planetCarbon);
+  applyKnownUnitIntelMetric(unit, 'planetHydrogen', changes.planetHydrogen);
+  applyKnownUnitIntelMetric(unit, 'planetSilicon', changes.planetSilicon);
 }
 
 function dedupeUnitsById(units: UnitSnapshotDto[]) {
@@ -707,16 +727,31 @@ function consumePendingCommand(store: GameState, commandId: string) {
   return descriptor;
 }
 
-function applyOptionalUnitMetric(
+function applyKnownUnitIntelMetric(
   unit: UnitSnapshotDto,
-  key: 'sunEnergy' | 'sunIons' | 'sunNeutrinos' | 'sunHeat' | 'sunDrain' | 'planetMetal' | 'planetCarbon' | 'planetHydrogen' | 'planetSilicon',
+  key: 'currentThrust' | 'maximumThrust' | 'sunEnergy' | 'sunIons' | 'sunNeutrinos' | 'sunHeat' | 'sunDrain' | 'planetMetal' | 'planetCarbon' | 'planetHydrogen' | 'planetSilicon',
   value: unknown,
 ) {
   if (value === undefined) {
     return;
   }
 
-  unit[key] = optionalNumberValue(value);
+  unit[key] = mergeKnownUnitIntelMetric(unit[key], value);
+}
+
+function mergeKnownUnitIntelMetric(currentValue: number | null | undefined, incomingValue: unknown) {
+  const normalizedIncoming = normalizeKnownUnitIntelMetric(incomingValue);
+  if (typeof normalizedIncoming === 'number') {
+    return normalizedIncoming;
+  }
+
+  const normalizedCurrent = normalizeKnownUnitIntelMetric(currentValue);
+  return typeof normalizedCurrent === 'number' ? normalizedCurrent : undefined;
+}
+
+function normalizeKnownUnitIntelMetric(value: unknown) {
+  const numericValue = optionalNumberValue(value);
+  return typeof numericValue === 'number' && numericValue > 0 ? numericValue : undefined;
 }
 
 function normalizeTrajectoryPoints(value: unknown): TrajectoryPointDto[] | undefined {
@@ -920,14 +955,26 @@ function buildClickedUnitEntry(
 }
 
 function buildDetailGroups(unit: UnitSnapshotDto | undefined | null, kindHint?: string) {
-  const groups = [] as Array<{ title: string; tone: 'solar' | 'hazard'; stats: OverlayStat[] }>;
+  const groups = [] as OverlayDetailGroup[];
   const normalizedKind = (kindHint ?? unit?.kind ?? '').toLowerCase();
 
-  if (hasSunTelemetry(unit)) {
+  if (hasPropulsionTelemetry(unit) || isShipUnitKind(normalizedKind)) {
+    groups.push({
+      title: 'Propulsion',
+      tone: 'tech',
+      stats: [
+        { label: 'Current Thrust', value: formatOptionalMetric(unit?.currentThrust) },
+        { label: 'Maximum Thrust', value: formatOptionalMetric(unit?.maximumThrust) },
+        { label: 'Drive Load', value: formatOptionalRatio(unit?.currentThrust, unit?.maximumThrust) },
+      ],
+    });
+  }
+
+  if (hasSunTelemetry(unit) || normalizedKind === 'sun') {
     groups.push(
       {
         title: 'Stellar Output',
-        tone: 'solar' as const,
+        tone: 'solar',
         stats: [
           { label: 'Photon Flux', value: formatOptionalMetric(unit?.sunEnergy) },
           { label: 'Plasma Wind', value: formatOptionalMetric(unit?.sunIons) },
@@ -936,10 +983,10 @@ function buildDetailGroups(unit: UnitSnapshotDto | undefined | null, kindHint?: 
       },
       {
         title: 'Environmental Hazard',
-        tone: 'hazard' as const,
+        tone: 'hazard',
         stats: [
-          { label: 'Heat', value: `${formatMetric(unit?.sunHeat ?? 0)} · ${formatMetric((unit?.sunHeat ?? 0) * 15)} energy/tick` },
-          { label: 'Radiation', value: `${formatMetric(unit?.sunDrain ?? 0)} · ${formatMetric((unit?.sunDrain ?? 0) * 0.125)} hull/tick` },
+          { label: 'Heat', value: formatOptionalTelemetryRateMetric(unit?.sunHeat, 15, 'energy/tick') },
+          { label: 'Radiation', value: formatOptionalTelemetryRateMetric(unit?.sunDrain, 0.125, 'hull/tick') },
         ],
       },
     );
@@ -948,7 +995,42 @@ function buildDetailGroups(unit: UnitSnapshotDto | undefined | null, kindHint?: 
   if (hasPlanetTelemetry(unit) || normalizedKind === 'planet') {
     groups.push({
       title: 'Planetary Composition',
-      tone: 'solar' as const,
+      tone: 'solar',
+      stats: [
+        { label: 'Metal', value: formatOptionalMetric(unit?.planetMetal) },
+        { label: 'Carbon', value: formatOptionalMetric(unit?.planetCarbon) },
+        { label: 'Hydrogen', value: formatOptionalMetric(unit?.planetHydrogen) },
+        { label: 'Silicon', value: formatOptionalMetric(unit?.planetSilicon) },
+      ],
+    });
+  }
+
+  if (false) {
+    groups.push(
+      {
+        title: 'Stellar Output',
+        tone: 'solar',
+        stats: [
+          { label: 'Photon Flux', value: formatOptionalMetric(unit?.sunEnergy) },
+          { label: 'Plasma Wind', value: formatOptionalMetric(unit?.sunIons) },
+          { label: 'Neutrino Flux', value: formatOptionalMetric(unit?.sunNeutrinos) },
+        ],
+      },
+      {
+        title: 'Environmental Hazard',
+        tone: 'hazard',
+        stats: [
+          { label: 'Heat', value: `${formatMetric(unit?.sunHeat ?? 0)} · ${formatMetric((unit?.sunHeat ?? 0) * 15)} energy/tick` },
+          { label: 'Radiation', value: `${formatMetric(unit?.sunDrain ?? 0)} · ${formatMetric((unit?.sunDrain ?? 0) * 0.125)} hull/tick` },
+        ],
+      },
+    );
+  }
+
+  if (false) {
+    groups.push({
+      title: 'Planetary Composition',
+      tone: 'solar',
       stats: [
         { label: 'Metal', value: formatPlanetMetric(unit?.planetMetal) },
         { label: 'Carbon', value: formatPlanetMetric(unit?.planetCarbon) },
@@ -969,12 +1051,44 @@ function hasPlanetTelemetry(unit: UnitSnapshotDto | null | undefined) {
   return !!unit && [unit.planetMetal, unit.planetCarbon, unit.planetHydrogen, unit.planetSilicon].some((value) => typeof value === 'number');
 }
 
+function hasPropulsionTelemetry(unit: UnitSnapshotDto | null | undefined) {
+  return !!unit && [unit.currentThrust, unit.maximumThrust].some((value) => typeof value === 'number');
+}
+
+function isShipUnitKind(kind: string) {
+  return kind === 'classic-ship' || kind === 'modern-ship';
+}
+
 function formatOptionalMetric(value: number | null | undefined) {
   return typeof value === 'number' ? formatMetric(value) : 'Unknown';
 }
 
 function formatPlanetMetric(value: number | null | undefined) {
-  return formatMetric(typeof value === 'number' ? value : 0);
+  return formatOptionalMetric(value);
+}
+
+function formatOptionalRatio(current: number | null | undefined, maximum: number | null | undefined) {
+  if (typeof current !== 'number' || typeof maximum !== 'number' || maximum <= 0) {
+    return 'Unknown';
+  }
+
+  return `${Math.round(clamp01(current / maximum) * 100)}%`;
+}
+
+function formatOptionalRateMetric(value: number | null | undefined, multiplier: number, suffix: string) {
+  if (typeof value !== 'number') {
+    return 'Unknown';
+  }
+
+  return `${formatMetric(value)} Â· ${formatMetric(value * multiplier)} ${suffix}`;
+}
+
+function formatOptionalTelemetryRateMetric(value: number | null | undefined, multiplier: number, suffix: string) {
+  if (typeof value !== 'number') {
+    return 'Unknown';
+  }
+
+  return `${formatMetric(value)} / ${formatMetric(value * multiplier)} ${suffix}`;
 }
 
 function deriveScannerMode(scannerState: Record<string, unknown> | undefined): ScannerMode {

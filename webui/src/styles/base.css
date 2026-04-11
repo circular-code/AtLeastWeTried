@@ -2351,6 +2351,7 @@ h2 {
   background: linear-gradient(180deg, rgba(239, 191, 132, 0.1), rgba(255, 255, 255, 0.025));
 }
 
+.selection-detail-group.tone-solar h3,
 .selection-detail-group.tone-solar h4 {
   color: #ffd79c;
 }
@@ -2360,8 +2361,19 @@ h2 {
   background: linear-gradient(180deg, rgba(234, 138, 98, 0.08), rgba(255, 255, 255, 0.02));
 }
 
+.selection-detail-group.tone-hazard h3,
 .selection-detail-group.tone-hazard h4 {
   color: #ffb299;
+}
+
+.selection-detail-group.tone-tech {
+  border-color: rgba(124, 191, 255, 0.2);
+  background: linear-gradient(180deg, rgba(124, 191, 255, 0.08), rgba(255, 255, 255, 0.02));
+}
+
+.selection-detail-group.tone-tech h3,
+.selection-detail-group.tone-tech h4 {
+  color: #b5ddff;
 }
 
 .selection-detail-grid {

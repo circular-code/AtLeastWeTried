@@ -1,4 +1,34 @@
+using System.Text.Json.Serialization;
+
 namespace Flattiverse.Gateway.Protocol.Dtos;
+
+internal enum PropulsionPredictionMode
+{
+    None,
+    DirectVector,
+    DirectionalThrusters
+}
+
+internal sealed class PropulsionThrusterSnapshotDto
+{
+    public float WorldAngleDegrees { get; set; }
+    public float CurrentThrust { get; set; }
+    public float TargetThrust { get; set; }
+    public float MaximumThrust { get; set; }
+    public float MaximumThrustChangePerTick { get; set; }
+}
+
+internal sealed class PropulsionPredictionSnapshotDto
+{
+    public PropulsionPredictionMode Mode { get; set; }
+    public float CurrentX { get; set; }
+    public float CurrentY { get; set; }
+    public float TargetX { get; set; }
+    public float TargetY { get; set; }
+    public float MaximumMagnitude { get; set; }
+    public float MaximumChangePerTick { get; set; }
+    public List<PropulsionThrusterSnapshotDto>? Thrusters { get; set; }
+}
 
 public sealed class TeamSnapshotDto
 {
@@ -47,7 +77,11 @@ public sealed class UnitSnapshotDto
     /// </summary>
     public float Gravity { get; set; }
     public float? SpeedLimit { get; set; }
+    public float? CurrentThrust { get; set; }
+    public float? MaximumThrust { get; set; }
     public List<TrajectoryPointDto>? PredictedTrajectory { get; set; }
+    [JsonIgnore]
+    internal PropulsionPredictionSnapshotDto? PropulsionPrediction { get; set; }
     public string? TeamName { get; set; }
     public float? SunEnergy { get; set; }
     public float? SunIons { get; set; }

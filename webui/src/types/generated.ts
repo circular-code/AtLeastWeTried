@@ -301,6 +301,8 @@ export interface UnitSnapshotDto {
   /** Connector gravity; higher values imply larger navigation standoff. */
   gravity?: number;
   speedLimit?: number | null;
+  currentThrust?: number | null;
+  maximumThrust?: number | null;
   predictedTrajectory?: TrajectoryPointDto[] | null;
   teamName?: string;
   sunEnergy?: number | null;

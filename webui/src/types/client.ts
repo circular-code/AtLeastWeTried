@@ -66,7 +66,7 @@ export interface OverlayStat {
 
 export interface OverlayDetailGroup {
   title: string;
-  tone: 'solar' | 'hazard';
+  tone: 'solar' | 'hazard' | 'tech';
   stats: OverlayStat[];
 }
 
