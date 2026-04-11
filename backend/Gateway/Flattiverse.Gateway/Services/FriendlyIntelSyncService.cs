@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Flattiverse.Connector.Events;
 using Flattiverse.Connector.GalaxyHierarchy;
+using Flattiverse.Gateway.Connector;
 using Flattiverse.Gateway.Protocol.Dtos;
 using Microsoft.Extensions.Logging;
 
@@ -115,7 +116,7 @@ public sealed class FriendlyIntelSyncService
             if (!LocalTeamSessionRegistry.IsLeader(context.Value.TeamScopeKey, _sessionId))
                 return;
 
-            var localUnits = _mappingService.BuildLocalGalaxyUnitSnapshots();
+            var localUnits = BuildShareableLocalUnits(context.Value);
             var recipients = ResolveRemoteRecipients(context.Value).ToList();
             if (recipients.Count == 0)
                 return;
@@ -329,6 +330,102 @@ public sealed class FriendlyIntelSyncService
     {
         return player.Id != context.LocalPlayerId &&
                string.Equals(player.Team.Name, context.TeamName, StringComparison.Ordinal);
+    }
+
+    private List<UnitSnapshotDto> BuildShareableLocalUnits(SyncContext context)
+    {
+        var currentTick = _mappingService.TryGetCurrentTickForCurrentScope(out var tick) ? tick : 0u;
+        var ownedUnits = new List<UnitSnapshotDto>();
+        foreach (var controllable in context.Galaxy.Controllables)
+        {
+            var snapshot = TryMapOwnedControllable(context, controllable, currentTick);
+            if (snapshot is null)
+                continue;
+
+            ownedUnits.Add(snapshot);
+        }
+
+        return MergeShareableUnits(_mappingService.BuildLocalGalaxyUnitSnapshots(), ownedUnits);
+    }
+
+    internal static List<UnitSnapshotDto> MergeShareableUnits(
+        IReadOnlyList<UnitSnapshotDto> mappedUnits,
+        IReadOnlyList<UnitSnapshotDto> ownedUnits)
+    {
+        var unitsById = new Dictionary<string, UnitSnapshotDto>(StringComparer.Ordinal);
+        foreach (var unit in mappedUnits)
+            unitsById[unit.UnitId] = unit;
+
+        foreach (var unit in ownedUnits)
+            unitsById[unit.UnitId] = unit;
+
+        return unitsById.Values.ToList();
+    }
+
+    private static UnitSnapshotDto? TryMapOwnedControllable(SyncContext context, Controllable? controllable, uint currentTick)
+    {
+        if (controllable is null || !controllable.Alive || !controllable.Active)
+            return null;
+
+        return new UnitSnapshotDto
+        {
+            UnitId = UnitIdentity.BuildControllableId(context.LocalPlayerId, controllable.Id),
+            ClusterId = controllable.Cluster?.Id ?? 0,
+            Kind = MappingService.MapUnitKind(controllable.Kind),
+            FullStateKnown = true,
+            IsStatic = false,
+            IsSolid = true,
+            IsSeen = true,
+            LastSeenTick = currentTick,
+            X = controllable.Position.X,
+            Y = controllable.Position.Y,
+            MovementX = controllable.Movement.X,
+            MovementY = controllable.Movement.Y,
+            Angle = controllable.Angle,
+            Radius = controllable.Size,
+            Gravity = controllable.Gravity,
+            SpeedLimit = controllable.SpeedLimit > 0f ? controllable.SpeedLimit : null,
+            CurrentThrust = ResolveCurrentThrust(controllable),
+            MaximumThrust = ResolveMaximumThrust(controllable),
+            TeamName = context.TeamName
+        };
+    }
+
+    private static float? ResolveCurrentThrust(Controllable controllable)
+    {
+        return controllable switch
+        {
+            ClassicShipControllable classic when classic.Engine.Exists => classic.Engine.Current.Length,
+            ModernShipControllable modern => SumModernShipThrust(modern, current: true),
+            _ => null
+        };
+    }
+
+    private static float? ResolveMaximumThrust(Controllable controllable)
+    {
+        return controllable switch
+        {
+            ClassicShipControllable classic when classic.Engine.Exists && classic.Engine.Maximum > 0f => classic.Engine.Maximum,
+            ModernShipControllable modern => SumModernShipThrust(modern, current: false),
+            _ => null
+        };
+    }
+
+    private static float? SumModernShipThrust(ModernShipControllable ship, bool current)
+    {
+        var total = 0f;
+        var hasEngine = false;
+
+        foreach (var engine in ship.Engines)
+        {
+            if (!engine.Exists)
+                continue;
+
+            hasEngine = true;
+            total += current ? MathF.Abs(engine.CurrentThrust) : MathF.Max(0f, engine.MaximumThrust);
+        }
+
+        return hasEngine ? total : null;
     }
 
     private List<IntelChange> BuildPendingChanges(

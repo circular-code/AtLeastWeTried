@@ -94,4 +94,70 @@ public sealed class FriendlyIntelSyncServiceTests
             LocalTeamSessionRegistry.RemoveSession(secondSessionId);
         }
     }
+
+    [Fact]
+    public void Shareable_unit_merge_prefers_owned_snapshot_without_duplication()
+    {
+        var mappedSnapshot = new UnitSnapshotDto
+        {
+            UnitId = "p4-c2",
+            ClusterId = 5,
+            Kind = "classic-ship",
+            FullStateKnown = true,
+            IsStatic = false,
+            IsSolid = true,
+            IsSeen = true,
+            LastSeenTick = 10,
+            X = 12f,
+            Y = 18f,
+            Radius = 3f,
+            Gravity = 0.1f
+        };
+
+        var asteroidSnapshot = new UnitSnapshotDto
+        {
+            UnitId = "cluster/5/unit/asteroid-1",
+            ClusterId = 5,
+            Kind = "meteoroid",
+            FullStateKnown = true,
+            IsStatic = true,
+            IsSolid = true,
+            IsSeen = true,
+            LastSeenTick = 10,
+            X = 40f,
+            Y = 41f,
+            Radius = 7f,
+            Gravity = 0.5f
+        };
+
+        var ownedSnapshot = new UnitSnapshotDto
+        {
+            UnitId = "p4-c2",
+            ClusterId = 7,
+            Kind = "classic-ship",
+            FullStateKnown = true,
+            IsStatic = false,
+            IsSolid = true,
+            IsSeen = true,
+            LastSeenTick = 42,
+            X = 99f,
+            Y = -4f,
+            Radius = 3f,
+            Gravity = 0.1f,
+            TeamName = "Blue"
+        };
+
+        var merged = FriendlyIntelSyncService.MergeShareableUnits(
+            new[] { mappedSnapshot, asteroidSnapshot },
+            new[] { ownedSnapshot });
+
+        Assert.Equal(2, merged.Count);
+
+        var sharedOwned = Assert.Single(merged.Where(unit => unit.UnitId == "p4-c2"));
+        Assert.Equal(7, sharedOwned.ClusterId);
+        Assert.Equal(99f, sharedOwned.X);
+        Assert.Equal(-4f, sharedOwned.Y);
+
+        Assert.Contains(merged, unit => unit.UnitId == asteroidSnapshot.UnitId);
+    }
 }
