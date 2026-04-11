@@ -8,7 +8,7 @@ internal static class CircularObstacleExtractor
     /// Extra world-space clearance (beyond ship radius + base margin) per unit of connector gravity.
     /// Typical stellar gravity is ~1e-3..1e-2, giving tens to hundreds of units of standoff.
     /// </summary>
-    private const double ClearancePerGravity = 200d;
+    private const double ClearancePerGravity = 100d;
 
     private static readonly HashSet<string> BlockingKinds = new(StringComparer.OrdinalIgnoreCase)
     {
