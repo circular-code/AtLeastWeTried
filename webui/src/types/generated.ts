@@ -282,6 +282,19 @@ export interface TrajectoryPointDto {
   y: number;
 }
 
+export interface ScannedSubsystemStatDto {
+  label: string;
+  value: string;
+}
+
+export interface ScannedSubsystemDto {
+  id: string;
+  name: string;
+  exists: boolean;
+  status: string;
+  stats: ScannedSubsystemStatDto[];
+}
+
 export interface UnitSnapshotDto {
   unitId: string;
   clusterId: number;
@@ -305,6 +318,7 @@ export interface UnitSnapshotDto {
   maximumThrust?: number | null;
   predictedTrajectory?: TrajectoryPointDto[] | null;
   teamName?: string;
+  scannedSubsystems?: ScannedSubsystemDto[] | null;
   sunEnergy?: number | null;
   sunIons?: number | null;
   sunNeutrinos?: number | null;

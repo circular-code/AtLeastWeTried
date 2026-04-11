@@ -207,7 +207,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             });
         }
 
-        dto.Units = _mappingService.BuildUnitSnapshots();
+        dto.Units = _mappingService.BuildGalaxyUnitSnapshots();
 
         foreach (var player in galaxy.Players)
         {
@@ -1548,8 +1548,17 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                     if (string.IsNullOrWhiteSpace(targetUnitId))
                         return Rejected(commandId, "missing_target", "targetId is required for scanner target mode.");
 
-                    if (ResolveScanTarget(targetUnitId) is null)
+                    var resolvedTarget = ResolveScanTarget(classic, targetUnitId);
+                    if (resolvedTarget is null)
                         return Rejected(commandId, "target_unresolved", "Targeted scan requires a resolvable target position.");
+
+                    var shipClusterId = classic.Cluster?.Id ?? 0;
+                    if (shipClusterId > 0 &&
+                        resolvedTarget.Value.ClusterId > 0 &&
+                        resolvedTarget.Value.ClusterId != shipClusterId)
+                    {
+                        return Rejected(commandId, "target_wrong_cluster", "Targeted scan requires a target in the same cluster.");
+                    }
 
                     float? width = null;
                     if (payload?.TryGetProperty("width", out var widthEl) == true &&
@@ -1971,13 +1980,23 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return int.TryParse(value.AsSpan(separatorIndex + 2), out controllableId);
     }
 
-    private ScanningService.TargetSnapshot? ResolveScanTarget(string targetUnitId)
+    private ScanningService.TargetSnapshot? ResolveScanTarget(ClassicShipControllable ship, string targetUnitId)
     {
         if (string.IsNullOrWhiteSpace(targetUnitId))
             return null;
 
+        var shipClusterId = ship.Cluster?.Id ?? 0;
         _mappingService.TryGetCurrentTickForCurrentScope(out var currentTick);
-        if (_mappingService.TryGetUnitSnapshot(targetUnitId, out var unitSnapshot) && unitSnapshot is not null)
+        UnitSnapshotDto? unitSnapshot;
+        var resolvedFromCluster = shipClusterId > 0
+            ? _mappingService.TryGetUnitSnapshot(targetUnitId, shipClusterId, out unitSnapshot)
+            : _mappingService.TryGetUnitSnapshot(targetUnitId, out unitSnapshot);
+        var resolvedFromGalaxy = !resolvedFromCluster &&
+            _mappingService.TryGetGalaxyUnitSnapshot(targetUnitId, out unitSnapshot);
+        var resolvedFromRecent = !resolvedFromCluster &&
+            !resolvedFromGalaxy &&
+            _mappingService.TryGetRecentGalaxyUnitSnapshot(targetUnitId, shipClusterId, out unitSnapshot);
+        if ((resolvedFromCluster || resolvedFromGalaxy || resolvedFromRecent) && unitSnapshot is not null)
         {
             var predictedTrajectory = unitSnapshot.PredictedTrajectory?
                 .Select(point => new ScanningService.TargetPathPoint(point.X, point.Y))
@@ -1995,7 +2014,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 currentTick,
                 unitSnapshot.CurrentThrust,
                 unitSnapshot.MaximumThrust,
-                predictedTrajectory);
+                predictedTrajectory,
+                unitSnapshot.ClusterId);
         }
 
         var galaxy = Galaxy;
@@ -2004,17 +2024,22 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
         if (TryParseControllableId(targetUnitId, out var targetPlayerId, out var targetControllableId))
         {
-            if (TryResolveLiveControllableTarget(targetPlayerId, targetControllableId, currentTick, out var liveTarget))
+            if (TryResolveLiveControllableTarget(shipClusterId, targetPlayerId, targetControllableId, currentTick, out var liveTarget))
                 return liveTarget;
 
-            if (TryResolveTeamOverlayTarget(targetUnitId, currentTick, out var teammateTarget))
+            if (TryResolveTeamOverlayTarget(shipClusterId, targetUnitId, currentTick, out var teammateTarget))
                 return teammateTarget;
         }
 
         return null;
     }
 
-    private bool TryResolveLiveControllableTarget(int targetPlayerId, int targetControllableId, uint currentTick, out ScanningService.TargetSnapshot target)
+    private bool TryResolveLiveControllableTarget(
+        int shipClusterId,
+        int targetPlayerId,
+        int targetControllableId,
+        uint currentTick,
+        out ScanningService.TargetSnapshot target)
     {
         target = default;
         var galaxy = Galaxy;
@@ -2023,7 +2048,10 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
         if (targetPlayerId == galaxy.Player.Id)
         {
-            var controllable = galaxy.Controllables.FirstOrDefault(item => item is not null && item.Id == targetControllableId);
+            var controllable = galaxy.Controllables.FirstOrDefault(item =>
+                item is not null &&
+                item.Id == targetControllableId &&
+                (shipClusterId <= 0 || item.Cluster?.Id == shipClusterId));
             if (controllable is not null)
             {
                 target = new ScanningService.TargetSnapshot(
@@ -2037,14 +2065,15 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                     CurrentTick: currentTick,
                     CurrentThrust: ResolveCurrentThrust(controllable),
                     MaximumThrust: ResolveMaximumThrust(controllable),
-                    PredictedTrajectory: null);
+                    PredictedTrajectory: null,
+                    ClusterId: controllable.Cluster?.Id ?? 0);
                 return true;
             }
         }
 
         foreach (var cluster in galaxy.Clusters)
         {
-            if (cluster is null)
+            if (cluster is null || (shipClusterId > 0 && cluster.Id != shipClusterId))
                 continue;
 
             foreach (var unit in cluster.Units)
@@ -2067,7 +2096,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                     CurrentTick: currentTick,
                     CurrentThrust: null,
                     MaximumThrust: null,
-                    PredictedTrajectory: null);
+                    PredictedTrajectory: null,
+                    ClusterId: cluster.Id);
                 return true;
             }
         }
@@ -2075,7 +2105,11 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return false;
     }
 
-    private bool TryResolveTeamOverlayTarget(string targetUnitId, uint currentTick, out ScanningService.TargetSnapshot target)
+    private bool TryResolveTeamOverlayTarget(
+        int shipClusterId,
+        string targetUnitId,
+        uint currentTick,
+        out ScanningService.TargetSnapshot target)
     {
         target = default;
         var teamScopeKey = BuildTeamOverlayScopeKey();
@@ -2088,6 +2122,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             var snapshot = teammateSnapshots[index];
             if (!string.Equals(snapshot.ControllableId, targetUnitId, StringComparison.Ordinal) ||
                 snapshot.Changes is null ||
+                (shipClusterId > 0 && (!TryGetInt32(snapshot.Changes, "clusterId", out var overlayClusterId) || overlayClusterId != shipClusterId)) ||
                 !TryBuildOverlayTargetSnapshot(snapshot.Changes, currentTick, out target))
             {
                 continue;
@@ -2120,6 +2155,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
         float? currentThrust = null;
         float? maximumThrust = null;
+        var clusterId = 0;
+        TryGetInt32(changes, "clusterId", out clusterId);
         if (TryGetNestedMap(changes, "engine", out var engine))
         {
             if (TryGetSingle(engine, "currentX", out var currentX) &&
@@ -2143,7 +2180,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             CurrentTick: currentTick,
             CurrentThrust: currentThrust,
             MaximumThrust: maximumThrust,
-            PredictedTrajectory: null);
+            PredictedTrajectory: null,
+            ClusterId: clusterId);
         return true;
     }
 
@@ -2190,6 +2228,40 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 return true;
             default:
                 value = 0f;
+                return false;
+        }
+    }
+
+    private static bool TryGetInt32(IDictionary<string, object?> source, string key, out int value)
+    {
+        value = 0;
+        if (!source.TryGetValue(key, out var rawValue) || rawValue is null)
+            return false;
+
+        switch (rawValue)
+        {
+            case int intValue:
+                value = intValue;
+                return true;
+            case long longValue when longValue is >= int.MinValue and <= int.MaxValue:
+                value = (int)longValue;
+                return true;
+            case short shortValue:
+                value = shortValue;
+                return true;
+            case byte byteValue:
+                value = byteValue;
+                return true;
+            case float floatValue when float.IsFinite(floatValue) && MathF.Abs(floatValue % 1f) < 0.0001f:
+                value = (int)floatValue;
+                return true;
+            case double doubleValue when double.IsFinite(doubleValue) && Math.Abs(doubleValue % 1d) < 0.0001d &&
+                                         doubleValue >= int.MinValue && doubleValue <= int.MaxValue:
+                value = (int)doubleValue;
+                return true;
+            case string stringValue:
+                return int.TryParse(stringValue, out value);
+            default:
                 return false;
         }
     }
@@ -2272,7 +2344,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         if (connections.Count == 0) return;
 
         // Collect and broadcast pending world deltas
-        var worldDeltas = _mappingService.CollectPendingDeltas();
+        var worldDeltas = _mappingService.CollectPendingGalaxyDeltas();
         BroadcastWorldDelta(connections, worldDeltas);
 
         // Broadcast owner overlay

@@ -53,6 +53,21 @@ public sealed class TrajectoryPointDto
     public float Y { get; set; }
 }
 
+public sealed class ScannedSubsystemStatDto
+{
+    public string Label { get; set; } = "";
+    public string Value { get; set; } = "";
+}
+
+public sealed class ScannedSubsystemDto
+{
+    public string Id { get; set; } = "";
+    public string Name { get; set; } = "";
+    public bool Exists { get; set; }
+    public string Status { get; set; } = "";
+    public List<ScannedSubsystemStatDto> Stats { get; set; } = new();
+}
+
 public sealed class UnitSnapshotDto
 {
     public string UnitId { get; set; } = "";
@@ -83,6 +98,7 @@ public sealed class UnitSnapshotDto
     [JsonIgnore]
     internal PropulsionPredictionSnapshotDto? PropulsionPrediction { get; set; }
     public string? TeamName { get; set; }
+    public List<ScannedSubsystemDto>? ScannedSubsystems { get; set; }
     public float? SunEnergy { get; set; }
     public float? SunIons { get; set; }
     public float? SunNeutrinos { get; set; }

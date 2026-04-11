@@ -20,6 +20,12 @@ import {
   optionalStringValue,
   stringValue,
 } from '../lib/validation';
+import {
+  readSubsystemEntries,
+  readSubsystemMaximumMetric,
+  readSubsystemMetric,
+  type ShipSubsystemEntry,
+} from '../lib/harvesting';
 import { isPlayerShipUnitKind, isShortLivedTransientUnitKind } from '../lib/unitKinds';
 import type { WorldSceneSelection } from '../renderer/WorldScene';
 import type {
@@ -598,6 +604,7 @@ function createUnitFromChanges(unitId: string, changes: Record<string, unknown>)
     maximumThrust: undefined,
     predictedTrajectory: undefined,
     teamName: undefined,
+    scannedSubsystems: undefined,
     sunEnergy: undefined,
     sunIons: undefined,
     sunNeutrinos: undefined,
@@ -647,6 +654,9 @@ function applyUnitChanges(unit: UnitSnapshotDto, changes: Record<string, unknown
     unit.predictedTrajectory = normalizePredictedTrajectory(unit.kind, changes.predictedTrajectory);
   }
   unit.teamName = hasRecordKey(changes, 'teamName') ? optionalStringValue(changes.teamName) : unit.teamName;
+  if (hasRecordKey(changes, 'scannedSubsystems')) {
+    unit.scannedSubsystems = Array.isArray(changes.scannedSubsystems) ? (changes.scannedSubsystems as typeof unit.scannedSubsystems) : undefined;
+  }
   applyKnownUnitIntelMetric(unit, 'sunEnergy', changes.sunEnergy);
   applyKnownUnitIntelMetric(unit, 'sunIons', changes.sunIons);
   applyKnownUnitIntelMetric(unit, 'sunNeutrinos', changes.sunNeutrinos);
@@ -906,6 +916,7 @@ function buildClickedUnitEntry(
   const unitY = publicUnit?.y ?? numberValue(positionState?.y, -selection.worldY);
   const angle = publicUnit?.angle ?? numberValue(positionState?.angle, 0);
   const kind = publicUnit?.kind ?? stringValue(overlayState.kind, selection.kind ?? 'unknown');
+  const scannedSubsystems = readScannedSubsystems(publicUnit);
   const badges = [] as ClickedUnitEntry['badges'];
 
   if (publicControllable) {
@@ -956,12 +967,27 @@ function buildClickedUnitEntry(
   const meters: OverlayMeter[] = [];
   if (hullState || publicControllable) {
     meters.push(buildOverlayMeter('Hull', hullState, 'hull', alive ? 'offline' : 'destroyed'));
+  } else {
+    const meter = buildScannedSubsystemMeter('Hull', findScannedSubsystem(scannedSubsystems, 'Hull'), 'Integrity', 'hull', alive ? 'offline' : 'destroyed');
+    if (meter) {
+      meters.push(meter);
+    }
   }
   if (shieldState || publicControllable) {
     meters.push(buildOverlayMeter('Shield', shieldState, 'shield', booleanValue(shieldState?.active, false) ? 'charging' : 'offline'));
+  } else {
+    const meter = buildScannedSubsystemMeter('Shield', findScannedSubsystem(scannedSubsystems, 'Shield'), 'Integrity', 'shield', 'offline');
+    if (meter) {
+      meters.push(meter);
+    }
   }
   if (batteryState || publicControllable) {
     meters.push(buildOverlayMeter('Battery', batteryState, 'energy', 'offline'));
+  } else {
+    const meter = buildScannedSubsystemMeter('Battery', findScannedSubsystem(scannedSubsystems, 'Energy Battery'), 'Charge', 'energy', 'offline');
+    if (meter) {
+      meters.push(meter);
+    }
   }
 
   return {
@@ -981,8 +1007,12 @@ function buildClickedUnitEntry(
 function buildDetailGroups(unit: UnitSnapshotDto | undefined | null, kindHint?: string) {
   const groups = [] as OverlayDetailGroup[];
   const normalizedKind = (kindHint ?? unit?.kind ?? '').toLowerCase();
+  const scannedSubsystemGroups = buildScannedSubsystemGroups(unit);
+  const hasScannedPropulsion = scannedSubsystemGroups.some((group) => group.title.toLowerCase().includes('engine'));
 
-  if (hasPropulsionTelemetry(unit) || isShipUnitKind(normalizedKind)) {
+  groups.push(...scannedSubsystemGroups);
+
+  if ((hasPropulsionTelemetry(unit) || isShipUnitKind(normalizedKind)) && !hasScannedPropulsion) {
     groups.push({
       title: 'Propulsion',
       tone: 'tech',
@@ -1064,6 +1094,40 @@ function hasPlanetTelemetry(unit: UnitSnapshotDto | null | undefined) {
 
 function hasPropulsionTelemetry(unit: UnitSnapshotDto | null | undefined) {
   return !!unit && [unit.currentThrust, unit.maximumThrust].some((value) => typeof value === 'number');
+}
+
+function readScannedSubsystems(unit: UnitSnapshotDto | null | undefined) {
+  return readSubsystemEntries(unit?.scannedSubsystems);
+}
+
+function findScannedSubsystem(subsystems: ShipSubsystemEntry[], name: string) {
+  return subsystems.find((subsystem) => subsystem.name === name);
+}
+
+function buildScannedSubsystemMeter(
+  label: string,
+  subsystem: ShipSubsystemEntry | undefined,
+  statLabel: string,
+  tone: OverlayMeterTone,
+  emptyLabel: string,
+) {
+  const current = readSubsystemMetric(subsystem, statLabel);
+  const maximum = readSubsystemMaximumMetric(subsystem, statLabel);
+  if (current === null || maximum === null) {
+    return null;
+  }
+
+  return buildMeterFromValues(label, current, maximum, tone, emptyLabel);
+}
+
+function buildScannedSubsystemGroups(unit: UnitSnapshotDto | null | undefined) {
+  return readScannedSubsystems(unit)
+    .filter((subsystem) => subsystem.exists && subsystem.stats.length > 0)
+    .map((subsystem) => ({
+      title: subsystem.name,
+      tone: 'tech' as const,
+      stats: subsystem.stats.map((stat) => ({ label: stat.label, value: stat.value })),
+    }));
 }
 
 function isShipUnitKind(kind: string) {
@@ -1217,6 +1281,10 @@ function buildOverlayMeter(label: string, state: Record<string, unknown> | undef
   const current = numberValue(state?.current, 0);
   const maximum = numberValue(state?.maximum, 0);
 
+  return buildMeterFromValues(label, current, maximum, tone, emptyLabel);
+}
+
+function buildMeterFromValues(label: string, current: number, maximum: number, tone: OverlayMeterTone, emptyLabel: string): OverlayMeter {
   return {
     label,
     ratio: maximum > 0 ? clamp01(current / maximum) : 0,

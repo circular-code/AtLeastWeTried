@@ -2,6 +2,7 @@ using Flattiverse.Connector.Events;
 using Flattiverse.Connector.Units;
 using Flattiverse.Gateway.Connector;
 using Flattiverse.Gateway.Protocol.Dtos;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -19,10 +20,12 @@ public sealed class MappingService : IConnectorEventHandler
     private const int HiddenTrajectoryMaximumTicks = 72;
     private const int HiddenTrajectoryDownsample = 1;
     private const double HiddenTrajectoryMinimumPointDistance = 0.2d;
+    private const uint RecentDynamicTargetRetentionTicks = HiddenTrajectoryMaximumTicks;
 
     // Mapped units are shared across sessions by scope (Galaxy + Cluster).
     private static readonly Dictionary<MappingScopeKey, ScopeState> _scopeStates = new();
     private static readonly object _stateLock = new();
+    private static readonly Dictionary<string, Dictionary<string, RecentTargetSnapshotEntry>> _recentTargetSnapshotsByGalaxy = new(StringComparer.Ordinal);
 
     private static readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -39,6 +42,7 @@ public sealed class MappingService : IConnectorEventHandler
 
     private readonly Func<MappingScopeContext?> _scopeResolver;
     private readonly Dictionary<MappingScopeKey, long> _lastDeliveredSequenceByScope = new();
+    private readonly Dictionary<string, Dictionary<string, UnitSnapshotDto>> _lastDeliveredGalaxyUnitsByGalaxy = new(StringComparer.Ordinal);
 
     public MappingService(Func<MappingScopeContext?> scopeResolver)
     {
@@ -137,32 +141,79 @@ public sealed class MappingService : IConnectorEventHandler
     }
 
     /// <summary>
+    /// Build a full snapshot of all known units across every known scope in the
+    /// current galaxy. This is the browser-facing collaborative view.
+    /// </summary>
+    public List<UnitSnapshotDto> BuildGalaxyUnitSnapshots()
+    {
+        EnsurePersistenceConfigured();
+
+        var scope = _scopeResolver();
+        if (scope is null || string.IsNullOrWhiteSpace(scope.Value.GalaxyId))
+            return new List<UnitSnapshotDto>();
+
+        lock (_stateLock)
+        {
+            EnsureGalaxyLoadedUnsafe(scope.Value.GalaxyId);
+            return BuildMergedGalaxyUnitSnapshotsUnsafe(scope.Value.GalaxyId);
+        }
+    }
+
+    /// <summary>
     /// Try to resolve one unit snapshot in the current mapping scope.
     /// </summary>
     public bool TryGetUnitSnapshot(string unitId, out UnitSnapshotDto? snapshot)
+    {
+        return TryGetUnitSnapshotCore(unitId, ResolveScopeKey(), out snapshot);
+    }
+
+    /// <summary>
+    /// Try to resolve one unit snapshot in a specific cluster scope for the current galaxy.
+    /// </summary>
+    public bool TryGetUnitSnapshot(string unitId, int clusterId, out UnitSnapshotDto? snapshot)
+    {
+        snapshot = null;
+        if (clusterId <= 0)
+            return TryGetUnitSnapshot(unitId, out snapshot);
+
+        var scope = _scopeResolver();
+        if (scope is null || string.IsNullOrWhiteSpace(scope.Value.GalaxyId))
+            return false;
+
+        return TryGetUnitSnapshotCore(unitId, new MappingScopeKey(scope.Value.GalaxyId, clusterId), out snapshot);
+    }
+
+    /// <summary>
+    /// Try to resolve one unit snapshot from the merged galaxy-wide collaborative
+    /// browser view. This allows backend-shared intel from other sessions to be
+    /// consumed by command paths that need a target position.
+    /// </summary>
+    public bool TryGetGalaxyUnitSnapshot(string unitId, out UnitSnapshotDto? snapshot)
     {
         snapshot = null;
         if (string.IsNullOrWhiteSpace(unitId))
             return false;
 
         EnsurePersistenceConfigured();
-        var scopeKey = ResolveScopeKey();
-        if (scopeKey is null)
+
+        var scope = _scopeResolver();
+        if (scope is null || string.IsNullOrWhiteSpace(scope.Value.GalaxyId))
             return false;
 
         lock (_stateLock)
         {
-            EnsureGalaxyLoadedUnsafe(scopeKey.Value.GalaxyId);
+            EnsureGalaxyLoadedUnsafe(scope.Value.GalaxyId);
+            foreach (var unit in BuildMergedGalaxyUnitSnapshotsUnsafe(scope.Value.GalaxyId))
+            {
+                if (!string.Equals(unit.UnitId, unitId, StringComparison.Ordinal))
+                    continue;
 
-            if (!_scopeStates.TryGetValue(scopeKey.Value, out var scopeState))
-                return false;
-
-            if (!scopeState.Units.TryGetValue(unitId, out var unit))
-                return false;
-
-            snapshot = CloneUnitSnapshot(unit);
-            return true;
+                snapshot = CloneUnitSnapshot(unit);
+                return true;
+            }
         }
+
+        return false;
     }
 
     public bool TryGetCurrentTickForCurrentScope(out uint currentTick)
@@ -176,6 +227,66 @@ public sealed class MappingService : IConnectorEventHandler
         {
             EnsureGalaxyLoadedUnsafe(scopeKey.Value.GalaxyId);
             currentTick = _latestTickByGalaxy.TryGetValue(scopeKey.Value.GalaxyId, out var tick) ? tick : 0;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Try to resolve a recently removed dynamic target from short-lived
+    /// backend memory. This keeps target resolution aligned with the browser's
+    /// lost-unit traces without reintroducing removed units into the live map.
+    /// </summary>
+    internal bool TryGetRecentGalaxyUnitSnapshot(string unitId, int clusterId, out UnitSnapshotDto? snapshot)
+    {
+        snapshot = null;
+        if (string.IsNullOrWhiteSpace(unitId))
+            return false;
+
+        EnsurePersistenceConfigured();
+
+        var scope = _scopeResolver();
+        if (scope is null || string.IsNullOrWhiteSpace(scope.Value.GalaxyId))
+            return false;
+
+        lock (_stateLock)
+        {
+            EnsureGalaxyLoadedUnsafe(scope.Value.GalaxyId);
+            var currentTick = _latestTickByGalaxy.TryGetValue(scope.Value.GalaxyId, out var tick) ? tick : 0;
+            return TryGetRecentTargetSnapshotUnsafe(scope.Value.GalaxyId, unitId, clusterId, currentTick, out snapshot);
+        }
+    }
+
+    internal static void RecordRecentTargetSnapshot(string galaxyId, UnitSnapshotDto snapshot, uint currentTick)
+    {
+        lock (_stateLock)
+            RecordRecentTargetSnapshotUnsafe(galaxyId, snapshot, currentTick);
+    }
+
+    internal static bool TryGetRecentTargetSnapshot(string galaxyId, string unitId, int clusterId, uint currentTick, out UnitSnapshotDto? snapshot)
+    {
+        lock (_stateLock)
+            return TryGetRecentTargetSnapshotUnsafe(galaxyId, unitId, clusterId, currentTick, out snapshot);
+    }
+
+    private bool TryGetUnitSnapshotCore(string unitId, MappingScopeKey? scopeKey, out UnitSnapshotDto? snapshot)
+    {
+        snapshot = null;
+        if (string.IsNullOrWhiteSpace(unitId) || scopeKey is null)
+            return false;
+
+        EnsurePersistenceConfigured();
+
+        lock (_stateLock)
+        {
+            EnsureGalaxyLoadedUnsafe(scopeKey.Value.GalaxyId);
+
+            if (!_scopeStates.TryGetValue(scopeKey.Value, out var scopeState))
+                return false;
+
+            if (!scopeState.Units.TryGetValue(unitId, out var unit))
+                return false;
+
+            snapshot = CloneUnitSnapshot(unit);
             return true;
         }
     }
@@ -226,6 +337,73 @@ public sealed class MappingService : IConnectorEventHandler
         }
     }
 
+    /// <summary>
+    /// Collect browser-facing world deltas across every known scope in the
+    /// current galaxy. This turns the shared mapping cache into one unified
+    /// collaborative stream for attached frontends.
+    /// </summary>
+    public List<WorldDeltaDto> CollectPendingGalaxyDeltas()
+    {
+        EnsurePersistenceConfigured();
+
+        var scope = _scopeResolver();
+        if (scope is null || string.IsNullOrWhiteSpace(scope.Value.GalaxyId))
+            return new List<WorldDeltaDto>();
+
+        lock (_stateLock)
+        {
+            EnsureGalaxyLoadedUnsafe(scope.Value.GalaxyId);
+
+            var currentUnits = BuildMergedGalaxyUnitSnapshotsUnsafe(scope.Value.GalaxyId);
+            var currentById = currentUnits.ToDictionary(unit => unit.UnitId, CloneUnitSnapshot, StringComparer.Ordinal);
+            if (!_lastDeliveredGalaxyUnitsByGalaxy.TryGetValue(scope.Value.GalaxyId, out var previousById))
+            {
+                previousById = new Dictionary<string, UnitSnapshotDto>(StringComparer.Ordinal);
+                _lastDeliveredGalaxyUnitsByGalaxy[scope.Value.GalaxyId] = previousById;
+            }
+
+            var deltas = new List<WorldDeltaDto>();
+            foreach (var unit in currentUnits)
+            {
+                if (!previousById.TryGetValue(unit.UnitId, out var previous))
+                {
+                    deltas.Add(new WorldDeltaDto
+                    {
+                        EventType = "unit.created",
+                        EntityId = unit.UnitId,
+                        Changes = UnitToChanges(unit)
+                    });
+                    continue;
+                }
+
+                if (UnitSnapshotsEqual(previous, unit))
+                    continue;
+
+                deltas.Add(new WorldDeltaDto
+                {
+                    EventType = "unit.updated",
+                    EntityId = unit.UnitId,
+                    Changes = UnitToChanges(unit)
+                });
+            }
+
+            foreach (var previousUnitId in previousById.Keys)
+            {
+                if (currentById.ContainsKey(previousUnitId))
+                    continue;
+
+                deltas.Add(new WorldDeltaDto
+                {
+                    EventType = "unit.removed",
+                    EntityId = previousUnitId
+                });
+            }
+
+            _lastDeliveredGalaxyUnitsByGalaxy[scope.Value.GalaxyId] = currentById;
+            return deltas;
+        }
+    }
+
     private void HandleUnitCreated(Unit unit, int clusterId)
     {
         EnsurePersistenceConfigured();
@@ -248,6 +426,7 @@ public sealed class MappingService : IConnectorEventHandler
             EnsureGalaxyLoadedUnsafe(scopeKey.Value.GalaxyId);
 
             var scopeState = GetOrCreateScopeStateUnsafe(scopeKey.Value);
+            ForgetRecentTargetSnapshotUnsafe(scopeKey.Value.GalaxyId, dto.UnitId);
             RemoveLegacyPlayerUnitIdUnsafe(scopeState, dto.UnitId, unit.Name);
             var alreadyKnown = scopeState.Units.TryGetValue(dto.UnitId, out var existing);
             MergeKnownDetailState(dto, existing);
@@ -293,6 +472,7 @@ public sealed class MappingService : IConnectorEventHandler
             EnsureGalaxyLoadedUnsafe(scopeKey.Value.GalaxyId);
 
             var scopeState = GetOrCreateScopeStateUnsafe(scopeKey.Value);
+            ForgetRecentTargetSnapshotUnsafe(scopeKey.Value.GalaxyId, dto.UnitId);
             RemoveLegacyPlayerUnitIdUnsafe(scopeState, dto.UnitId, unit.Name);
             scopeState.Units.TryGetValue(dto.UnitId, out var existing);
             MergeKnownDetailState(dto, existing);
@@ -413,6 +593,7 @@ public sealed class MappingService : IConnectorEventHandler
         lock (_stateLock)
         {
             EnsureGalaxyLoadedUnsafe(galaxyId);
+            var currentTick = _latestTickByGalaxy.TryGetValue(galaxyId, out var tick) ? tick : 0;
 
             var scopeKeys = _scopeStates.Keys
                 .Where(key => string.Equals(key.GalaxyId, galaxyId, StringComparison.Ordinal))
@@ -423,9 +604,10 @@ public sealed class MappingService : IConnectorEventHandler
                 if (!_scopeStates.TryGetValue(scopeKey, out var scopeState))
                     continue;
 
-                if (!scopeState.Units.Remove(unitId))
+                if (!scopeState.Units.Remove(unitId, out var removed))
                     continue;
 
+                RecordRecentTargetSnapshotUnsafe(galaxyId, removed, currentTick);
                 scopeState.StaticUnitIds.Remove(unitId);
                 AppendDeltaUnsafe(scopeState, new WorldDeltaDto
                 {
@@ -492,6 +674,7 @@ public sealed class MappingService : IConnectorEventHandler
         };
 
         PopulatePropulsionMetadata(dto, unit);
+        dto.ScannedSubsystems = BuildScannedSubsystems(unit);
 
         if (unit.FullStateKnown && unit is Sun sun)
         {
@@ -595,6 +778,68 @@ public sealed class MappingService : IConnectorEventHandler
         }
     }
 
+    private static List<UnitSnapshotDto> BuildMergedGalaxyUnitSnapshotsUnsafe(string galaxyId)
+    {
+        var mergedById = new Dictionary<string, UnitSnapshotDto>(StringComparer.Ordinal);
+        foreach (var (scopeKey, scopeState) in _scopeStates)
+        {
+            if (!string.Equals(scopeKey.GalaxyId, galaxyId, StringComparison.Ordinal))
+                continue;
+
+            foreach (var unit in scopeState.Units.Values)
+            {
+                if (!mergedById.TryGetValue(unit.UnitId, out var existing))
+                {
+                    mergedById[unit.UnitId] = CloneUnitSnapshot(unit);
+                    continue;
+                }
+
+                if (PreferCandidateSnapshot(existing, unit))
+                    mergedById[unit.UnitId] = CloneUnitSnapshot(unit);
+            }
+        }
+
+        return mergedById.Values.ToList();
+    }
+
+    private static bool PreferCandidateSnapshot(UnitSnapshotDto current, UnitSnapshotDto candidate)
+    {
+        if (candidate.LastSeenTick != current.LastSeenTick)
+            return candidate.LastSeenTick > current.LastSeenTick;
+
+        if (candidate.IsSeen != current.IsSeen)
+            return candidate.IsSeen;
+
+        if (candidate.FullStateKnown != current.FullStateKnown)
+            return candidate.FullStateKnown;
+
+        var candidateScore = ComputeSnapshotDetailScore(candidate);
+        var currentScore = ComputeSnapshotDetailScore(current);
+        if (candidateScore != currentScore)
+            return candidateScore > currentScore;
+
+        return false;
+    }
+
+    private static int ComputeSnapshotDetailScore(UnitSnapshotDto unit)
+    {
+        var score = 0;
+        if (unit.PredictedTrajectory is { Count: > 0 })
+            score += unit.PredictedTrajectory.Count;
+        if (unit.ScannedSubsystems is { Count: > 0 })
+            score += unit.ScannedSubsystems.Count * 2;
+        if (unit.CurrentThrust.HasValue)
+            score += 2;
+        if (unit.MaximumThrust.HasValue)
+            score += 2;
+        if (unit.SunEnergy.HasValue || unit.SunIons.HasValue || unit.SunNeutrinos.HasValue)
+            score += 2;
+        if (unit.PlanetMetal.HasValue || unit.PlanetCarbon.HasValue || unit.PlanetHydrogen.HasValue || unit.PlanetSilicon.HasValue)
+            score += 2;
+
+        return score;
+    }
+
     private static float ResolveModernThrusterWorldAngleDegrees(float shipAngle, int engineIndex)
     {
         var localAngle = engineIndex switch
@@ -620,6 +865,258 @@ public sealed class MappingService : IConnectorEventHandler
             angle += 360f;
 
         return angle;
+    }
+
+    private static List<ScannedSubsystemDto>? BuildScannedSubsystems(Unit unit)
+    {
+        if (!unit.FullStateKnown || unit is not PlayerUnit playerUnit)
+            return null;
+
+        var subsystems = new List<ScannedSubsystemDto>();
+        AddScannedSubsystem(subsystems, "Energy Battery", playerUnit.EnergyBattery.Exists, playerUnit.EnergyBattery.Status.ToString(), BuildBatteryStats(playerUnit.EnergyBattery));
+        AddScannedSubsystem(subsystems, "Ion Battery", playerUnit.IonBattery.Exists, playerUnit.IonBattery.Status.ToString(), BuildBatteryStats(playerUnit.IonBattery));
+        AddScannedSubsystem(subsystems, "Neutrino Battery", playerUnit.NeutrinoBattery.Exists, playerUnit.NeutrinoBattery.Status.ToString(), BuildBatteryStats(playerUnit.NeutrinoBattery));
+        AddScannedSubsystem(subsystems, "Energy Cell", playerUnit.EnergyCell.Exists, playerUnit.EnergyCell.Status.ToString(), BuildEnergyCellStats(playerUnit.EnergyCell));
+        AddScannedSubsystem(subsystems, "Ion Cell", playerUnit.IonCell.Exists, playerUnit.IonCell.Status.ToString(), BuildEnergyCellStats(playerUnit.IonCell));
+        AddScannedSubsystem(subsystems, "Neutrino Cell", playerUnit.NeutrinoCell.Exists, playerUnit.NeutrinoCell.Status.ToString(), BuildEnergyCellStats(playerUnit.NeutrinoCell));
+        AddScannedSubsystem(subsystems, "Hull", playerUnit.Hull.Exists, playerUnit.Hull.Status.ToString(), BuildHullStats(playerUnit.Hull));
+        AddScannedSubsystem(subsystems, "Shield", playerUnit.Shield.Exists, playerUnit.Shield.Status.ToString(), BuildShieldStats(playerUnit.Shield));
+        AddScannedSubsystem(subsystems, "Armor", playerUnit.Armor.Exists, playerUnit.Armor.Status.ToString(), BuildArmorStats(playerUnit.Armor));
+        AddScannedSubsystem(subsystems, "Repair", playerUnit.Repair.Exists, playerUnit.Repair.Status.ToString(), BuildRepairStats(playerUnit.Repair));
+        AddScannedSubsystem(subsystems, "Cargo", playerUnit.Cargo.Exists, playerUnit.Cargo.Status.ToString(), BuildCargoStats(playerUnit.Cargo));
+        AddScannedSubsystem(subsystems, "Resource Miner", playerUnit.ResourceMiner.Exists, playerUnit.ResourceMiner.Status.ToString(), BuildResourceMinerStats(playerUnit.ResourceMiner));
+
+        switch (playerUnit)
+        {
+            case ClassicShipPlayerUnit classic:
+                AddScannedSubsystem(subsystems, "Nebula Collector", classic.NebulaCollector.Exists, classic.NebulaCollector.Status.ToString(), BuildNebulaCollectorStats(classic.NebulaCollector));
+                AddScannedSubsystem(subsystems, "Engine", classic.Engine.Exists, classic.Engine.Status.ToString(), BuildClassicEngineStats(classic.Engine));
+                AddScannedSubsystem(subsystems, "Main Scanner", classic.MainScanner.Exists, classic.MainScanner.Status.ToString(), BuildDynamicScannerStats(classic.MainScanner));
+                AddScannedSubsystem(subsystems, "Secondary Scanner", classic.SecondaryScanner.Exists, classic.SecondaryScanner.Status.ToString(), BuildDynamicScannerStats(classic.SecondaryScanner));
+                AddScannedSubsystem(subsystems, "Shot Magazine", classic.ShotMagazine.Exists, classic.ShotMagazine.Status.ToString(), BuildShotMagazineStats(classic.ShotMagazine));
+                AddScannedSubsystem(subsystems, "Interceptor Magazine", classic.InterceptorMagazine.Exists, classic.InterceptorMagazine.Status.ToString(), BuildShotMagazineStats(classic.InterceptorMagazine));
+                AddScannedSubsystem(subsystems, "Jump Drive", classic.JumpDrive.Exists, classic.JumpDrive.Exists ? "Available" : "Off", BuildJumpDriveStats(classic.JumpDrive));
+                break;
+
+            case ModernShipPlayerUnit modern:
+                AddScannedSubsystem(subsystems, "Nebula Collector", modern.NebulaCollector.Exists, modern.NebulaCollector.Status.ToString(), BuildNebulaCollectorStats(modern.NebulaCollector));
+
+                for (var index = 0; index < modern.Engines.Count; index++)
+                {
+                    var engine = modern.Engines[index];
+                    AddScannedSubsystem(subsystems, $"Engine {GetModernSlotLabel(index)}", engine.Exists, engine.Status.ToString(), BuildModernEngineStats(engine));
+                }
+
+                for (var index = 0; index < modern.Scanners.Count; index++)
+                {
+                    var scanner = modern.Scanners[index];
+                    AddScannedSubsystem(subsystems, $"Scanner {GetModernSlotLabel(index)}", scanner.Exists, scanner.Status.ToString(), BuildDynamicScannerStats(scanner));
+                }
+
+                for (var index = 0; index < modern.ShotMagazines.Count; index++)
+                {
+                    var magazine = modern.ShotMagazines[index];
+                    AddScannedSubsystem(subsystems, $"Shot Magazine {GetModernSlotLabel(index)}", magazine.Exists, magazine.Status.ToString(), BuildShotMagazineStats(magazine));
+                }
+
+                AddScannedSubsystem(subsystems, "Jump Drive", modern.JumpDrive.Exists, modern.JumpDrive.Exists ? "Available" : "Off", BuildJumpDriveStats(modern.JumpDrive));
+                break;
+        }
+
+        return subsystems.Count > 0 ? subsystems : null;
+    }
+
+    private static string GetModernSlotLabel(int index)
+    {
+        return index switch
+        {
+            0 => "N",
+            1 => "NE",
+            2 => "E",
+            3 => "SE",
+            4 => "S",
+            5 => "SW",
+            6 => "W",
+            7 => "NW",
+            _ => (index + 1).ToString(CultureInfo.InvariantCulture)
+        };
+    }
+
+    private static void AddScannedSubsystem(
+        List<ScannedSubsystemDto> subsystems,
+        string name,
+        bool exists,
+        string status,
+        List<ScannedSubsystemStatDto> stats)
+    {
+        if (!exists)
+            return;
+
+        subsystems.Add(new ScannedSubsystemDto
+        {
+            Id = name,
+            Name = name,
+            Exists = true,
+            Status = status,
+            Stats = stats
+        });
+    }
+
+    private static List<ScannedSubsystemStatDto> BuildBatteryStats(BatterySubsystemInfo battery)
+    {
+        var stats = new List<ScannedSubsystemStatDto>();
+        AddRatioStat(stats, "Charge", battery.Current, battery.Maximum);
+        AddRateStat(stats, "Drain", battery.ConsumedThisTick);
+        return stats;
+    }
+
+    private static List<ScannedSubsystemStatDto> BuildEnergyCellStats(EnergyCellSubsystemInfo cell)
+    {
+        var stats = new List<ScannedSubsystemStatDto>();
+        AddStat(stats, "Efficiency", FormatFloat(cell.Efficiency));
+        AddRateStat(stats, "Collected", cell.CollectedThisTick);
+        return stats;
+    }
+
+    private static List<ScannedSubsystemStatDto> BuildHullStats(HullSubsystemInfo hull)
+    {
+        var stats = new List<ScannedSubsystemStatDto>();
+        AddRatioStat(stats, "Integrity", hull.Current, hull.Maximum);
+        return stats;
+    }
+
+    private static List<ScannedSubsystemStatDto> BuildShieldStats(ShieldSubsystemInfo shield)
+    {
+        var stats = new List<ScannedSubsystemStatDto>();
+        AddRatioStat(stats, "Integrity", shield.Current, shield.Maximum);
+        AddStat(stats, "Rate", $"{FormatFloat(shield.Rate)} per tick");
+        AddStat(stats, "Mode", shield.Active ? "Active" : "Idle");
+        return stats;
+    }
+
+    private static List<ScannedSubsystemStatDto> BuildArmorStats(ArmorSubsystemInfo armor)
+    {
+        var stats = new List<ScannedSubsystemStatDto>();
+        AddStat(stats, "Reduction", FormatFloat(armor.Reduction));
+        AddRateStat(stats, "Blocked", armor.BlockedDirectDamageThisTick + armor.BlockedRadiationDamageThisTick);
+        return stats;
+    }
+
+    private static List<ScannedSubsystemStatDto> BuildRepairStats(RepairSubsystemInfo repair)
+    {
+        var stats = new List<ScannedSubsystemStatDto>();
+        AddPerTickRatioStat(stats, "Rate", repair.Rate, repair.MaximumRate);
+        AddRateStat(stats, "Repair", repair.RepairedHullThisTick);
+        return stats;
+    }
+
+    private static List<ScannedSubsystemStatDto> BuildCargoStats(CargoSubsystemInfo cargo)
+    {
+        var stats = new List<ScannedSubsystemStatDto>();
+        AddRatioStat(stats, "Metal", cargo.CurrentMetal, cargo.MaximumMetal);
+        AddRatioStat(stats, "Carbon", cargo.CurrentCarbon, cargo.MaximumCarbon);
+        AddRatioStat(stats, "Hydrogen", cargo.CurrentHydrogen, cargo.MaximumHydrogen);
+        AddRatioStat(stats, "Silicon", cargo.CurrentSilicon, cargo.MaximumSilicon);
+        AddRatioStat(stats, "Nebula", cargo.CurrentNebula, cargo.MaximumNebula);
+        return stats;
+    }
+
+    private static List<ScannedSubsystemStatDto> BuildResourceMinerStats(ResourceMinerSubsystemInfo miner)
+    {
+        var stats = new List<ScannedSubsystemStatDto>();
+        AddPerTickRatioStat(stats, "Rate", miner.Rate, miner.MaximumRate);
+        AddRateStat(stats, "Yield", miner.MinedMetalThisTick + miner.MinedCarbonThisTick + miner.MinedHydrogenThisTick + miner.MinedSiliconThisTick);
+        AddRateStat(stats, "Metal", miner.MinedMetalThisTick);
+        AddRateStat(stats, "Carbon", miner.MinedCarbonThisTick);
+        AddRateStat(stats, "Hydrogen", miner.MinedHydrogenThisTick);
+        AddRateStat(stats, "Silicon", miner.MinedSiliconThisTick);
+        return stats;
+    }
+
+    private static List<ScannedSubsystemStatDto> BuildNebulaCollectorStats(NebulaCollectorSubsystemInfo collector)
+    {
+        var stats = new List<ScannedSubsystemStatDto>();
+        AddPerTickRatioStat(stats, "Rate", collector.Rate, collector.MaximumRate);
+        AddRateStat(stats, "Yield", collector.CollectedThisTick);
+        AddStat(stats, "Hue", FormatFloat(collector.CollectedHueThisTick));
+        return stats;
+    }
+
+    private static List<ScannedSubsystemStatDto> BuildClassicEngineStats(ClassicShipEngineSubsystemInfo engine)
+    {
+        var stats = new List<ScannedSubsystemStatDto>();
+        AddStat(stats, "Max impulse", FormatFloat(engine.Maximum));
+        AddStat(stats, "Current", FormatFloat(engine.Current.Length));
+        AddStat(stats, "Target", FormatFloat(engine.Target.Length));
+        return stats;
+    }
+
+    private static List<ScannedSubsystemStatDto> BuildModernEngineStats(ModernShipEngineSubsystemInfo engine)
+    {
+        var stats = new List<ScannedSubsystemStatDto>();
+        AddRatioStat(stats, "Thrust", engine.CurrentThrust, engine.MaximumThrust);
+        AddStat(stats, "Target", FormatFloat(engine.TargetThrust));
+        AddRateStat(stats, "Response", engine.MaximumThrustChangePerTick);
+        return stats;
+    }
+
+    private static List<ScannedSubsystemStatDto> BuildDynamicScannerStats(DynamicScannerSubsystemInfo scanner)
+    {
+        var stats = new List<ScannedSubsystemStatDto>();
+        AddRatioStat(stats, "Width", scanner.CurrentWidth, scanner.MaximumWidth, "deg");
+        AddRatioStat(stats, "Length", scanner.CurrentLength, scanner.MaximumLength);
+        AddStat(stats, "Angle", FormatFloat(scanner.CurrentAngle, "deg"));
+        return stats;
+    }
+
+    private static List<ScannedSubsystemStatDto> BuildShotMagazineStats(DynamicShotMagazineSubsystemInfo magazine)
+    {
+        var stats = new List<ScannedSubsystemStatDto>();
+        AddRatioStat(stats, "Shots", magazine.CurrentShots, magazine.MaximumShots);
+        return stats;
+    }
+
+    private static List<ScannedSubsystemStatDto> BuildJumpDriveStats(JumpDriveSubsystemInfo jumpDrive)
+    {
+        var stats = new List<ScannedSubsystemStatDto>();
+        AddStat(stats, "Jump cost", FormatFloat(jumpDrive.EnergyCost));
+        return stats;
+    }
+
+    private static void AddRatioStat(List<ScannedSubsystemStatDto> stats, string label, float current, float maximum, string unit = "")
+    {
+        AddStat(stats, label, $"{FormatFloat(current, unit)} / {FormatFloat(maximum, unit)}");
+    }
+
+    private static void AddPerTickRatioStat(List<ScannedSubsystemStatDto> stats, string label, float current, float maximum)
+    {
+        AddStat(stats, label, $"{FormatFloat(current)} / {FormatFloat(maximum)} per tick");
+    }
+
+    private static void AddRateStat(List<ScannedSubsystemStatDto> stats, string label, float value)
+    {
+        AddStat(stats, label, $"{FormatFloat(value)}/tick");
+    }
+
+    private static void AddStat(List<ScannedSubsystemStatDto> stats, string label, string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return;
+
+        stats.Add(new ScannedSubsystemStatDto
+        {
+            Label = label,
+            Value = value
+        });
+    }
+
+    private static string FormatFloat(float value, string unit = "")
+    {
+        var formatted = value.ToString("0.##", CultureInfo.InvariantCulture);
+        if (string.IsNullOrWhiteSpace(unit))
+            return formatted;
+
+        return unit == "%" ? $"{formatted}{unit}" : $"{formatted} {unit}";
     }
 
     private static string BuildUnitId(Unit unit)
@@ -696,6 +1193,9 @@ public sealed class MappingService : IConnectorEventHandler
         if (unit.TeamName is not null)
             changes["teamName"] = unit.TeamName;
 
+        if (unit.ScannedSubsystems is not null)
+            changes["scannedSubsystems"] = CloneScannedSubsystems(unit.ScannedSubsystems);
+
         if (unit.SunEnergy.HasValue)
             changes["sunEnergy"] = unit.SunEnergy;
 
@@ -739,6 +1239,9 @@ public sealed class MappingService : IConnectorEventHandler
         current.PlanetSilicon = MergeKnownIntelMetric(current.PlanetSilicon, previous?.PlanetSilicon);
         current.CurrentThrust = MergeKnownIntelMetric(current.CurrentThrust, previous?.CurrentThrust);
         current.MaximumThrust = MergeKnownIntelMetric(current.MaximumThrust, previous?.MaximumThrust);
+        current.ScannedSubsystems = current.ScannedSubsystems is { Count: > 0 }
+            ? CloneScannedSubsystems(current.ScannedSubsystems)
+            : CloneScannedSubsystems(previous?.ScannedSubsystems);
         current.PropulsionPrediction = ClonePropulsionPrediction(current.PropulsionPrediction ?? previous?.PropulsionPrediction);
     }
 
@@ -753,6 +1256,101 @@ public sealed class MappingService : IConnectorEventHandler
     private static bool IsKnownIntelMetric(float? value)
     {
         return value.HasValue && float.IsFinite(value.Value) && value.Value > 0f;
+    }
+
+    private static void RecordRecentTargetSnapshotUnsafe(string galaxyId, UnitSnapshotDto snapshot, uint currentTick)
+    {
+        if (string.IsNullOrWhiteSpace(galaxyId) ||
+            string.IsNullOrWhiteSpace(snapshot.UnitId))
+            return;
+
+        var recentSnapshot = CloneUnitSnapshot(snapshot);
+        recentSnapshot.IsStatic = false;
+        recentSnapshot.IsSeen = false;
+
+        var storedAtTick = currentTick > 0
+            ? currentTick
+            : recentSnapshot.LastSeenTick;
+
+        if (!_recentTargetSnapshotsByGalaxy.TryGetValue(galaxyId, out var snapshotsById))
+        {
+            snapshotsById = new Dictionary<string, RecentTargetSnapshotEntry>(StringComparer.Ordinal);
+            _recentTargetSnapshotsByGalaxy[galaxyId] = snapshotsById;
+        }
+
+        if (snapshotsById.TryGetValue(recentSnapshot.UnitId, out var existing) &&
+            !PreferCandidateSnapshot(existing.Snapshot, recentSnapshot))
+        {
+            recentSnapshot = existing.Snapshot;
+        }
+
+        snapshotsById[recentSnapshot.UnitId] = new RecentTargetSnapshotEntry(CloneUnitSnapshot(recentSnapshot), storedAtTick);
+    }
+
+    private static bool TryGetRecentTargetSnapshotUnsafe(
+        string galaxyId,
+        string unitId,
+        int clusterId,
+        uint currentTick,
+        out UnitSnapshotDto? snapshot)
+    {
+        snapshot = null;
+        if (string.IsNullOrWhiteSpace(galaxyId) || string.IsNullOrWhiteSpace(unitId))
+            return false;
+
+        PruneRecentTargetSnapshotsUnsafe(galaxyId, currentTick);
+        if (!_recentTargetSnapshotsByGalaxy.TryGetValue(galaxyId, out var snapshotsById))
+            return false;
+
+        if (!snapshotsById.TryGetValue(unitId, out var entry))
+            return false;
+
+        if (clusterId > 0 &&
+            entry.Snapshot.ClusterId > 0 &&
+            entry.Snapshot.ClusterId != clusterId)
+        {
+            return false;
+        }
+
+        snapshot = CloneUnitSnapshot(entry.Snapshot);
+        return true;
+    }
+
+    private static void ForgetRecentTargetSnapshotUnsafe(string galaxyId, string unitId)
+    {
+        if (string.IsNullOrWhiteSpace(galaxyId) ||
+            string.IsNullOrWhiteSpace(unitId) ||
+            !_recentTargetSnapshotsByGalaxy.TryGetValue(galaxyId, out var snapshotsById))
+            return;
+
+        snapshotsById.Remove(unitId);
+        if (snapshotsById.Count == 0)
+            _recentTargetSnapshotsByGalaxy.Remove(galaxyId);
+    }
+
+    private static void PruneRecentTargetSnapshotsUnsafe(string galaxyId, uint currentTick)
+    {
+        if (string.IsNullOrWhiteSpace(galaxyId) ||
+            !_recentTargetSnapshotsByGalaxy.TryGetValue(galaxyId, out var snapshotsById) ||
+            currentTick == 0)
+            return;
+
+        var expiredUnitIds = snapshotsById
+            .Where(pair => IsRecentTargetSnapshotExpired(currentTick, pair.Value.StoredAtTick))
+            .Select(pair => pair.Key)
+            .ToList();
+
+        for (var index = 0; index < expiredUnitIds.Count; index++)
+            snapshotsById.Remove(expiredUnitIds[index]);
+
+        if (snapshotsById.Count == 0)
+            _recentTargetSnapshotsByGalaxy.Remove(galaxyId);
+    }
+
+    private static bool IsRecentTargetSnapshotExpired(uint currentTick, uint storedAtTick)
+    {
+        return currentTick > storedAtTick &&
+               currentTick - storedAtTick > RecentDynamicTargetRetentionTicks;
     }
 
     private static bool IsStaticUnit(Unit unit)
@@ -772,6 +1370,8 @@ public sealed class MappingService : IConnectorEventHandler
             EnsureGalaxyLoadedUnsafe(scopeKey.Value.GalaxyId);
             if (_scopeStates.TryGetValue(scopeKey.Value, out var scopeState))
                 UpdateHiddenTrajectoryPredictionsUnsafe(scopeKey.Value, scopeState, tickEvent.Tick);
+
+            PruneRecentTargetSnapshotsUnsafe(scopeKey.Value.GalaxyId, tickEvent.Tick);
         }
     }
 
@@ -1135,6 +1735,7 @@ public sealed class MappingService : IConnectorEventHandler
             PredictedTrajectory = source.PredictedTrajectory?.Select(CloneTrajectoryPoint).ToList(),
             PropulsionPrediction = ClonePropulsionPrediction(source.PropulsionPrediction),
             TeamName = source.TeamName,
+            ScannedSubsystems = CloneScannedSubsystems(source.ScannedSubsystems),
             SunEnergy = source.SunEnergy,
             SunIons = source.SunIons,
             SunNeutrinos = source.SunNeutrinos,
@@ -1145,6 +1746,39 @@ public sealed class MappingService : IConnectorEventHandler
             PlanetHydrogen = source.PlanetHydrogen,
             PlanetSilicon = source.PlanetSilicon
         };
+    }
+
+    private static bool UnitSnapshotsEqual(UnitSnapshotDto left, UnitSnapshotDto right)
+    {
+        return string.Equals(CreateUnitSnapshotSignature(left), CreateUnitSnapshotSignature(right), StringComparison.Ordinal);
+    }
+
+    private static string CreateUnitSnapshotSignature(UnitSnapshotDto unit)
+    {
+        return JsonSerializer.Serialize(UnitToChanges(unit), _jsonOptions);
+    }
+
+    private static List<ScannedSubsystemDto>? CloneScannedSubsystems(IReadOnlyList<ScannedSubsystemDto>? source)
+    {
+        if (source is null)
+            return null;
+
+        return source
+            .Select(subsystem => new ScannedSubsystemDto
+            {
+                Id = subsystem.Id,
+                Name = subsystem.Name,
+                Exists = subsystem.Exists,
+                Status = subsystem.Status,
+                Stats = subsystem.Stats
+                    .Select(stat => new ScannedSubsystemStatDto
+                    {
+                        Label = stat.Label,
+                        Value = stat.Value
+                    })
+                    .ToList()
+            })
+            .ToList();
     }
 
     private static PropulsionPredictionSnapshotDto? ClonePropulsionPrediction(PropulsionPredictionSnapshotDto? source)
@@ -1220,6 +1854,18 @@ public sealed class MappingService : IConnectorEventHandler
         public List<SequencedDelta> Deltas { get; } = new();
         public long NextSequence { get; set; } = 1;
         public long FirstSequence { get; set; } = 1;
+    }
+
+    private sealed class RecentTargetSnapshotEntry
+    {
+        public RecentTargetSnapshotEntry(UnitSnapshotDto snapshot, uint storedAtTick)
+        {
+            Snapshot = snapshot;
+            StoredAtTick = storedAtTick;
+        }
+
+        public UnitSnapshotDto Snapshot { get; }
+        public uint StoredAtTick { get; }
     }
 
     private readonly record struct PredictionObstacle(float X, float Y, float Radius);

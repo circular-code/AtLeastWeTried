@@ -43,7 +43,8 @@ public sealed class ScanningService : IConnectorEventHandler
         uint CurrentTick,
         float? CurrentThrust,
         float? MaximumThrust,
-        IReadOnlyList<TargetPathPoint>? PredictedTrajectory);
+        IReadOnlyList<TargetPathPoint>? PredictedTrajectory,
+        int ClusterId = 0);
 
     internal readonly record struct TargetingSolution(float Angle, float Width);
 
@@ -76,10 +77,10 @@ public sealed class ScanningService : IConnectorEventHandler
         public TargetTrackState TargetTrack { get; } = new();
     }
 
-    private readonly Func<string, TargetSnapshot?> _targetResolver;
+    private readonly Func<ClassicShipControllable, string, TargetSnapshot?> _targetResolver;
     private readonly Dictionary<int, ScannerState> _states = new();
 
-    public ScanningService(Func<string, TargetSnapshot?> targetResolver)
+    public ScanningService(Func<ClassicShipControllable, string, TargetSnapshot?> targetResolver)
     {
         _targetResolver = targetResolver;
     }
@@ -359,11 +360,15 @@ public sealed class ScanningService : IConnectorEventHandler
         if (string.IsNullOrWhiteSpace(state.TargetUnitId))
             return false;
 
-        var snapshot = _targetResolver(state.TargetUnitId);
+        var snapshot = _targetResolver(ship, state.TargetUnitId);
         if (!snapshot.HasValue)
             return false;
 
         var target = snapshot.Value;
+        var shipClusterId = ship.Cluster?.Id ?? 0;
+        if (shipClusterId > 0 && target.ClusterId > 0 && target.ClusterId != shipClusterId)
+            return false;
+
         float velocityX;
         float velocityY;
         if (target.HasVelocity)
