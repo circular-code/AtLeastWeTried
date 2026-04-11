@@ -139,17 +139,22 @@ export const useGameStore = defineStore('game', {
 
       return state.galaxy?.controllables.find((entry) => entry.controllableId === controllableId) ?? null;
     },
-    overlayEntry: (state) => (controllableId: string): OverlayEntry | null => {
-      const overlayById = aggregateOverlayState(state.overlayBySessionId);
-      if (!controllableId || !hasRecordKey(overlayById, controllableId)) {
-        return null;
-      }
+    overlayEntry() {
+      const overlayById = this.ownerOverlay;
+      return (controllableId: string): OverlayEntry | null => {
+        if (!controllableId || !hasRecordKey(overlayById, controllableId)) {
+          return null;
+        }
 
-      const uiStore = useUiStore();
-      return buildOverlayEntry(controllableId, state.galaxy, new Map(Object.entries(overlayById) as Array<[string, ControllableOverlayState]>), uiStore.selectedControllableId);
+        const uiStore = useUiStore();
+        return buildOverlayEntry(controllableId, this.galaxy, new Map(Object.entries(overlayById) as Array<[string, ControllableOverlayState]>), uiStore.selectedControllableId);
+      };
     },
-    selectionEntry: (state) => (selection: WorldSceneSelection | null): ClickedUnitEntry | null => {
-      return buildClickedUnitEntry(selection, state.galaxy, new Map(Object.entries(aggregateOverlayState(state.overlayBySessionId)) as Array<[string, ControllableOverlayState]>));
+    selectionEntry() {
+      const overlayById = this.ownerOverlay;
+      return (selection: WorldSceneSelection | null): ClickedUnitEntry | null => {
+        return buildClickedUnitEntry(selection, this.galaxy, new Map(Object.entries(overlayById) as Array<[string, ControllableOverlayState]>));
+      };
     },
     scannerModeFor: (state) => (controllableId: string): ScannerMode => {
       if (!controllableId) {
@@ -503,26 +508,38 @@ function cloneSnapshot(source: GalaxySnapshotDto): GalaxySnapshotDto {
 }
 
 function applyWorldDeltaToSnapshot(current: GalaxySnapshotDto, message: WorldDeltaMessage): GalaxySnapshotDto {
-  const next = cloneSnapshot(current);
+  let teams = current.teams;
+  let units = current.units;
+  let controllables = current.controllables;
+  let teamsChanged = false;
+  let unitsChanged = false;
+  let controllablesChanged = false;
 
   for (const event of message.events) {
     if (event.eventType === 'team.removed') {
       const teamId = numberValue(event.changes?.id, Number(event.entityId));
-      next.teams = next.teams.filter((team) => team.id !== teamId);
+      const filtered = teams.filter((team) => team.id !== teamId);
+      if (filtered.length !== teams.length) {
+        teams = filtered;
+        teamsChanged = true;
+      }
       continue;
     }
 
     if ((event.eventType === 'team.created' || event.eventType === 'team.updated') && event.changes) {
       const teamId = numberValue(event.changes.id, Number(event.entityId));
-      const existing = next.teams.find((team) => team.id === teamId);
-      if (existing) {
+      const existingIndex = teams.findIndex((team) => team.id === teamId);
+      if (existingIndex >= 0) {
+        if (!teamsChanged) { teams = [...teams]; teamsChanged = true; }
+        const existing = { ...teams[existingIndex] };
         existing.name = stringValue(event.changes.name, existing.name);
         existing.score = numberValue(event.changes.score, existing.score);
         existing.colorHex = stringValue(event.changes.colorHex, existing.colorHex);
         existing.playable = booleanValue(event.changes.playable, existing.playable);
+        teams[existingIndex] = existing;
       } else {
-        next.teams = [
-          ...next.teams,
+        teams = [
+          ...teams,
           {
             id: teamId,
             name: stringValue(event.changes.name, `Team ${teamId}`),
@@ -531,6 +548,7 @@ function applyWorldDeltaToSnapshot(current: GalaxySnapshotDto, message: WorldDel
             playable: booleanValue(event.changes.playable, true),
           },
         ];
+        teamsChanged = true;
       }
       continue;
     }
@@ -540,47 +558,60 @@ function applyWorldDeltaToSnapshot(current: GalaxySnapshotDto, message: WorldDel
         continue;
       }
 
-      const unit = next.units.find((item) => item.unitId === event.entityId);
-      if (unit) {
-        applyUnitChanges(unit, event.changes);
+      const existingIndex = units.findIndex((item) => item.unitId === event.entityId);
+      if (existingIndex >= 0) {
+        if (!unitsChanged) { units = [...units]; unitsChanged = true; }
+        const updated = { ...units[existingIndex] };
+        applyUnitChanges(updated, event.changes);
+        units[existingIndex] = updated;
       } else {
-        next.units = [
-          ...next.units,
-          createUnitFromChanges(event.entityId, event.changes),
-        ];
+        units = [...units, createUnitFromChanges(event.entityId, event.changes)];
+        unitsChanged = true;
       }
       continue;
     }
 
     if (event.eventType === 'unit.created' && event.changes) {
-      const existing = next.units.find((item) => item.unitId === event.entityId);
-      if (existing) {
-        applyUnitChanges(existing, event.changes);
+      const existingIndex = units.findIndex((item) => item.unitId === event.entityId);
+      if (existingIndex >= 0) {
+        if (!unitsChanged) { units = [...units]; unitsChanged = true; }
+        const updated = { ...units[existingIndex] };
+        applyUnitChanges(updated, event.changes);
+        units[existingIndex] = updated;
       } else {
-        next.units = [
-          ...next.units,
-          createUnitFromChanges(event.entityId, event.changes),
-        ];
+        units = [...units, createUnitFromChanges(event.entityId, event.changes)];
+        unitsChanged = true;
       }
       continue;
     }
 
     if (event.eventType === 'unit.removed') {
-      next.units = next.units.filter((item) => item.unitId !== event.entityId);
-      next.controllables = next.controllables.filter((item) => item.controllableId !== event.entityId);
+      const filteredUnits = units.filter((item) => item.unitId !== event.entityId);
+      if (filteredUnits.length !== units.length) {
+        units = filteredUnits;
+        unitsChanged = true;
+      }
+      const filteredControllables = controllables.filter((item) => item.controllableId !== event.entityId);
+      if (filteredControllables.length !== controllables.length) {
+        controllables = filteredControllables;
+        controllablesChanged = true;
+      }
       continue;
     }
 
     if (event.eventType === 'controllable.created' && event.changes) {
-      const existing = next.controllables.find((item) => item.controllableId === event.entityId);
-      if (existing) {
+      const existingIndex = controllables.findIndex((item) => item.controllableId === event.entityId);
+      if (existingIndex >= 0) {
+        if (!controllablesChanged) { controllables = [...controllables]; controllablesChanged = true; }
+        const existing = { ...controllables[existingIndex] };
         existing.displayName = stringValue(event.changes.displayName, existing.displayName);
         existing.teamName = stringValue(event.changes.teamName, existing.teamName);
         existing.alive = booleanValue(event.changes.alive, existing.alive);
         existing.score = numberValue(event.changes.score, existing.score);
+        controllables[existingIndex] = existing;
       } else {
-        next.controllables = [
-          ...next.controllables,
+        controllables = [
+          ...controllables,
           {
             controllableId: event.entityId,
             displayName: stringValue(event.changes.displayName, 'Unnamed'),
@@ -589,12 +620,22 @@ function applyWorldDeltaToSnapshot(current: GalaxySnapshotDto, message: WorldDel
             score: numberValue(event.changes.score, 0),
           },
         ];
+        controllablesChanged = true;
       }
     }
   }
 
-  next.units = pruneTransientHiddenUnits(dedupeUnitsById(next.units));
-  return next;
+  if (unitsChanged) {
+    units = pruneTransientHiddenUnits(dedupeUnitsById(units));
+  }
+
+  return {
+    ...current,
+    teams,
+    clusters: current.clusters,
+    units,
+    controllables,
+  };
 }
 
 function createUnitFromChanges(unitId: string, changes: Record<string, unknown>): UnitSnapshotDto {
