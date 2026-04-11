@@ -240,7 +240,7 @@ public sealed class ScanningService : IConnectorEventHandler
 
         var scanner = ship.MainScanner;
         var targetWidth = ResolveWidth(scanner, state);
-        var targetAngle = ship.Angle;
+        var targetAngle = ResolveHoldAngle(ship, state);
         if (TryResolveTargetedSolution(state, ship, out var targetingSolution))
         {
             targetWidth = targetingSolution.Width;
@@ -437,8 +437,9 @@ public sealed class ScanningService : IConnectorEventHandler
         var referenceAngle = 0f;
         var minimumDelta = 0f;
         var maximumDelta = 0f;
+        var startIndex = ResolveTrajectoryStartIndex(predictedTrajectory, target);
 
-        for (var index = 0; index < predictedTrajectory.Count; index++)
+        for (var index = startIndex; index < predictedTrajectory.Count; index++)
         {
             var point = predictedTrajectory[index];
             var delta = new Vector2(point.X - scannerOrigin.X, point.Y - scannerOrigin.Y);
@@ -468,6 +469,28 @@ public sealed class ScanningService : IConnectorEventHandler
         var targetAngle = NormalizeAngle(referenceAngle + ((minimumDelta + maximumDelta) * 0.5f));
         solution = new TargetingSolution(targetAngle, width);
         return true;
+    }
+
+    private static int ResolveTrajectoryStartIndex(
+        IReadOnlyList<TargetPathPoint> predictedTrajectory,
+        in TargetSnapshot target)
+    {
+        if (target.IsSeen || predictedTrajectory.Count <= 1)
+            return 0;
+
+        var startIndex = 0;
+        while (startIndex < predictedTrajectory.Count - 1)
+        {
+            var point = predictedTrajectory[startIndex];
+            var dx = point.X - target.X;
+            var dy = point.Y - target.Y;
+            if ((dx * dx) + (dy * dy) > 0.0001f)
+                break;
+
+            startIndex++;
+        }
+
+        return startIndex;
     }
 
     private static float ComputeTargetUncertaintyRadius(in TargetSnapshot target)

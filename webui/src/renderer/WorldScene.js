@@ -9,6 +9,7 @@ import { createNavigationPointer } from './navigationPointer';
 import { createTrackedTargetVisual, disposeTrackedTargetVisual } from './trackOverlay';
 import { createGrid, createGlowField, createGravityStrengthGrid } from './grid';
 import { createShipStatusVisual, disposeShipStatusVisual, hideShipStatusVisual, updateShipStatusVisual } from './shipStatusOverlay';
+import { isPlayerShipUnitKind, isShortLivedTransientUnitKind } from '../lib/unitKinds';
 export class WorldScene {
     container;
     onSelection;
@@ -615,6 +616,7 @@ export class WorldScene {
     buildRenderableUnits() {
         if (!this.snapshot) {
             this.lastSeenTraces.clear();
+            this.normalizedUnitsByKey.clear();
             return {
                 staticUnits: [...this.debugUnits],
                 dynamicUnits: [],
@@ -691,6 +693,7 @@ export class WorldScene {
             });
             liveUnitIds.add(controllable.controllableId);
         }
+        this.pruneShortLivedUnitCache(liveUnitIds);
         const visibleStaticUnits = this.buildNormalizedUnits(staticUnits);
         const visibleDynamicUnits = this.buildNormalizedUnits(dynamicUnits);
         const visibleUnits = [...visibleStaticUnits, ...visibleDynamicUnits];
@@ -966,7 +969,11 @@ export class WorldScene {
         }
         const points = [];
         for (const unit of this.snapshot.units) {
-            if (unit.isStatic || unit.isSeen || !Array.isArray(unit.predictedTrajectory) || unit.predictedTrajectory.length < 2) {
+            if (unit.isStatic
+                || unit.isSeen
+                || !isPlayerShipUnitKind(unit.kind)
+                || !Array.isArray(unit.predictedTrajectory)
+                || unit.predictedTrajectory.length < 2) {
                 continue;
             }
             appendDottedTrajectory(points, unit.predictedTrajectory, 3.08, 18, 6, 0.42);
@@ -1301,6 +1308,14 @@ export class WorldScene {
             this.lastSeenTraces.set(unit.unitId, this.normalizeUnit(unit, true));
         }
         return Array.from(this.lastSeenTraces.values());
+    }
+    pruneShortLivedUnitCache(liveUnitIds) {
+        for (const [cacheKey, cached] of this.normalizedUnitsByKey.entries()) {
+            if (liveUnitIds.has(cached.unit.unitId) || !isShortLivedTransientUnitKind(cached.unit.kind)) {
+                continue;
+            }
+            this.normalizedUnitsByKey.delete(cacheKey);
+        }
     }
     normalizeUnit(unit, isTrace) {
         const cacheKey = `${unit.unitId}:${isTrace ? 'trace' : 'base'}`;

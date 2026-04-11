@@ -20,7 +20,7 @@ import {
   optionalStringValue,
   stringValue,
 } from '../lib/validation';
-import { isShortLivedProjectileKind } from '../lib/unitKinds';
+import { isPlayerShipUnitKind, isShortLivedTransientUnitKind } from '../lib/unitKinds';
 import type { WorldSceneSelection } from '../renderer/WorldScene';
 import type {
   ChatEntryDto,
@@ -454,7 +454,7 @@ function cloneSnapshot(source: GalaxySnapshotDto): GalaxySnapshotDto {
       speedLimit: optionalNumberValue(unit.speedLimit),
       currentThrust: normalizeKnownUnitIntelMetric(unit.currentThrust),
       maximumThrust: normalizeKnownUnitIntelMetric(unit.maximumThrust),
-      predictedTrajectory: normalizeTrajectoryPoints(unit.predictedTrajectory),
+      predictedTrajectory: normalizePredictedTrajectory(unit.kind, unit.predictedTrajectory),
       sunEnergy: normalizeKnownUnitIntelMetric(unit.sunEnergy),
       sunIons: normalizeKnownUnitIntelMetric(unit.sunIons),
       sunNeutrinos: normalizeKnownUnitIntelMetric(unit.sunNeutrinos),
@@ -628,8 +628,10 @@ function applyUnitChanges(unit: UnitSnapshotDto, changes: Record<string, unknown
   if (hasRecordKey(changes, 'maximumThrust')) {
     unit.maximumThrust = mergeKnownUnitIntelMetric(unit.maximumThrust, changes.maximumThrust);
   }
-  if (hasRecordKey(changes, 'predictedTrajectory')) {
-    unit.predictedTrajectory = normalizeTrajectoryPoints(changes.predictedTrajectory);
+  if (!isPlayerShipUnitKind(unit.kind)) {
+    unit.predictedTrajectory = undefined;
+  } else if (hasRecordKey(changes, 'predictedTrajectory')) {
+    unit.predictedTrajectory = normalizePredictedTrajectory(unit.kind, changes.predictedTrajectory);
   }
   unit.teamName = hasRecordKey(changes, 'teamName') ? optionalStringValue(changes.teamName) : unit.teamName;
   applyKnownUnitIntelMetric(unit, 'sunEnergy', changes.sunEnergy);
@@ -657,7 +659,7 @@ function pruneTransientHiddenUnits(units: UnitSnapshotDto[]) {
 }
 
 function shouldDropTransientHiddenUnit(unit: UnitSnapshotDto) {
-  return !unit.isSeen && isShortLivedProjectileKind(unit.kind);
+  return !unit.isSeen && isShortLivedTransientUnitKind(unit.kind);
 }
 
 function applyOwnerOverlay(current: Record<string, unknown>, message: OwnerOverlayDeltaMessage) {
@@ -769,6 +771,14 @@ function normalizeTrajectoryPoints(value: unknown): TrajectoryPointDto[] | undef
     }));
 
   return points.length > 0 ? points : undefined;
+}
+
+function normalizePredictedTrajectory(kind: string, value: unknown): TrajectoryPointDto[] | undefined {
+  if (!isPlayerShipUnitKind(kind)) {
+    return undefined;
+  }
+
+  return normalizeTrajectoryPoints(value);
 }
 
 function getControllableAliveState(

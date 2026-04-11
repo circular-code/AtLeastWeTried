@@ -12,6 +12,7 @@ import { createNavigationLookaheadMarker } from './navigationLookaheadMarker';
 import { type GravitySource, type GravityStrengthGrid, createGrid, createGlowField, createGravityStrengthGrid } from './grid';
 import { type ShipStatusVisual, createShipStatusVisual, disposeShipStatusVisual, hideShipStatusVisual, updateShipStatusVisual } from './shipStatusOverlay';
 import type { NavigationOverlayPoint, NavigationOverlaySegment, NavigationOverlayState as TypedNavigationOverlayState } from '../types/navigation';
+import { isPlayerShipUnitKind, isShortLivedTransientUnitKind } from '../lib/unitKinds';
 
 export type WorldSceneSelection = {
   worldX: number;
@@ -809,6 +810,7 @@ export class WorldScene {
   private buildRenderableUnits() {
     if (!this.snapshot) {
       this.lastSeenTraces.clear();
+      this.normalizedUnitsByKey.clear();
       return {
         staticUnits: [...this.debugUnits],
         dynamicUnits: [] as NormalizedUnit[],
@@ -893,6 +895,8 @@ export class WorldScene {
       });
       liveUnitIds.add(controllable.controllableId);
     }
+
+    this.pruneShortLivedUnitCache(liveUnitIds);
 
     const visibleStaticUnits = this.buildNormalizedUnits(staticUnits);
     const visibleDynamicUnits = this.buildNormalizedUnits(dynamicUnits);
@@ -1242,7 +1246,13 @@ export class WorldScene {
 
     const points: THREE.Vector3[] = [];
     for (const unit of this.snapshot.units) {
-      if (unit.isStatic || unit.isSeen || !Array.isArray(unit.predictedTrajectory) || unit.predictedTrajectory.length < 2) {
+      if (
+        unit.isStatic
+        || unit.isSeen
+        || !isPlayerShipUnitKind(unit.kind)
+        || !Array.isArray(unit.predictedTrajectory)
+        || unit.predictedTrajectory.length < 2
+      ) {
         continue;
       }
 
@@ -1664,6 +1674,16 @@ export class WorldScene {
     }
 
     return Array.from(this.lastSeenTraces.values());
+  }
+
+  private pruneShortLivedUnitCache(liveUnitIds: Set<string>) {
+    for (const [cacheKey, cached] of this.normalizedUnitsByKey.entries()) {
+      if (liveUnitIds.has(cached.unit.unitId) || !isShortLivedTransientUnitKind(cached.unit.kind)) {
+        continue;
+      }
+
+      this.normalizedUnitsByKey.delete(cacheKey);
+    }
   }
 
   private normalizeUnit(unit: RawRenderableUnit | NormalizedUnit, isTrace: boolean) {

@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { buildStatusMeta, clamp01, formatAngle, formatCommandReplyDetail, formatGravity, formatMetric, formatWholeValue, humanizeCode, magnitude, statusKindToTone, } from '../lib/formatting';
 import { booleanValue, hasRecordKey, numberValue, objectValue, optionalNumberValue, optionalStringValue, stringValue, } from '../lib/validation';
-import { isShortLivedProjectileKind } from '../lib/unitKinds';
+import { isPlayerShipUnitKind, isShortLivedTransientUnitKind } from '../lib/unitKinds';
 import { useSessionStore } from './session';
 import { useUiStore } from './ui';
 const activityHistoryLimit = 48;
@@ -365,7 +365,7 @@ function cloneSnapshot(source) {
             speedLimit: optionalNumberValue(unit.speedLimit),
             currentThrust: normalizeKnownUnitIntelMetric(unit.currentThrust),
             maximumThrust: normalizeKnownUnitIntelMetric(unit.maximumThrust),
-            predictedTrajectory: normalizeTrajectoryPoints(unit.predictedTrajectory),
+            predictedTrajectory: normalizePredictedTrajectory(unit.kind, unit.predictedTrajectory),
             sunEnergy: normalizeKnownUnitIntelMetric(unit.sunEnergy),
             sunIons: normalizeKnownUnitIntelMetric(unit.sunIons),
             sunNeutrinos: normalizeKnownUnitIntelMetric(unit.sunNeutrinos),
@@ -531,8 +531,11 @@ function applyUnitChanges(unit, changes) {
     if (hasRecordKey(changes, 'maximumThrust')) {
         unit.maximumThrust = mergeKnownUnitIntelMetric(unit.maximumThrust, changes.maximumThrust);
     }
-    if (hasRecordKey(changes, 'predictedTrajectory')) {
-        unit.predictedTrajectory = normalizeTrajectoryPoints(changes.predictedTrajectory);
+    if (!isPlayerShipUnitKind(unit.kind)) {
+        unit.predictedTrajectory = undefined;
+    }
+    else if (hasRecordKey(changes, 'predictedTrajectory')) {
+        unit.predictedTrajectory = normalizePredictedTrajectory(unit.kind, changes.predictedTrajectory);
     }
     unit.teamName = hasRecordKey(changes, 'teamName') ? optionalStringValue(changes.teamName) : unit.teamName;
     applyKnownUnitIntelMetric(unit, 'sunEnergy', changes.sunEnergy);
@@ -556,7 +559,7 @@ function pruneTransientHiddenUnits(units) {
     return units.filter((unit) => !shouldDropTransientHiddenUnit(unit));
 }
 function shouldDropTransientHiddenUnit(unit) {
-    return !unit.isSeen && isShortLivedProjectileKind(unit.kind);
+    return !unit.isSeen && isShortLivedTransientUnitKind(unit.kind);
 }
 function applyOwnerOverlay(current, message) {
     const next = message.events.some((event) => event.eventType === 'overlay.snapshot') ? {} : { ...current };
@@ -636,6 +639,12 @@ function normalizeTrajectoryPoints(value) {
         y: numberValue(entry.y, 0),
     }));
     return points.length > 0 ? points : undefined;
+}
+function normalizePredictedTrajectory(kind, value) {
+    if (!isPlayerShipUnitKind(kind)) {
+        return undefined;
+    }
+    return normalizeTrajectoryPoints(value);
 }
 function getControllableAliveState(publicControllable, overlayState) {
     if (hasRecordKey(overlayState, 'alive')) {

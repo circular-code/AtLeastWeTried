@@ -1,5 +1,6 @@
 using Flattiverse.Gateway.Protocol.Dtos;
 using Flattiverse.Gateway.Services;
+using Flattiverse.Connector.Units;
 
 namespace Flattiverse.Gateway.Tests;
 
@@ -118,6 +119,29 @@ public sealed class TrajectoryPredictionServiceTests
         Assert.True(thirdStep >= secondStep, $"Expected continued ramp-up or hold ({secondStep:F2} -> {thirdStep:F2}).");
     }
 
+    [Fact]
+    public void Hidden_trajectory_is_not_built_for_non_player_units()
+    {
+        var target = CreateTargetUnit();
+        target.Kind = "ai-ship";
+
+        var predicted = TrajectoryPredictionService.BuildHiddenTrajectory(
+            target,
+            new[] { target },
+            currentTick: 100,
+            DefaultOptions);
+
+        Assert.Null(predicted);
+    }
+
+    [Theory]
+    [InlineData(UnitKind.Explosion)]
+    [InlineData(UnitKind.InterceptorExplosion)]
+    public void Unseen_explosions_are_removed_from_mapping_cache(UnitKind kind)
+    {
+        Assert.True(MappingService.ShouldRemoveImmediatelyWhenUnseen(kind));
+    }
+
     private static UnitSnapshotDto CreateTargetUnit()
     {
         return new UnitSnapshotDto
@@ -137,4 +161,5 @@ public sealed class TrajectoryPredictionServiceTests
             Gravity = 0f
         };
     }
+
 }

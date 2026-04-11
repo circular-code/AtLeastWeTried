@@ -334,6 +334,31 @@ public sealed class MappingService : IConnectorEventHandler
             EnsureGalaxyLoadedUnsafe(scopeKey.Value.GalaxyId);
 
             var scopeState = GetOrCreateScopeStateUnsafe(scopeKey.Value);
+            if (ShouldRemoveImmediatelyWhenUnseen(unit))
+            {
+                var removedAny = scopeState.Units.Remove(unitId);
+                if (!string.IsNullOrWhiteSpace(legacyUnitId) &&
+                    !string.Equals(legacyUnitId, unitId, StringComparison.Ordinal))
+                {
+                    removedAny = scopeState.Units.Remove(legacyUnitId) || removedAny;
+                }
+
+                scopeState.StaticUnitIds.Remove(unitId);
+                if (!string.IsNullOrWhiteSpace(legacyUnitId))
+                    scopeState.StaticUnitIds.Remove(legacyUnitId);
+
+                if (removedAny)
+                {
+                    AppendDeltaUnsafe(scopeState, new WorldDeltaDto
+                    {
+                        EventType = "unit.removed",
+                        EntityId = unitId
+                    });
+                }
+
+                return;
+            }
+
             if (!scopeState.Units.TryGetValue(unitId, out var existing))
             {
                 if (RemoveLegacyPlayerUnitIdUnsafe(scopeState, unitId, legacyUnitId))
@@ -358,7 +383,9 @@ public sealed class MappingService : IConnectorEventHandler
 
             existing.IsStatic = false;
             existing.IsSeen = false;
-            existing.PredictedTrajectory = BuildHiddenTrajectory(existing, scopeState.Units.Values, GetCurrentTick(scopeKey.Value.GalaxyId));
+            existing.PredictedTrajectory = TrajectoryPredictionService.SupportsHiddenTrajectory(existing)
+                ? BuildHiddenTrajectory(existing, scopeState.Units.Values, GetCurrentTick(scopeKey.Value.GalaxyId))
+                : null;
 
             AppendDeltaUnsafe(scopeState, new WorldDeltaDto
             {
@@ -755,7 +782,7 @@ public sealed class MappingService : IConnectorEventHandler
             if (unit.ClusterId != scopeKey.ClusterId)
                 continue;
 
-            if (unit.IsSeen || unit.IsStatic)
+            if (unit.IsSeen || unit.IsStatic || !TrajectoryPredictionService.SupportsHiddenTrajectory(unit))
             {
                 if (unit.PredictedTrajectory is null)
                     continue;
@@ -798,6 +825,16 @@ public sealed class MappingService : IConnectorEventHandler
                 HiddenTrajectoryMaximumTicks,
                 HiddenTrajectoryDownsample,
                 HiddenTrajectoryMinimumPointDistance));
+    }
+
+    private static bool ShouldRemoveImmediatelyWhenUnseen(Unit unit)
+    {
+        return ShouldRemoveImmediatelyWhenUnseen(unit.Kind);
+    }
+
+    internal static bool ShouldRemoveImmediatelyWhenUnseen(UnitKind kind)
+    {
+        return kind is UnitKind.Explosion or UnitKind.InterceptorExplosion;
     }
 
     private static bool TrajectoryMatches(

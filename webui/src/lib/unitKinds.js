@@ -16,3 +16,26 @@ export function isShortLivedProjectileKind(kind) {
             return false;
     }
 }
+export function isShortLivedExplosionKind(kind) {
+    switch (canonicalUnitKind(kind)) {
+        case 'explosion':
+        case 'interceptorexplosion':
+            return true;
+        default:
+            return false;
+    }
+}
+export function isShortLivedTransientUnitKind(kind) {
+    return isShortLivedProjectileKind(kind) || isShortLivedExplosionKind(kind);
+}
+export function isPlayerShipUnitKind(kind) {
+    switch (canonicalUnitKind(kind)) {
+        case 'classicship':
+        case 'classicshipplayerunit':
+        case 'modernship':
+        case 'modernshipplayerunit':
+            return true;
+        default:
+            return false;
+    }
+}

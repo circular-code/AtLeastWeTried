@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Globalization;
 using Flattiverse.Connector;
 using Flattiverse.Connector.Events;
@@ -1544,6 +1545,9 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                     if (string.IsNullOrWhiteSpace(targetUnitId))
                         return Rejected(commandId, "missing_target", "targetId is required for scanner target mode.");
 
+                    if (ResolveScanTarget(targetUnitId) is null)
+                        return Rejected(commandId, "target_unresolved", "Targeted scan requires a resolvable target position.");
+
                     float? width = null;
                     if (payload?.TryGetProperty("width", out var widthEl) == true &&
                         widthEl.ValueKind != System.Text.Json.JsonValueKind.Null &&
@@ -1928,14 +1932,40 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         }
     }
 
-    private static bool TryParseControllableLocalId(string controllableId, out int localControllableId)
+    private bool TryParseControllableLocalId(string controllableId, out int localControllableId)
     {
         localControllableId = 0;
-        var markerIndex = controllableId.LastIndexOf("-c", StringComparison.Ordinal);
-        if (markerIndex < 0 || markerIndex + 2 >= controllableId.Length)
+        var galaxy = Galaxy;
+        return galaxy is not null
+            && TryParseControllableIdForPlayer(controllableId, galaxy.Player.Id, out localControllableId);
+    }
+
+    private static bool TryParseControllableIdForPlayer(string value, int playerId, out int controllableId)
+    {
+        controllableId = 0;
+        return TryParseControllableId(value, out var parsedPlayerId, out controllableId)
+            && parsedPlayerId == playerId;
+    }
+
+    private static bool TryParseControllableId(string value, out int playerId, out int controllableId)
+    {
+        playerId = 0;
+        controllableId = 0;
+
+        if (string.IsNullOrWhiteSpace(value))
             return false;
 
-        return int.TryParse(controllableId[(markerIndex + 2)..], out localControllableId);
+        if (!value.StartsWith('p'))
+            return false;
+
+        var separatorIndex = value.IndexOf("-c", StringComparison.Ordinal);
+        if (separatorIndex <= 1 || separatorIndex + 2 >= value.Length)
+            return false;
+
+        if (!int.TryParse(value.AsSpan(1, separatorIndex - 1), out playerId))
+            return false;
+
+        return int.TryParse(value.AsSpan(separatorIndex + 2), out controllableId);
     }
 
     private ScanningService.TargetSnapshot? ResolveScanTarget(string targetUnitId)
@@ -1969,12 +1999,31 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         if (galaxy is null)
             return null;
 
-        if (TryParseControllableLocalId(targetUnitId, out var localControllableId))
+        if (TryParseControllableId(targetUnitId, out var targetPlayerId, out var targetControllableId))
         {
-            var controllable = galaxy.Controllables.FirstOrDefault(item => item is not null && item.Id == localControllableId);
+            if (TryResolveLiveControllableTarget(targetPlayerId, targetControllableId, currentTick, out var liveTarget))
+                return liveTarget;
+
+            if (TryResolveTeamOverlayTarget(targetUnitId, currentTick, out var teammateTarget))
+                return teammateTarget;
+        }
+
+        return null;
+    }
+
+    private bool TryResolveLiveControllableTarget(int targetPlayerId, int targetControllableId, uint currentTick, out ScanningService.TargetSnapshot target)
+    {
+        target = default;
+        var galaxy = Galaxy;
+        if (galaxy is null)
+            return false;
+
+        if (targetPlayerId == galaxy.Player.Id)
+        {
+            var controllable = galaxy.Controllables.FirstOrDefault(item => item is not null && item.Id == targetControllableId);
             if (controllable is not null)
             {
-                return new ScanningService.TargetSnapshot(
+                target = new ScanningService.TargetSnapshot(
                     controllable.Position.X,
                     controllable.Position.Y,
                     controllable.Movement.X,
@@ -1986,10 +2035,160 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                     CurrentThrust: ResolveCurrentThrust(controllable),
                     MaximumThrust: ResolveMaximumThrust(controllable),
                     PredictedTrajectory: null);
+                return true;
             }
         }
 
-        return null;
+        foreach (var cluster in galaxy.Clusters)
+        {
+            if (cluster is null)
+                continue;
+
+            foreach (var unit in cluster.Units)
+            {
+                if (unit is not PlayerUnit playerUnit ||
+                    playerUnit.Player.Id != targetPlayerId ||
+                    playerUnit.ControllableInfo.Id != targetControllableId)
+                {
+                    continue;
+                }
+
+                target = new ScanningService.TargetSnapshot(
+                    playerUnit.Position.X,
+                    playerUnit.Position.Y,
+                    playerUnit.Movement.X,
+                    playerUnit.Movement.Y,
+                    HasVelocity: true,
+                    IsSeen: true,
+                    LastSeenTick: currentTick,
+                    CurrentTick: currentTick,
+                    CurrentThrust: null,
+                    MaximumThrust: null,
+                    PredictedTrajectory: null);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool TryResolveTeamOverlayTarget(string targetUnitId, uint currentTick, out ScanningService.TargetSnapshot target)
+    {
+        target = default;
+        var teamScopeKey = BuildTeamOverlayScopeKey();
+        if (string.IsNullOrWhiteSpace(teamScopeKey))
+            return false;
+
+        var teammateSnapshots = TeamOverlaySyncService.CollectTeammateSnapshots(teamScopeKey, _id);
+        for (var index = 0; index < teammateSnapshots.Count; index++)
+        {
+            var snapshot = teammateSnapshots[index];
+            if (!string.Equals(snapshot.ControllableId, targetUnitId, StringComparison.Ordinal) ||
+                snapshot.Changes is null ||
+                !TryBuildOverlayTargetSnapshot(snapshot.Changes, currentTick, out target))
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryBuildOverlayTargetSnapshot(
+        IDictionary<string, object?> changes,
+        uint currentTick,
+        out ScanningService.TargetSnapshot target)
+    {
+        target = default;
+        if (!TryGetNestedMap(changes, "position", out var position) ||
+            !TryGetSingle(position, "x", out var x) ||
+            !TryGetSingle(position, "y", out var y))
+        {
+            return false;
+        }
+
+        var velocityX = 0f;
+        var velocityY = 0f;
+        var hasVelocity = TryGetNestedMap(changes, "movement", out var movement)
+            && TryGetSingle(movement, "x", out velocityX)
+            && TryGetSingle(movement, "y", out velocityY);
+
+        float? currentThrust = null;
+        float? maximumThrust = null;
+        if (TryGetNestedMap(changes, "engine", out var engine))
+        {
+            if (TryGetSingle(engine, "currentX", out var currentX) &&
+                TryGetSingle(engine, "currentY", out var currentY))
+            {
+                currentThrust = MathF.Sqrt((currentX * currentX) + (currentY * currentY));
+            }
+
+            if (TryGetSingle(engine, "maximum", out var maximum))
+                maximumThrust = maximum;
+        }
+
+        target = new ScanningService.TargetSnapshot(
+            X: x,
+            Y: y,
+            VelocityX: hasVelocity ? velocityX : 0f,
+            VelocityY: hasVelocity ? velocityY : 0f,
+            HasVelocity: hasVelocity,
+            IsSeen: true,
+            LastSeenTick: currentTick,
+            CurrentTick: currentTick,
+            CurrentThrust: currentThrust,
+            MaximumThrust: maximumThrust,
+            PredictedTrajectory: null);
+        return true;
+    }
+
+    private static bool TryGetNestedMap(IDictionary<string, object?> source, string key, out IDictionary nested)
+    {
+        nested = default!;
+        if (!source.TryGetValue(key, out var value) || value is not IDictionary dictionary)
+            return false;
+
+        nested = dictionary;
+        return true;
+    }
+
+    private static bool TryGetSingle(IDictionary source, string key, out float value)
+    {
+        value = 0f;
+        if (!source.Contains(key))
+            return false;
+
+        return TryConvertToSingle(source[key], out value);
+    }
+
+    private static bool TryConvertToSingle(object? rawValue, out float value)
+    {
+        switch (rawValue)
+        {
+            case float single:
+                value = single;
+                return true;
+            case double @double when float.IsFinite((float)@double):
+                value = (float)@double;
+                return true;
+            case int integer:
+                value = integer;
+                return true;
+            case long longValue:
+                value = longValue;
+                return true;
+            case uint unsignedInteger:
+                value = unsignedInteger;
+                return true;
+            case decimal decimalValue:
+                value = (float)decimalValue;
+                return true;
+            default:
+                value = 0f;
+                return false;
+        }
     }
 
     private static float? ResolveCurrentThrust(Controllable controllable)

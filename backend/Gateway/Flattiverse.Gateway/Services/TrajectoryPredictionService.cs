@@ -55,7 +55,7 @@ internal static class TrajectoryPredictionService
         uint currentTick,
         PredictionOptions options)
     {
-        if (unit.IsStatic || unit.IsSeen)
+        if (unit.IsStatic || unit.IsSeen || !SupportsHiddenTrajectory(unit))
             return null;
 
         var elapsedTicks = currentTick > unit.LastSeenTick
@@ -97,6 +97,11 @@ internal static class TrajectoryPredictionService
 
         AppendTrajectoryPoint(predicted, simulated[^1], options.MinimumPointDistance);
         return predicted.Count >= 2 ? predicted : null;
+    }
+
+    internal static bool SupportsHiddenTrajectory(UnitSnapshotDto unit)
+    {
+        return IsPlayerShipKind(unit.Kind);
     }
 
     private static SimulatedBody[] BuildSimulationBodies(UnitSnapshotDto targetUnit, IReadOnlyList<UnitSnapshotDto> relevantUnits)
@@ -364,5 +369,22 @@ internal static class TrajectoryPredictionService
             X = (float)candidate.X,
             Y = (float)candidate.Y
         });
+    }
+
+    private static bool IsPlayerShipKind(string? kind)
+    {
+        var normalizedKind = CanonicalizeKind(kind);
+        return string.Equals(normalizedKind, "classicship", StringComparison.Ordinal) ||
+            string.Equals(normalizedKind, "classicshipplayerunit", StringComparison.Ordinal) ||
+            string.Equals(normalizedKind, "modernship", StringComparison.Ordinal) ||
+            string.Equals(normalizedKind, "modernshipplayerunit", StringComparison.Ordinal);
+    }
+
+    private static string CanonicalizeKind(string? kind)
+    {
+        if (string.IsNullOrWhiteSpace(kind))
+            return string.Empty;
+
+        return string.Concat(kind.Where(char.IsLetterOrDigit)).ToLowerInvariant();
     }
 }
