@@ -23,7 +23,7 @@ public static class TrajectoryAligner
     /// Approach deceleration factor: desired along-track speed = min(speedLimit, dist * factor).
     /// Lower values start braking earlier. Used when no path is available.
     /// </summary>
-    private const double ApproachDecelerationFactor = 0.10d;
+    private const double ApproachDecelerationFactor = 0.06d;
 
     /// <summary>
     /// How far ahead (in world units) along the remaining path to scan for upcoming turns.
@@ -57,7 +57,7 @@ public static class TrajectoryAligner
     /// braking activates.  3× gives a comfortable margin for the braking curve to
     /// work within discrete-time control.
     /// </summary>
-    private const double StopBrakeActivationMultiplier = 3.0d;
+    private const double StopBrakeActivationMultiplier = 4.0d;
 
     /// <summary>
     /// Compute the engine vector that best steers the ship from its current position
@@ -317,10 +317,10 @@ public static class TrajectoryAligner
             var gravCompCost = Math.Min(gravMag * adaptiveLookahead, maxThrust * 0.7d);
             var effectiveBraking = Math.Max(maxThrust - gravCompCost, maxThrust * 0.15d);
 
-            // Safety margin: 70% of effective braking to account for cross-track
-            // correction stealing engine budget.  Higher than before (was 55%)
-            // because the activation distance is now correctly sized.
-            var formulaBraking = effectiveBraking * 0.7d;
+            // Safety margin: 85% of effective braking to use more thrust for
+            // deceleration.  Previously 70%, increased to brake harder and arrive
+            // at targets more slowly.
+            var formulaBraking = effectiveBraking * 0.85d;
 
             // Two braking limits, take the tighter one:
             // 1) Physics sqrt curve:  v = sqrt(2 · a_eff · d)
