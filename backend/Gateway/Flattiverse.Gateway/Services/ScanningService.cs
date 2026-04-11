@@ -557,14 +557,6 @@ public sealed class ScanningService : IConnectorEventHandler
         return delta;
     }
 
-    private static float NormalizeAngle(float angle)
-    {
-        angle %= 360f;
-        if (angle < 0f)
-            angle += 360f;
-        return angle;
-    }
-
     private static float ResolveDefaultWidth(DynamicScannerSubsystem scanner, ScannerMode mode)
     {
         return mode switch
