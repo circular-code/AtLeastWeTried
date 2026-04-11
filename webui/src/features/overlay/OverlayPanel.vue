@@ -349,9 +349,45 @@ onBeforeUnmount(() => {
               </div>
               <div class="owner-overlay-head-actions">
                 <div class="owner-overlay-badges">
-              <span v-for="badge in visibleBadges(entry)" :key="badge.label" class="overlay-badge" :class="`is-${badge.tone}`">{{ badge.label }}</span>
+                  <span v-for="badge in visibleBadges(entry)" :key="badge.label" class="overlay-badge" :class="`is-${badge.tone}`">{{ badge.label }}</span>
+                </div>
+                <div class="actions-compact">
+                  <button v-if="!entry.alive" class="button-secondary button-compact" type="button" @click.stop="handleLifecycleAction(entry.id, entry.alive)">Spawn</button>
+                  <button v-else class="button-ghost button-compact owner-overlay-action-button" type="button" title="Destroy ship" aria-label="Destroy ship" @click.stop="gateway.destroyShip(entry.id)">
+                    <svg viewBox="0 0 16 16" focusable="false" aria-hidden="true">
+                      <path d="M8 2a4.5 4.5 0 0 0-4.5 4.5c0 1.6.84 3.02 2.1 3.83V12h4.8v-1.67A4.5 4.5 0 0 0 12.5 6.5 4.5 4.5 0 0 0 8 2zM6.25 10.5V10h3.5v.5h-3.5zm-.5-3a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0zm4.5 0a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0z" fill="currentColor"/>
+                    </svg>
+                  </button>
+                  <button
+                    class="button-secondary button-compact owner-overlay-action-button"
+                    :class="{ 'is-ready': hasAvailableSubsystemUpgrade(entry.id) }"
+                    type="button"
+                    :title="openSubsystemsForId === entry.id ? 'Hide modules' : 'Show modules'"
+                    aria-label="Modules"
+                    @click.stop="toggleSubsystems(entry.id)"
+                  >
+                    <svg viewBox="0 0 16 16" focusable="false" aria-hidden="true">
+                      <path d="M6.6 1.9h2.8l.35 1.6c.33.11.65.25.94.43l1.45-.77 1.4 1.4-.77 1.45c.18.29.32.61.43.94l1.6.35v2.8l-1.6.35a4.6 4.6 0 0 1-.43.94l.77 1.45-1.4 1.4-1.45-.77c-.29.18-.61.32-.94.43l-.35 1.6H6.6l-.35-1.6a4.6 4.6 0 0 1-.94-.43l-1.45.77-1.4-1.4.77-1.45a4.6 4.6 0 0 1-.43-.94l-1.6-.35V6.6l1.6-.35c.11-.33.25-.65.43-.94l-.77-1.45 1.4-1.4 1.45.77c.29-.18.61-.32.94-.43z" fill="none" stroke="currentColor" stroke-linejoin="round" stroke-width="1.1"></path>
+                      <circle cx="8" cy="8" r="2.05" fill="none" stroke="currentColor" stroke-width="1.1"></circle>
+                    </svg>
+                  </button>
+                  <label class="button-secondary button-compact ship-color-control" title="Ship color">
+                    <input
+                      class="ship-color-input"
+                      type="color"
+                      :value="shipColorValue(entry.id)"
+                      @click.stop
+                      @input.stop="updateShipColor(entry.id, $event)"
+                    />
+                  </label>
+                  <button class="button-danger button-compact owner-overlay-action-button" type="button" title="Remove ship" aria-label="Remove ship" :disabled="isRemoving(entry.id)" @click.stop="gateway.removeShip(entry.id)">
+                    <svg viewBox="0 0 16 16" focusable="false" aria-hidden="true">
+                      <path d="M5.5 2h5M2.5 4.5h11M4.5 4.5l.8 8.5h5.4l.8-8.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                      <path d="M6.5 7v4M9.5 7v4" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" fill="none"/>
+                    </svg>
+                  </button>
+                </div>
               </div>
-            </div>
           </div>
         </div>
 
@@ -379,35 +415,7 @@ onBeforeUnmount(() => {
           </div>
         </dl>
 
-        <div class="actions-compact">
-          <button v-if="!entry.alive" class="button-secondary button-compact" type="button" @click.stop="handleLifecycleAction(entry.id, entry.alive)">
-            Spawn
-          </button>
-          <button v-else class="button-ghost button-compact" type="button" @click.stop="gateway.destroyShip(entry.id)">Destroy</button>
-          <button
-            class="button-secondary button-compact owner-overlay-action-button"
-            :class="{ 'is-ready': hasAvailableSubsystemUpgrade(entry.id) }"
-            type="button"
-            :title="openSubsystemsForId === entry.id ? 'Hide modules' : 'Show modules'"
-            aria-label="Modules"
-            @click.stop="toggleSubsystems(entry.id)"
-          >
-            <svg viewBox="0 0 16 16" focusable="false" aria-hidden="true">
-              <path d="M6.6 1.9h2.8l.35 1.6c.33.11.65.25.94.43l1.45-.77 1.4 1.4-.77 1.45c.18.29.32.61.43.94l1.6.35v2.8l-1.6.35a4.6 4.6 0 0 1-.43.94l.77 1.45-1.4 1.4-1.45-.77c-.29.18-.61.32-.94.43l-.35 1.6H6.6l-.35-1.6a4.6 4.6 0 0 1-.94-.43l-1.45.77-1.4-1.4.77-1.45a4.6 4.6 0 0 1-.43-.94l-1.6-.35V6.6l1.6-.35c.11-.33.25-.65.43-.94l-.77-1.45 1.4-1.4 1.45.77c.29-.18.61-.32.94-.43z" fill="none" stroke="currentColor" stroke-linejoin="round" stroke-width="1.1"></path>
-              <circle cx="8" cy="8" r="2.05" fill="none" stroke="currentColor" stroke-width="1.1"></circle>
-            </svg>
-          </button>
-          <label class="button-secondary button-compact ship-color-control" title="Ship color">
-            <input
-              class="ship-color-input"
-              type="color"
-              :value="shipColorValue(entry.id)"
-              @click.stop
-              @input.stop="updateShipColor(entry.id, $event)"
-            />
-          </label>
-          <button class="button-danger button-compact" type="button" :disabled="isRemoving(entry.id)" @click.stop="gateway.removeShip(entry.id)">Remove</button>
-        </div>
+
       </button>
 
       <ShipCreator @create="gateway.createShip($event)" />
@@ -426,28 +434,32 @@ onBeforeUnmount(() => {
 <style scoped>
 .owner-overlay-head-actions {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: flex-end;
-  gap: 0.35rem;
-  flex-wrap: nowrap;
+  gap: 0.2rem;
+  flex-wrap: wrap;
   flex: 0 0 auto;
+}
+
+.owner-overlay-head-actions .button-compact {
+  border-radius: 5px;
 }
 
 .ship-color-control {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 2rem;
-  min-width: 2rem;
-  height: 2rem;
+  width: 1.65rem;
+  min-width: 1.65rem;
+  height: 1.65rem;
   padding: 0;
-  border-radius: 999px;
+  border-radius: 5px;
   cursor: pointer;
 }
 
 .ship-color-input {
-  width: 1.05rem;
-  height: 1.05rem;
+  width: 0.88rem;
+  height: 0.88rem;
   padding: 0;
   border: none;
   border-radius: 999px;
@@ -461,21 +473,24 @@ onBeforeUnmount(() => {
 
 .ship-color-input::-webkit-color-swatch {
   border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 999px;
+  border-radius: 3px;
 }
 
 .ship-color-input::-moz-color-swatch {
   border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 999px;
+  border-radius: 3px;
 }
 
 .owner-overlay-action-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 2rem;
-  min-width: 2rem;
+  width: 1.65rem;
+  min-width: 1.65rem;
+  height: 1.65rem;
   padding-inline: 0;
+  padding-block: 0;
+  border-radius: 5px;
 }
 
 .owner-overlay-action-button svg {
