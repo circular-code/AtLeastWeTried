@@ -184,6 +184,24 @@ public sealed class MappingService : IConnectorEventHandler
         }
     }
 
+    internal List<GravitySimulator.GravitySource> BuildCollaborativeGravitySources(int clusterId)
+    {
+        EnsurePersistenceConfigured();
+
+        var scope = _scopeResolver();
+        if (scope is null || string.IsNullOrWhiteSpace(scope.Value.GalaxyId))
+            return new List<GravitySimulator.GravitySource>();
+
+        lock (_stateLock)
+        {
+            EnsureGalaxyLoadedUnsafe(scope.Value.GalaxyId);
+            return BuildUnifiedGalaxyUnitSnapshotsUnsafe(scope.Value.GalaxyId)
+                .Where(unit => unit.ClusterId == clusterId && unit.Gravity > 0f)
+                .Select(unit => new GravitySimulator.GravitySource(unit.X, unit.Y, unit.Gravity))
+                .ToList();
+        }
+    }
+
     /// <summary>
     /// Build the backend-local collaborative snapshot without any imported remote
     /// teammate intel. This is the outbound export surface for binary sync.

@@ -41,6 +41,77 @@ public sealed class TacticalServiceTests
         Assert.Null(overlay["targetId"]);
     }
 
+    [Fact]
+    public void Speed_only_intercept_hits_moving_target_when_solution_exists()
+    {
+        var hasSolution = TacticalService.TryComputeSpeedOnlyIntercept(
+            shipX: 0f,
+            shipY: 0f,
+            shipVx: 0f,
+            shipVy: 0f,
+            shotSpeed: 2f,
+            spawnOffset: 0f,
+            minTicks: 1,
+            maxTicks: 120,
+            targetX: 70f,
+            targetY: 0f,
+            targetVx: -0.8f,
+            targetVy: 0f,
+            targetRadius: 1f,
+            out var movement,
+            out var ticks,
+            out var missDistance);
+
+        Assert.True(hasSolution);
+        Assert.True(ticks > 0);
+        Assert.InRange(movement.Length, 1.999f, 2.001f);
+        Assert.InRange(missDistance, 0f, 2f);
+    }
+
+    [Fact]
+    public void Speed_only_intercept_accounts_for_target_speed()
+    {
+        var movingAway = TacticalService.TryComputeSpeedOnlyIntercept(
+            shipX: 0f,
+            shipY: 0f,
+            shipVx: 0f,
+            shipVy: 0f,
+            shotSpeed: 2f,
+            spawnOffset: 0f,
+            minTicks: 1,
+            maxTicks: 120,
+            targetX: 50f,
+            targetY: 0f,
+            targetVx: 0.8f,
+            targetVy: 0f,
+            targetRadius: 1f,
+            out _,
+            out var awayTicks,
+            out _);
+
+        var movingToward = TacticalService.TryComputeSpeedOnlyIntercept(
+            shipX: 0f,
+            shipY: 0f,
+            shipVx: 0f,
+            shipVy: 0f,
+            shotSpeed: 2f,
+            spawnOffset: 0f,
+            minTicks: 1,
+            maxTicks: 120,
+            targetX: 50f,
+            targetY: 0f,
+            targetVx: -0.8f,
+            targetVy: 0f,
+            targetRadius: 1f,
+            out _,
+            out var towardTicks,
+            out _);
+
+        Assert.True(movingAway);
+        Assert.True(movingToward);
+        Assert.True(awayTicks > towardTicks);
+    }
+
     private static T CreateNpcUnit<T>(Team team)
         where T : MobileNpcUnit
     {

@@ -45,7 +45,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     private readonly ScanningService _scanningService;
     private readonly ManeuveringService _maneuveringService;
     private readonly PathfindingService _pathfindingService;
-    private readonly TacticalService _tacticalService = new();
+    private readonly TacticalService _tacticalService;
     private readonly object _autoFireSync = new();
     private readonly HashSet<string> _autoFireInFlight = new();
     private readonly Dictionary<string, TacticalScannerSyncState> _tacticalScannerSyncStates = new(StringComparer.Ordinal);
@@ -91,6 +91,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         _scanningService = new ScanningService(ResolveScanTarget);
         _maneuveringService = new ManeuveringService(_mappingService);
         _pathfindingService = new PathfindingService(_mappingService, _maneuveringService, pathfindingLogger, pathfindingOptions);
+        _tacticalService = new TacticalService(ResolveTacticalGravitySources);
     }
 
     public async Task ConnectAsync()
@@ -2305,6 +2306,15 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         }
 
         return hasEngine ? total : null;
+    }
+
+    private IReadOnlyList<GravitySimulator.GravitySource> ResolveTacticalGravitySources(ClassicShipControllable ship)
+    {
+        var clusterId = ship.Cluster?.Id ?? 0;
+        if (clusterId <= 0)
+            return Array.Empty<GravitySimulator.GravitySource>();
+
+        return _mappingService.BuildCollaborativeGravitySources(clusterId);
     }
 
     private MappingService.MappingScopeContext? BuildMappingScopeContext()

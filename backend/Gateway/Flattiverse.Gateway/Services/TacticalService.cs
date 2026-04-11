@@ -17,8 +17,6 @@ namespace Flattiverse.Gateway.Services;
 public sealed class TacticalService : IConnectorEventHandler
 {
     private const uint AutoFireCooldownTicks = 2;
-    private const float DefaultShotRelativeSpeed = 2f;
-    private const ushort DefaultShotTicks = 80;
     private const float DefaultShotLoad = 12f;
     private const float DefaultShotDamage = 8f;
     private const float SpawnPaddingDistance = 2f;
@@ -26,9 +24,13 @@ public sealed class TacticalService : IConnectorEventHandler
     private const float ShotRadius = 1f;
     private const int BallisticMaxIterations = 120;
     private const int GravityCompensationIterations = 8;
+    private const int LinearFallbackRefinementIterations = 3;
+    private const float UncertainPredictionThresholdScale = 0.65f;
+    private const float UncertainPredictionThresholdFloor = 0.85f;
+    private const float FallbackSelectionEpsilon = 0.05f;
 
     private const string TraceEnvVar = "FV_TACTICAL_TRACE";
-    private static readonly bool TraceEnabled = true;
+    private static readonly bool TraceEnabled = string.Equals(Environment.GetEnvironmentVariable(TraceEnvVar), "1", StringComparison.Ordinal);
     private static readonly string TraceDirectory = Path.Combine(AppContext.BaseDirectory, "data", "tactical-traces");
 
     public enum TacticalMode
@@ -62,6 +64,12 @@ public sealed class TacticalService : IConnectorEventHandler
     private readonly object _sync = new();
     private readonly Dictionary<string, TacticalState> _states = new();
     private readonly List<AutoFireRequest> _pendingAutoFire = new();
+    private readonly Func<ClassicShipControllable, IReadOnlyList<GravitySource>> _gravitySourceResolver;
+
+    public TacticalService(Func<ClassicShipControllable, IReadOnlyList<GravitySource>>? gravitySourceResolver = null)
+    {
+        _gravitySourceResolver = gravitySourceResolver ?? BuildGravitySourcesFromCluster;
+    }
 
     public void Handle(FlattiverseEvent @event)
     {
@@ -228,7 +236,7 @@ public sealed class TacticalService : IConnectorEventHandler
 
         var gravitySources = BuildGravitySources(ship);
 
-        if (!ComputeBallisticSolution(
+        if (!TryBuildBestShotSolution(
                 ship, targetX, targetY, 0f, 0f, 0f, gravitySources,
                 out var relMovement, out var shotTicks, out var shotLoad, out var shotDamage, out var missDistance))
             return false;
@@ -351,7 +359,7 @@ public sealed class TacticalService : IConnectorEventHandler
 
         var gravitySources = BuildGravitySources(ship);
 
-        if (!ComputeBallisticSolution(
+        if (!TryBuildBestShotSolution(
                 ship, targetX, targetY, targetVx, targetVy, targetUnit.Radius, gravitySources,
                 out var relMovement, out var shotTicks, out var shotLoad, out var shotDamage, out var missDistance))
             return false;
@@ -444,7 +452,28 @@ public sealed class TacticalService : IConnectorEventHandler
             return true;
         }
 
-        // Plain name lookup — find any unit with matching name that is a PlayerUnit
+        var legacyName = TryExtractLegacyUnitName(targetId);
+        if (string.IsNullOrWhiteSpace(legacyName))
+            return false;
+
+        foreach (var unit in cluster.Units)
+        {
+            if (!string.Equals(unit.Name, legacyName, StringComparison.Ordinal))
+                continue;
+
+            if (unit is PlayerUnit playerUnit
+                && myTeam is not null
+                && playerUnit.Team is not null
+                && playerUnit.Team.Id == myTeam.Id)
+            {
+                return false;
+            }
+
+            targetUnit = unit;
+            targetReference = UnitIdentity.BuildUnitId(unit, cluster.Id);
+            return true;
+        }
+
         return false;
     }
 
@@ -474,10 +503,27 @@ public sealed class TacticalService : IConnectorEventHandler
 
             bestScore = score;
             bestTarget = unit;
-            targetReference = UnitIdentity.BuildUnitId(unit);
+            targetReference = UnitIdentity.BuildUnitId(unit, cluster.Id);
         }
 
         return bestTarget is not null;
+    }
+
+    private static string? TryExtractLegacyUnitName(string targetId)
+    {
+        if (string.IsNullOrWhiteSpace(targetId))
+            return null;
+
+        if (UnitIdentity.TryParseControllableId(targetId, out _, out _))
+            return null;
+
+        const string unitSeparator = "/unit/";
+        var separatorIndex = targetId.IndexOf(unitSeparator, StringComparison.Ordinal);
+        if (separatorIndex < 0)
+            return targetId;
+
+        var nameStart = separatorIndex + unitSeparator.Length;
+        return nameStart >= targetId.Length ? null : targetId[nameStart..];
     }
 
     private static double ComputeTargetSelectionScore(ClassicShipControllable ship, Unit unit)
@@ -529,7 +575,23 @@ public sealed class TacticalService : IConnectorEventHandler
         return myTeam is not null && unit.Team is not null && unit.Team.Id == myTeam.Id;
     }
 
-    private static List<GravitySource> BuildGravitySources(ClassicShipControllable ship)
+    private List<GravitySource> BuildGravitySources(ClassicShipControllable ship)
+    {
+        try
+        {
+            var resolved = _gravitySourceResolver(ship);
+            if (resolved is { Count: > 0 })
+                return resolved.ToList();
+        }
+        catch
+        {
+            // Ignore resolver failures and fall back to live cluster units.
+        }
+
+        return BuildGravitySourcesFromCluster(ship);
+    }
+
+    private static List<GravitySource> BuildGravitySourcesFromCluster(ClassicShipControllable ship)
     {
         var sources = new List<GravitySource>();
         var cluster = ship.Cluster;
@@ -543,6 +605,236 @@ public sealed class TacticalService : IConnectorEventHandler
         }
 
         return sources;
+    }
+
+    private static bool TryBuildBestShotSolution(
+        ClassicShipControllable ship,
+        float targetX,
+        float targetY,
+        float targetVx,
+        float targetVy,
+        float targetRadius,
+        List<GravitySource> gravitySources,
+        out Vector relativeMovement,
+        out ushort shotTicks,
+        out float shotLoad,
+        out float shotDamage,
+        out float missDistance)
+    {
+        relativeMovement = new Vector();
+        shotTicks = 0;
+        shotLoad = 0f;
+        shotDamage = 0f;
+        missDistance = float.MaxValue;
+
+        var hasBallistic = ComputeBallisticSolution(
+            ship,
+            targetX,
+            targetY,
+            targetVx,
+            targetVy,
+            targetRadius,
+            gravitySources,
+            out var ballisticMovement,
+            out var ballisticTicks,
+            out var ballisticLoad,
+            out var ballisticDamage,
+            out var ballisticMissDistance);
+
+        var hasFallback = false;
+        var fallbackMovement = new Vector();
+        var fallbackTicks = (ushort)0;
+        var fallbackMissDistance = float.MaxValue;
+        var fallbackLoad = Math.Clamp(DefaultShotLoad, ship.ShotLauncher.MinimumLoad, ship.ShotLauncher.MaximumLoad);
+        var fallbackDamage = Math.Clamp(DefaultShotDamage, ship.ShotLauncher.MinimumDamage, ship.ShotLauncher.MaximumDamage);
+
+        var uncertainMissDistance = ComputeUncertainMissDistance(targetRadius);
+        if (!hasBallistic || ballisticMissDistance > uncertainMissDistance)
+        {
+            hasFallback = TryComputeSpeedOnlyFallbackSolution(
+                ship,
+                targetX,
+                targetY,
+                targetVx,
+                targetVy,
+                targetRadius,
+                out fallbackMovement,
+                out fallbackTicks,
+                out fallbackMissDistance);
+        }
+
+        if (hasFallback && (!hasBallistic || fallbackMissDistance + FallbackSelectionEpsilon < ballisticMissDistance))
+        {
+            relativeMovement = fallbackMovement;
+            shotTicks = fallbackTicks;
+            shotLoad = fallbackLoad;
+            shotDamage = fallbackDamage;
+            missDistance = fallbackMissDistance;
+            return true;
+        }
+
+        if (!hasBallistic)
+            return false;
+
+        relativeMovement = ballisticMovement;
+        shotTicks = ballisticTicks;
+        shotLoad = ballisticLoad;
+        shotDamage = ballisticDamage;
+        missDistance = ballisticMissDistance;
+        return true;
+    }
+
+    private static float ComputeAcceptableMissDistance(float targetRadius)
+    {
+        return Math.Max(ShotRadius, targetRadius + ShotRadius);
+    }
+
+    private static float ComputeUncertainMissDistance(float targetRadius)
+    {
+        var acceptableMissDistance = ComputeAcceptableMissDistance(targetRadius);
+        return Math.Max(UncertainPredictionThresholdFloor, acceptableMissDistance * UncertainPredictionThresholdScale);
+    }
+
+    private static bool TryComputeSpeedOnlyFallbackSolution(
+        ClassicShipControllable ship,
+        float targetX,
+        float targetY,
+        float targetVx,
+        float targetVy,
+        float targetRadius,
+        out Vector relativeMovement,
+        out ushort shotTicks,
+        out float missDistance)
+    {
+        var launcher = ship.ShotLauncher;
+        return TryComputeSpeedOnlyIntercept(
+            ship.Position.X,
+            ship.Position.Y,
+            ship.Movement.X,
+            ship.Movement.Y,
+            launcher.MaximumRelativeMovement,
+            ship.Size + SpawnPaddingDistance,
+            launcher.MinimumTicks,
+            launcher.MaximumTicks,
+            targetX,
+            targetY,
+            targetVx,
+            targetVy,
+            targetRadius,
+            out relativeMovement,
+            out shotTicks,
+            out missDistance);
+    }
+
+    internal static bool TryComputeSpeedOnlyIntercept(
+        float shipX,
+        float shipY,
+        float shipVx,
+        float shipVy,
+        float shotSpeed,
+        float spawnOffset,
+        ushort minTicks,
+        ushort maxTicks,
+        float targetX,
+        float targetY,
+        float targetVx,
+        float targetVy,
+        float targetRadius,
+        out Vector relativeMovement,
+        out ushort shotTicks,
+        out float missDistance)
+    {
+        relativeMovement = new Vector();
+        shotTicks = 0;
+        missDistance = float.MaxValue;
+
+        if (shotSpeed <= 0.0001f)
+            return false;
+
+        if (minTicks > maxTicks)
+            return false;
+
+        var bestMiss = double.MaxValue;
+        var bestTick = -1;
+        var bestRelX = 0f;
+        var bestRelY = 0f;
+
+        for (var ticks = minTicks; ticks <= maxTicks; ticks++)
+        {
+            if (ticks <= 0)
+                continue;
+
+            var interceptTargetX = (double)targetX + (double)targetVx * ticks;
+            var interceptTargetY = (double)targetY + (double)targetVy * ticks;
+
+            var candidateRelX = (float)((interceptTargetX - shipX) / ticks - shipVx);
+            var candidateRelY = (float)((interceptTargetY - shipY) / ticks - shipVy);
+            NormalizeToSpeed(ref candidateRelX, ref candidateRelY, shotSpeed);
+
+            for (var iter = 0; iter < LinearFallbackRefinementIterations; iter++)
+            {
+                var relLength = Math.Sqrt(candidateRelX * candidateRelX + candidateRelY * candidateRelY);
+                if (relLength < 0.0001d)
+                    break;
+
+                var spawnX = shipX + candidateRelX / relLength * spawnOffset;
+                var spawnY = shipY + candidateRelY / relLength * spawnOffset;
+
+                var neededRelX = (float)((interceptTargetX - spawnX) / ticks - shipVx);
+                var neededRelY = (float)((interceptTargetY - spawnY) / ticks - shipVy);
+                NormalizeToSpeed(ref neededRelX, ref neededRelY, shotSpeed);
+
+                candidateRelX = neededRelX;
+                candidateRelY = neededRelY;
+            }
+
+            var finalRelLength = Math.Sqrt(candidateRelX * candidateRelX + candidateRelY * candidateRelY);
+            if (finalRelLength < 0.0001d)
+                continue;
+
+            var finalSpawnX = shipX + candidateRelX / finalRelLength * spawnOffset;
+            var finalSpawnY = shipY + candidateRelY / finalRelLength * spawnOffset;
+            var shotEndX = finalSpawnX + (shipVx + candidateRelX) * ticks;
+            var shotEndY = finalSpawnY + (shipVy + candidateRelY) * ticks;
+
+            var missX = shotEndX - interceptTargetX;
+            var missY = shotEndY - interceptTargetY;
+            var miss = Math.Sqrt(missX * missX + missY * missY);
+
+            if (miss >= bestMiss)
+                continue;
+
+            bestMiss = miss;
+            bestTick = ticks;
+            bestRelX = candidateRelX;
+            bestRelY = candidateRelY;
+        }
+
+        if (bestTick <= 0)
+            return false;
+
+        if (bestMiss > ComputeAcceptableMissDistance(targetRadius))
+            return false;
+
+        relativeMovement = new Vector(bestRelX, bestRelY);
+        shotTicks = (ushort)bestTick;
+        missDistance = (float)bestMiss;
+        return true;
+    }
+
+    private static void NormalizeToSpeed(ref float x, ref float y, float speed)
+    {
+        var length = Math.Sqrt(x * x + y * y);
+        if (length <= 0.0001d)
+        {
+            x = speed;
+            y = 0f;
+            return;
+        }
+
+        var scale = speed / length;
+        x = (float)(x * scale);
+        y = (float)(y * scale);
     }
 
     /// <summary>
@@ -605,10 +897,6 @@ public sealed class TacticalService : IConnectorEventHandler
 
         var iterationLimit = Math.Min((int)maxTicks, BallisticMaxIterations);
 
-        // Pre-compute target positions at each tick so we can re-use them during refinement.
-        var targetPositions = new (double X, double Y)[iterationLimit + 1];
-        targetPositions[0] = (tX, tY);
-
         for (var t = 1; t <= iterationLimit; t++)
         {
             var (gx, gy) = ComputeGravityAcceleration(tX, tY, gravitySources);
@@ -617,7 +905,6 @@ public sealed class TacticalService : IConnectorEventHandler
             (tVx, tVy) = ApplySoftCap(tVx, tVy, targetSpeedLimit);
             tX += tVx;
             tY += tVy;
-            targetPositions[t] = (tX, tY);
 
             trace?.RecordTargetTick(t, tX, tY, tVx, tVy, gx, gy);
 
