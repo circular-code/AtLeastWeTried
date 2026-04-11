@@ -427,7 +427,7 @@ public sealed class MappingService : IConnectorEventHandler
 
             var scopeState = GetOrCreateScopeStateUnsafe(scopeKey.Value);
             ForgetRecentTargetSnapshotUnsafe(scopeKey.Value.GalaxyId, dto.UnitId);
-            RemoveLegacyPlayerUnitIdUnsafe(scopeState, dto.UnitId, unit.Name);
+            RemoveLegacyUnitIdUnsafe(scopeState, dto.UnitId, unit.Name);
             var alreadyKnown = scopeState.Units.TryGetValue(dto.UnitId, out var existing);
             MergeKnownDetailState(dto, existing);
 
@@ -473,7 +473,7 @@ public sealed class MappingService : IConnectorEventHandler
 
             var scopeState = GetOrCreateScopeStateUnsafe(scopeKey.Value);
             ForgetRecentTargetSnapshotUnsafe(scopeKey.Value.GalaxyId, dto.UnitId);
-            RemoveLegacyPlayerUnitIdUnsafe(scopeState, dto.UnitId, unit.Name);
+            RemoveLegacyUnitIdUnsafe(scopeState, dto.UnitId, unit.Name);
             scopeState.Units.TryGetValue(dto.UnitId, out var existing);
             MergeKnownDetailState(dto, existing);
             scopeState.Units[dto.UnitId] = CloneUnitSnapshot(dto);
@@ -506,7 +506,7 @@ public sealed class MappingService : IConnectorEventHandler
         if (scopeKey is null)
             return;
 
-        var unitId = BuildUnitId(unit);
+        var unitId = UnitIdentity.BuildUnitId(unit, clusterId);
         var legacyUnitId = unit.Name;
 
         lock (_stateLock)
@@ -541,17 +541,12 @@ public sealed class MappingService : IConnectorEventHandler
 
             if (!scopeState.Units.TryGetValue(unitId, out var existing))
             {
-                if (RemoveLegacyPlayerUnitIdUnsafe(scopeState, unitId, legacyUnitId))
+                if (RemoveLegacyUnitIdUnsafe(scopeState, unitId, legacyUnitId))
                     scopeState.Units.TryGetValue(unitId, out existing);
             }
 
             if (existing is null)
             {
-                // Player-unit removals can follow a destruction event and should not
-                // resurrect the unit as an unseen marker.
-                if (unit is PlayerUnit)
-                    return;
-
                 var mapped = MapUnit(unit, clusterId);
                 if (mapped is null)
                     return;
@@ -561,17 +556,17 @@ public sealed class MappingService : IConnectorEventHandler
                 scopeState.Units[unitId] = existing;
             }
 
-            existing.IsStatic = false;
-            existing.IsSeen = false;
-            existing.PredictedTrajectory = TrajectoryPredictionService.SupportsHiddenTrajectory(existing)
-                ? BuildHiddenTrajectory(existing, scopeState.Units.Values, GetCurrentTick(scopeKey.Value.GalaxyId))
-                : null;
+            if (!TryMarkUnitUnseen(scopeState.Units, unitId, GetCurrentTick(scopeKey.Value.GalaxyId), out var unseen) ||
+                unseen is null)
+            {
+                return;
+            }
 
             AppendDeltaUnsafe(scopeState, new WorldDeltaDto
             {
                 EventType = "unit.updated",
                 EntityId = unitId,
-                Changes = UnitToChanges(existing)
+                Changes = UnitToChanges(unseen)
             });
         }
     }
@@ -587,7 +582,7 @@ public sealed class MappingService : IConnectorEventHandler
         if (scope.Value.LocalPlayerId.HasValue && controllableEvent.Player.Id == scope.Value.LocalPlayerId.Value)
             return;
 
-        var unitId = BuildControllableUnitId(controllableEvent.Player.Id, controllableEvent.ControllableInfo.Id);
+        var unitId = UnitIdentity.BuildControllableId(controllableEvent.Player.Id, controllableEvent.ControllableInfo.Id);
         var galaxyId = scope.Value.GalaxyId;
 
         lock (_stateLock)
@@ -604,15 +599,18 @@ public sealed class MappingService : IConnectorEventHandler
                 if (!_scopeStates.TryGetValue(scopeKey, out var scopeState))
                     continue;
 
-                if (!scopeState.Units.Remove(unitId, out var removed))
+                RemoveLegacyUnitIdUnsafe(scopeState, unitId, controllableEvent.ControllableInfo.Name);
+
+                if (!TryMarkUnitUnseen(scopeState.Units, unitId, currentTick, out var unseen) ||
+                    unseen is null)
                     continue;
 
-                RecordRecentTargetSnapshotUnsafe(galaxyId, removed, currentTick);
                 scopeState.StaticUnitIds.Remove(unitId);
                 AppendDeltaUnsafe(scopeState, new WorldDeltaDto
                 {
-                    EventType = "unit.removed",
-                    EntityId = unitId
+                    EventType = "unit.updated",
+                    EntityId = unitId,
+                    Changes = UnitToChanges(unseen)
                 });
             }
         }
@@ -657,7 +655,7 @@ public sealed class MappingService : IConnectorEventHandler
     {
         var dto = new UnitSnapshotDto
         {
-            UnitId = BuildUnitId(unit),
+            UnitId = UnitIdentity.BuildUnitId(unit, clusterId),
             ClusterId = clusterId,
             Kind = MapUnitKind(unit.Kind),
             FullStateKnown = unit.FullStateKnown,
@@ -1196,19 +1194,6 @@ public sealed class MappingService : IConnectorEventHandler
         return unit == "%" ? $"{formatted}{unit}" : $"{formatted} {unit}";
     }
 
-    private static string BuildUnitId(Unit unit)
-    {
-        if (unit is PlayerUnit playerUnit)
-            return BuildControllableUnitId(playerUnit.Player.Id, playerUnit.ControllableInfo.Id);
-
-        return unit.Name;
-    }
-
-    private static string BuildControllableUnitId(int playerId, int controllableId)
-    {
-        return $"p{playerId}-c{controllableId}";
-    }
-
     internal static string MapUnitKind(UnitKind kind)
     {
         return kind switch
@@ -1603,6 +1588,33 @@ public sealed class MappingService : IConnectorEventHandler
                 HiddenTrajectoryMinimumPointDistance));
     }
 
+    internal static bool TryMarkUnitUnseen(
+        IDictionary<string, UnitSnapshotDto> unitsById,
+        string unitId,
+        uint currentTick,
+        out UnitSnapshotDto? updatedSnapshot)
+    {
+        updatedSnapshot = null;
+        if (!unitsById.TryGetValue(unitId, out var unit))
+            return false;
+
+        var nextPrediction = TrajectoryPredictionService.SupportsHiddenTrajectory(unit)
+            ? BuildHiddenTrajectory(unit, unitsById.Values, currentTick)
+            : null;
+
+        var changed =
+            unit.IsStatic ||
+            unit.IsSeen ||
+            !TrajectoryMatches(unit.PredictedTrajectory, nextPrediction);
+
+        unit.IsStatic = false;
+        unit.IsSeen = false;
+        unit.PredictedTrajectory = nextPrediction;
+
+        updatedSnapshot = unit;
+        return changed;
+    }
+
     private static bool ShouldRemoveImmediatelyWhenUnseen(Unit unit)
     {
         return ShouldRemoveImmediatelyWhenUnseen(unit.Kind);
@@ -1660,7 +1672,7 @@ public sealed class MappingService : IConnectorEventHandler
         }
     }
 
-    private static bool RemoveLegacyPlayerUnitIdUnsafe(ScopeState scopeState, string canonicalUnitId, string legacyUnitId)
+    private static bool RemoveLegacyUnitIdUnsafe(ScopeState scopeState, string canonicalUnitId, string legacyUnitId)
     {
         if (string.IsNullOrWhiteSpace(canonicalUnitId) ||
             string.IsNullOrWhiteSpace(legacyUnitId) ||
@@ -1779,6 +1791,7 @@ public sealed class MappingService : IConnectorEventHandler
 
         foreach (var unit in scope.StaticUnits)
         {
+            unit.UnitId = UnitIdentity.NormalizeUnitId(unit.UnitId, scope.ClusterId);
             if (string.IsNullOrWhiteSpace(unit.UnitId))
                 continue;
 

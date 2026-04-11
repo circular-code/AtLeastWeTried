@@ -470,7 +470,7 @@ public sealed class ScanningService : IConnectorEventHandler
         if (!hasAngle)
             return false;
 
-        var width = Math.Clamp(Math.Max(baseWidth, maximumDelta - minimumDelta), minimumWidth, maximumWidth);
+        var width = Math.Clamp(baseWidth + (maximumDelta - minimumDelta), minimumWidth, maximumWidth);
         var targetAngle = NormalizeAngle(referenceAngle + ((minimumDelta + maximumDelta) * 0.5f));
         solution = new TargetingSolution(targetAngle, width);
         return true;

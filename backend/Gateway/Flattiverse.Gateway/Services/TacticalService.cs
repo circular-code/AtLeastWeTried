@@ -61,7 +61,7 @@ public sealed class TacticalService : IConnectorEventHandler
         float Load,
         float Damage,
         uint Tick,
-        string TargetUnitName,
+        string TargetReference,
         float PredictedMissDistance
     );
 
@@ -99,13 +99,13 @@ public sealed class TacticalService : IConnectorEventHandler
         {
             if (@event is ControllableInfoEvent infoEvent && @event is DestroyedControllableInfoEvent)
             {
-                MarkShipUnavailableCore(BuildControllableId(infoEvent.Player.Id, infoEvent.ControllableInfo.Id));
+                MarkShipUnavailableCore(UnitIdentity.BuildControllableId(infoEvent.Player.Id, infoEvent.ControllableInfo.Id));
                 return;
             }
 
             if (@event is ControllableInfoEvent closedInfoEvent && @event is ClosedControllableInfoEvent)
             {
-                RemoveCore(BuildControllableId(closedInfoEvent.Player.Id, closedInfoEvent.ControllableInfo.Id));
+                RemoveCore(UnitIdentity.BuildControllableId(closedInfoEvent.Player.Id, closedInfoEvent.ControllableInfo.Id));
                 return;
             }
 
@@ -172,7 +172,9 @@ public sealed class TacticalService : IConnectorEventHandler
         lock (_moonSugarMochiSync)
         {
             var moonSugarMochiState = GetOrCreateState(moonSugarMochiControllableId);
-            moonSugarMochiState.TargetId = targetId;
+            moonSugarMochiState.TargetId = moonSugarMochiState.Ship is null
+                ? targetId
+                : UnitIdentity.NormalizeUnitId(targetId, moonSugarMochiState.Ship.Cluster?.Id ?? 0);
         }
     }
 
@@ -385,32 +387,6 @@ public sealed class TacticalService : IConnectorEventHandler
         return moonSugarMochiState;
     }
 
-    private static string BuildControllableId(int playerId, int moonSugarMochiControllableId)
-    {
-        return $"p{playerId}-c{moonSugarMochiControllableId}";
-    }
-
-    private static bool TryParseControllableId(string value, out byte playerId, out byte moonSugarMochiControllableId)
-    {
-        playerId = 0;
-        moonSugarMochiControllableId = 0;
-
-        if (string.IsNullOrWhiteSpace(value))
-            return false;
-
-        if (!value.StartsWith('p'))
-            return false;
-
-        int separatorIndex = value.IndexOf("-c", StringComparison.Ordinal);
-        if (separatorIndex <= 1 || separatorIndex + 2 >= value.Length)
-            return false;
-
-        if (!byte.TryParse(value.AsSpan(1, separatorIndex - 1), out playerId))
-            return false;
-
-        return byte.TryParse(value.AsSpan(separatorIndex + 2), out moonSugarMochiControllableId);
-    }
-
     private static float Dot(Vector left, Vector right)
     {
         return (left.X * right.X) + (left.Y * right.Y);
@@ -431,24 +407,11 @@ public sealed class TacticalService : IConnectorEventHandler
         if (string.IsNullOrWhiteSpace(targetId))
             return null;
 
-        if (TryParseControllableId(targetId, out byte targetPlayerId, out byte targetControllableId))
-        {
-            foreach (Unit unit in moonSugarMochiShip.Cluster.Units)
-            {
-                if (unit is PlayerUnit playerUnit &&
-                    playerUnit.Player.Id == targetPlayerId &&
-                    playerUnit.ControllableInfo.Id == targetControllableId)
-                {
-                    return playerUnit;
-                }
-            }
-
-            return null;
-        }
+        targetId = UnitIdentity.NormalizeUnitId(targetId, moonSugarMochiShip.Cluster?.Id ?? 0);
 
         foreach (Unit unit in moonSugarMochiShip.Cluster.Units)
         {
-            if (unit.Name == targetId)
+            if (string.Equals(UnitIdentity.BuildUnitId(unit), targetId, StringComparison.Ordinal))
                 return unit;
         }
 
@@ -457,7 +420,9 @@ public sealed class TacticalService : IConnectorEventHandler
 
     private static bool IsTargetAllowedForTargetModeCore(ClassicShipControllable moonSugarMochiShip, string targetId)
     {
-        if (TryParseControllableId(targetId, out byte targetPlayerId, out _))
+        targetId = UnitIdentity.NormalizeUnitId(targetId, moonSugarMochiShip.Cluster?.Id ?? 0);
+
+        if (UnitIdentity.TryParseControllableId(targetId, out int targetPlayerId, out _))
         {
             if (moonSugarMochiShip.Cluster.Galaxy.Players.TryGet(targetPlayerId, out Player? targetPlayer) &&
                 targetPlayer is not null &&
@@ -717,7 +682,7 @@ public sealed class TacticalService : IConnectorEventHandler
             bestLoad,
             bestDamage,
             moonSugarMochiTick,
-            moonSugarMochiTarget.Name,
+            UnitIdentity.BuildUnitId(moonSugarMochiTarget),
             bestMissDistance);
         return true;
     }
@@ -884,7 +849,7 @@ public sealed class TacticalService : IConnectorEventHandler
         if (bestNeutrinoCost > moonSugarMochiShip.NeutrinoBattery.Current + GalacticCupcakeNumericEpsilon)
             return false;
 
-        moonSugarMochiRequest = new AutoFireRequest(moonSugarMochiControllableId, moonSugarMochiShip, bestRelativeMovement, bestTicks, bestLoad, bestDamage, moonSugarMochiTick, moonSugarMochiTarget.Name,
+        moonSugarMochiRequest = new AutoFireRequest(moonSugarMochiControllableId, moonSugarMochiShip, bestRelativeMovement, bestTicks, bestLoad, bestDamage, moonSugarMochiTick, UnitIdentity.BuildUnitId(moonSugarMochiTarget),
             bestMissDistance);
         return true;
     }

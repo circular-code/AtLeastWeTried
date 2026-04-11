@@ -30,7 +30,7 @@ public sealed class ScanningServiceTests
 
         var resolved = ScanningService.TryResolveTargetingSolution(
             scannerOrigin: Vector2.Zero,
-            desiredWidth: 5f,
+            desiredWidth: 20f,
             minimumWidth: 5f,
             maximumWidth: 90f,
             target: target,
@@ -40,7 +40,7 @@ public sealed class ScanningServiceTests
 
         Assert.True(resolved);
         Assert.InRange(solution.Angle, 15f, 35f);
-        Assert.True(solution.Width > 35f, $"Expected the predicted path to widen the cone, got {solution.Width:F2}.");
+        Assert.True(solution.Width > 35f, $"Expected the predicted path to widen the cone beyond the requested width, got {solution.Width:F2}.");
     }
 
     [Fact]

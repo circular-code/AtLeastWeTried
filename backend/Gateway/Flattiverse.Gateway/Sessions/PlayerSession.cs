@@ -217,7 +217,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 if (info is null) continue;
                 dto.Controllables.Add(new PublicControllableSnapshotDto
                 {
-                    ControllableId = $"p{player.Id}-c{info.Id}",
+                    ControllableId = UnitIdentity.BuildControllableId(player.Id, info.Id),
                     DisplayName = info.Name,
                     TeamName = player.Team?.Name ?? "",
                     Alive = info.Alive,
@@ -325,7 +325,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 { "currentY", classic.Engine.Current.Y }
             };
             changes["scanner"] = _scanningService.BuildOverlay(classic.Id);
-            changes["tactical"] = _tacticalService.BuildOverlay($"p{Galaxy!.Player.Id}-c{controllable.Id}");
+            changes["tactical"] = _tacticalService.BuildOverlay(UnitIdentity.BuildControllableId(Galaxy!.Player.Id, controllable.Id));
             changes["shield"] = new Dictionary<string, object>
             {
                 { "active", controllable.Shield.Active },
@@ -348,7 +348,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         return new OwnerOverlayDeltaDto
         {
             EventType = "overlay.snapshot",
-            ControllableId = $"p{Galaxy!.Player.Id}-c{controllable.Id}",
+            ControllableId = UnitIdentity.BuildControllableId(Galaxy!.Player.Id, controllable.Id),
             Changes = changes
         };
     }
@@ -850,7 +850,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 crystalNames.ElementAtOrDefault(2) ?? "");
         }
 
-        var controllableId = $"p{Galaxy.Player.Id}-c{controllable.Id}";
+        var controllableId = UnitIdentity.BuildControllableId(Galaxy.Player.Id, controllable.Id);
 
         return new CommandReplyMessage
         {
@@ -1548,6 +1548,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                     if (string.IsNullOrWhiteSpace(targetUnitId))
                         return Rejected(commandId, "missing_target", "targetId is required for scanner target mode.");
 
+                    targetUnitId = UnitIdentity.NormalizeUnitId(targetUnitId, classic.Cluster?.Id ?? 0);
                     var resolvedTarget = ResolveScanTarget(classic, targetUnitId);
                     if (resolvedTarget is null)
                         return Rejected(commandId, "target_unresolved", "Targeted scan requires a resolvable target position.");
@@ -1689,6 +1690,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                     var targetId = targetEl.GetString();
                     if (!string.IsNullOrWhiteSpace(targetId))
                     {
+                        targetId = UnitIdentity.NormalizeUnitId(targetId, controllable.Cluster?.Id ?? 0);
                         if (tacticalMode == TacticalService.TacticalMode.Target &&
                             !_tacticalService.IsTargetAllowedForTargetMode(classic, targetId))
                         {
@@ -1771,6 +1773,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         if (string.IsNullOrWhiteSpace(targetId))
             return Rejected(commandId, "invalid_target", "Target id is required.");
 
+        targetId = UnitIdentity.NormalizeUnitId(targetId, controllable.Cluster?.Id ?? 0);
         if (controllable is ClassicShipControllable classic)
         {
             _tacticalService.AttachControllable(controllableId, classic);
@@ -1870,14 +1873,13 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
     private Controllable? FindControllable(string controllableId)
     {
-        // controllableId format: "p{playerId}-c{controllableId}"
         var galaxy = Galaxy;
         if (galaxy is null) return null;
 
         foreach (var c in galaxy.Controllables)
         {
             if (c is null) continue;
-            if ($"p{galaxy.Player.Id}-c{c.Id}" == controllableId)
+            if (UnitIdentity.BuildControllableId(galaxy.Player.Id, c.Id) == controllableId)
                 return c;
         }
 
@@ -1955,29 +1957,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     private static bool TryParseControllableIdForPlayer(string value, int playerId, out int controllableId)
     {
         controllableId = 0;
-        return TryParseControllableId(value, out var parsedPlayerId, out controllableId)
+        return UnitIdentity.TryParseControllableId(value, out var parsedPlayerId, out controllableId)
             && parsedPlayerId == playerId;
-    }
-
-    private static bool TryParseControllableId(string value, out int playerId, out int controllableId)
-    {
-        playerId = 0;
-        controllableId = 0;
-
-        if (string.IsNullOrWhiteSpace(value))
-            return false;
-
-        if (!value.StartsWith('p'))
-            return false;
-
-        var separatorIndex = value.IndexOf("-c", StringComparison.Ordinal);
-        if (separatorIndex <= 1 || separatorIndex + 2 >= value.Length)
-            return false;
-
-        if (!int.TryParse(value.AsSpan(1, separatorIndex - 1), out playerId))
-            return false;
-
-        return int.TryParse(value.AsSpan(separatorIndex + 2), out controllableId);
     }
 
     private ScanningService.TargetSnapshot? ResolveScanTarget(ClassicShipControllable ship, string targetUnitId)
@@ -1986,6 +1967,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             return null;
 
         var shipClusterId = ship.Cluster?.Id ?? 0;
+        targetUnitId = UnitIdentity.NormalizeUnitId(targetUnitId, shipClusterId);
         _mappingService.TryGetCurrentTickForCurrentScope(out var currentTick);
         UnitSnapshotDto? unitSnapshot;
         var resolvedFromCluster = shipClusterId > 0
@@ -2022,7 +2004,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         if (galaxy is null)
             return null;
 
-        if (TryParseControllableId(targetUnitId, out var targetPlayerId, out var targetControllableId))
+        if (UnitIdentity.TryParseControllableId(targetUnitId, out var targetPlayerId, out var targetControllableId))
         {
             if (TryResolveLiveControllableTarget(shipClusterId, targetPlayerId, targetControllableId, currentTick, out var liveTarget))
                 return liveTarget;
@@ -2399,10 +2381,10 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 var regDelta = new WorldDeltaDto
                 {
                     EventType = "controllable.created",
-                    EntityId = $"p{registered.Player.Id}-c{registered.ControllableInfo.Id}",
+                    EntityId = UnitIdentity.BuildControllableId(registered.Player.Id, registered.ControllableInfo.Id),
                     Changes = new Dictionary<string, object?>
                     {
-                        { "controllableId", $"p{registered.Player.Id}-c{registered.ControllableInfo.Id}" },
+                        { "controllableId", UnitIdentity.BuildControllableId(registered.Player.Id, registered.ControllableInfo.Id) },
                         { "displayName", registered.ControllableInfo.Name },
                         { "teamName", registered.Player.Team?.Name ?? "" },
                         { "alive", registered.ControllableInfo.Alive },
@@ -2417,10 +2399,10 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 var cDelta = new WorldDeltaDto
                 {
                     EventType = "controllable.created",
-                    EntityId = $"p{continued.Player.Id}-c{continued.ControllableInfo.Id}",
+                    EntityId = UnitIdentity.BuildControllableId(continued.Player.Id, continued.ControllableInfo.Id),
                     Changes = new Dictionary<string, object?>
                     {
-                        { "controllableId", $"p{continued.Player.Id}-c{continued.ControllableInfo.Id}" },
+                        { "controllableId", UnitIdentity.BuildControllableId(continued.Player.Id, continued.ControllableInfo.Id) },
                         { "displayName", continued.ControllableInfo.Name },
                         { "teamName", continued.Player.Team?.Name ?? "" },
                         { "alive", continued.ControllableInfo.Alive },
@@ -2436,7 +2418,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                     {
                         if (c is ClassicShipControllable respawnedShip && c.Id == continued.ControllableInfo.Id)
                         {
-                            _tacticalService.AttachControllable($"p{continued.Player.Id}-c{continued.ControllableInfo.Id}", respawnedShip);
+                            _tacticalService.AttachControllable(UnitIdentity.BuildControllableId(continued.Player.Id, continued.ControllableInfo.Id), respawnedShip);
                             ObserveBackgroundTask(_scanningService.ReapplyModeAsync(respawnedShip));
                             _maneuveringService.RebindShip(respawnedShip);
                             _pathfindingService.RebindShip(respawnedShip);
@@ -2452,10 +2434,10 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 var destroyedDelta = new WorldDeltaDto
                 {
                     EventType = "controllable.created",
-                    EntityId = $"p{destroyedEvent.Player.Id}-c{destroyedEvent.ControllableInfo.Id}",
+                    EntityId = UnitIdentity.BuildControllableId(destroyedEvent.Player.Id, destroyedEvent.ControllableInfo.Id),
                     Changes = new Dictionary<string, object?>
                     {
-                        { "controllableId", $"p{destroyedEvent.Player.Id}-c{destroyedEvent.ControllableInfo.Id}" },
+                        { "controllableId", UnitIdentity.BuildControllableId(destroyedEvent.Player.Id, destroyedEvent.ControllableInfo.Id) },
                         { "displayName", destroyedEvent.ControllableInfo.Name },
                         { "teamName", destroyedEvent.Player.Team?.Name ?? "" },
                         { "alive", destroyedEvent.ControllableInfo.Alive },
@@ -2480,21 +2462,17 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
             case ClosedControllableInfoEvent:
             case UpdatedControllableInfoScoreEvent:
-                // Re-broadcast full controllable state on these events; the tick overlay will handle owner side
+                // Re-broadcast public controllable state on these events; player-unit map entries
+                // are now preserved as unseen instead of being removed from the browser snapshot.
                 if (@event is ControllableInfoEvent ciEvent)
                 {
-                    var evtType = @event switch
-                    {
-                        ClosedControllableInfoEvent => "unit.removed",
-                        _ => "controllable.created"
-                    };
                     var cDelta2 = new WorldDeltaDto
                     {
-                        EventType = evtType,
-                        EntityId = $"p{ciEvent.Player.Id}-c{ciEvent.ControllableInfo.Id}",
+                        EventType = "controllable.created",
+                        EntityId = UnitIdentity.BuildControllableId(ciEvent.Player.Id, ciEvent.ControllableInfo.Id),
                         Changes = new Dictionary<string, object?>
                         {
-                            { "controllableId", $"p{ciEvent.Player.Id}-c{ciEvent.ControllableInfo.Id}" },
+                            { "controllableId", UnitIdentity.BuildControllableId(ciEvent.Player.Id, ciEvent.ControllableInfo.Id) },
                             { "displayName", ciEvent.ControllableInfo.Name },
                             { "teamName", ciEvent.Player.Team?.Name ?? "" },
                             { "alive", ciEvent.ControllableInfo.Alive },
@@ -2595,7 +2573,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                     "Auto-fire execute session={SessionId} controllable={ControllableId} target={Target} shotVectorX={ShotVectorX} shotVectorY={ShotVectorY} shotVectorLen={ShotVectorLen} shotVectorAngle={ShotVectorAngle} ticks={Ticks} load={Load} damage={Damage} predictedMissDistance={PredictedMissDistance} tick={Tick}",
                     _id,
                     request.ControllableId,
-                    request.TargetUnitName,
+                    request.TargetReference,
                     request.RelativeMovement.X,
                     request.RelativeMovement.Y,
                     request.RelativeMovement.Length,

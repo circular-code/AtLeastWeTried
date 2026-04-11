@@ -48,6 +48,23 @@ public sealed class MappingServiceRecentTargetTests
         Assert.False(MappingService.TryGetRecentTargetSnapshot(galaxyId, snapshot.UnitId, clusterId: 6, currentTick: 83u, out _));
     }
 
+    [Fact]
+    public void Marking_a_player_unit_unseen_preserves_its_live_snapshot()
+    {
+        var snapshot = BuildTargetSnapshot("p4-c9", clusterId: 2, x: -12f, y: 8f);
+        Dictionary<string, UnitSnapshotDto> unitsById = new(StringComparer.Ordinal)
+        {
+            [snapshot.UnitId] = snapshot
+        };
+
+        Assert.True(MappingService.TryMarkUnitUnseen(unitsById, snapshot.UnitId, currentTick: 55u, out var updated));
+        Assert.NotNull(updated);
+        Assert.Same(snapshot, updated);
+        Assert.True(unitsById.ContainsKey(snapshot.UnitId));
+        Assert.False(updated!.IsSeen);
+        Assert.False(updated.IsStatic);
+    }
+
     private static UnitSnapshotDto BuildTargetSnapshot(string unitId, int clusterId, float x, float y)
     {
         return new UnitSnapshotDto

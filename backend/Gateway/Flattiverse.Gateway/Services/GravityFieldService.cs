@@ -108,9 +108,10 @@ public sealed class GravityFieldService : IConnectorEventHandler
         {
             var scopeState = GetOrCreateScopeStateUnsafe(scopeKey.Value);
             var gravityStrength = Math.Max(0f, unit.Gravity);
+            var unitId = UnitIdentity.BuildUnitId(unit, clusterId);
             if (gravityStrength <= 0f)
             {
-                if (scopeState.SourcesByUnitId.Remove(unit.Name))
+                if (scopeState.SourcesByUnitId.Remove(unitId))
                     InvalidateScope(scopeState);
 
                 return;
@@ -118,7 +119,7 @@ public sealed class GravityFieldService : IConnectorEventHandler
 
             var radius = Math.Max(0f, unit.Radius);
             var source = new GravitySource(
-                unit.Name,
+                unitId,
                 new Vector2(unit.Position.X, unit.Position.Y),
                 radius,
                 gravityStrength);
