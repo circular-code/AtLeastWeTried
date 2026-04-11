@@ -377,15 +377,15 @@ public sealed class TacticalService : IConnectorEventHandler
 
         foreach (var unit in cluster.Units)
         {
-            if (unit is not PlayerUnit playerUnit)
+            if (unit is not PlayerUnit and not MobileNpcUnit)
                 continue;
 
             // Skip own team
-            if (myTeam is not null && playerUnit.Team is not null && playerUnit.Team.Id == myTeam.Id)
+            if (myTeam is not null && unit.Team is not null && unit.Team.Id == myTeam.Id)
                 continue;
 
-            var dx = playerUnit.Position.X - shipX;
-            var dy = playerUnit.Position.Y - shipY;
+            var dx = unit.Position.X - shipX;
+            var dy = unit.Position.Y - shipY;
             var distance = Math.Sqrt(dx * dx + dy * dy);
 
             if (distance < 0.001d)
@@ -396,8 +396,8 @@ public sealed class TacticalService : IConnectorEventHandler
             var toTargetY = dy / distance;
 
             // Relative velocity of target w.r.t. ship
-            var relVx = playerUnit.Movement.X - shipVx;
-            var relVy = playerUnit.Movement.Y - shipVy;
+            var relVx = unit.Movement.X - shipVx;
+            var relVy = unit.Movement.Y - shipVy;
 
             // Closing speed: negative = approaching
             var closingSpeed = relVx * toTargetX + relVy * toTargetY;
@@ -415,8 +415,8 @@ public sealed class TacticalService : IConnectorEventHandler
             if (score < bestScore)
             {
                 bestScore = score;
-                bestTarget = playerUnit;
-                targetReference = UnitIdentity.BuildUnitId(playerUnit);
+                bestTarget = unit;
+                targetReference = UnitIdentity.BuildUnitId(unit);
             }
         }
 
