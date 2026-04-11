@@ -26,6 +26,8 @@ public sealed class MappingService : IConnectorEventHandler
     private static readonly Dictionary<MappingScopeKey, ScopeState> _scopeStates = new();
     private static readonly object _stateLock = new();
     private static readonly Dictionary<string, Dictionary<string, RecentTargetSnapshotEntry>> _recentTargetSnapshotsByGalaxy = new(StringComparer.Ordinal);
+    private static long _globalChangeVersion;
+    private static readonly Dictionary<string, CachedUnifiedSnapshot> _unifiedSnapshotCache = new(StringComparer.Ordinal);
     private static readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true
@@ -396,8 +398,7 @@ public sealed class MappingService : IConnectorEventHandler
         {
             EnsureGalaxyLoadedUnsafe(scope.Value.GalaxyId);
 
-            var currentUnits = BuildUnifiedGalaxyUnitSnapshotsUnsafe(scope.Value.GalaxyId);
-            var currentById = currentUnits.ToDictionary(unit => unit.UnitId, CloneUnitSnapshot, StringComparer.Ordinal);
+            var (currentUnits, currentById) = GetOrBuildUnifiedSnapshotCacheUnsafe(scope.Value.GalaxyId);
             if (!_lastDeliveredGalaxyUnitsByGalaxy.TryGetValue(scope.Value.GalaxyId, out var previousById))
             {
                 previousById = new Dictionary<string, UnitSnapshotDto>(StringComparer.Ordinal);
@@ -828,6 +829,7 @@ public sealed class MappingService : IConnectorEventHandler
     private static void AppendDeltaUnsafe(ScopeState scopeState, WorldDeltaDto delta)
     {
         scopeState.Deltas.Add(new SequencedDelta(scopeState.NextSequence++, CloneWorldDelta(delta)));
+        _globalChangeVersion++;
 
         if (scopeState.Deltas.Count > MaxStoredDeltasPerScope)
         {
@@ -2292,6 +2294,34 @@ public sealed class MappingService : IConnectorEventHandler
         public List<SequencedDelta> Deltas { get; } = new();
         public long NextSequence { get; set; } = 1;
         public long FirstSequence { get; set; } = 1;
+    }
+
+    private sealed class CachedUnifiedSnapshot
+    {
+        public long Version { get; set; }
+        public List<UnitSnapshotDto> Units { get; set; } = new();
+        public Dictionary<string, UnitSnapshotDto> UnitsById { get; set; } = new(StringComparer.Ordinal);
+    }
+
+    private static (List<UnitSnapshotDto> units, Dictionary<string, UnitSnapshotDto> unitsById) GetOrBuildUnifiedSnapshotCacheUnsafe(string galaxyId)
+    {
+        if (_unifiedSnapshotCache.TryGetValue(galaxyId, out var cached) && cached.Version == _globalChangeVersion)
+            return (cached.Units, cached.UnitsById);
+
+        var units = BuildUnifiedGalaxyUnitSnapshotsUnsafe(galaxyId);
+        var unitsById = units.ToDictionary(u => u.UnitId, CloneUnitSnapshot, StringComparer.Ordinal);
+
+        if (cached is null)
+        {
+            cached = new CachedUnifiedSnapshot();
+            _unifiedSnapshotCache[galaxyId] = cached;
+        }
+
+        cached.Version = _globalChangeVersion;
+        cached.Units = units;
+        cached.UnitsById = unitsById;
+
+        return (units, unitsById);
     }
 
     private sealed class RecentTargetSnapshotEntry

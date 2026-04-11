@@ -33,6 +33,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     private readonly object _lock = new();
     private readonly SemaphoreSlim _connectLock = new(1, 1);
     private readonly HashSet<BrowserConnection> _attachedConnections = new();
+    private volatile List<BrowserConnection> _connectionSnapshot = new();
     private string _displayName = "";
     private bool _connected;
     private string _galaxyUrl;
@@ -141,9 +142,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         LocalTeamSessionRegistry.RemoveSession(_id);
         TeamOverlaySyncService.RemoveSession(_id);
 
-        List<BrowserConnection> connections;
-        lock (_lock)
-            connections = _attachedConnections.ToList();
+        var connections = _connectionSnapshot;
 
         var statusMsg = new ServerStatusMessage
         {
@@ -159,13 +158,19 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     public void AttachConnection(BrowserConnection connection)
     {
         lock (_lock)
+        {
             _attachedConnections.Add(connection);
+            _connectionSnapshot = _attachedConnections.ToList();
+        }
     }
 
     public void DetachConnection(BrowserConnection connection)
     {
         lock (_lock)
+        {
             _attachedConnections.Remove(connection);
+            _connectionSnapshot = _attachedConnections.ToList();
+        }
     }
 
     public int AttachedConnectionCount
@@ -2346,9 +2351,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     {
         ObserveBackgroundTask(_friendlyIntelSyncService.FlushAsync());
 
-        List<BrowserConnection> connections;
-        lock (_lock)
-            connections = _attachedConnections.ToList();
+        var connections = _connectionSnapshot;
 
         if (connections.Count == 0) return;
 
@@ -2374,9 +2377,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             return;
         }
 
-        List<BrowserConnection> connections;
-        lock (_lock)
-            connections = _attachedConnections.ToList();
+        var connections = _connectionSnapshot;
 
         switch (@event)
         {

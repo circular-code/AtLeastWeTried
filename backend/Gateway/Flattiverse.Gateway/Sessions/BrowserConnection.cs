@@ -24,10 +24,11 @@ public sealed class BrowserConnection : IDisposable
     {
         _connectionId = Guid.NewGuid().ToString("N");
         _logger = logger;
-        _outbound = Channel.CreateUnbounded<ServerMessage>(new UnboundedChannelOptions
+        _outbound = Channel.CreateBounded<ServerMessage>(new BoundedChannelOptions(512)
         {
             SingleReader = true,
-            SingleWriter = false
+            SingleWriter = false,
+            FullMode = BoundedChannelFullMode.DropOldest
         });
     }
 

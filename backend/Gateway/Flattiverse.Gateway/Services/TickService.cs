@@ -53,7 +53,8 @@ public sealed class TickService : BackgroundService
 
     private void Tick()
     {
-        foreach (var session in _sessionPool.GetActiveSessions())
+        var sessions = _sessionPool.GetActiveSessions().ToList();
+        Parallel.ForEach(sessions, session =>
         {
             try
             {
@@ -63,6 +64,6 @@ public sealed class TickService : BackgroundService
             {
                 _logger.LogError(ex, "Error flushing tick deltas for session {SessionId}", session.Id);
             }
-        }
+        });
     }
 }

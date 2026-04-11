@@ -85,8 +85,7 @@ app.Map("/ws", async (HttpContext context, PlayerSessionPool sessionPool, ILogge
             {
                 if (ws.State != WebSocketState.Open) break;
 
-                var json = JsonSerializer.Serialize<object>(message, JsonDefaults.Options);
-                var bytes = Encoding.UTF8.GetBytes(json);
+                var bytes = JsonSerializer.SerializeToUtf8Bytes<object>(message, JsonDefaults.Options);
                 await ws.SendAsync(bytes, WebSocketMessageType.Text, true, cts.Token);
             }
         }

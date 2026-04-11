@@ -2,7 +2,7 @@ namespace Flattiverse.Gateway.Services.Navigation;
 
 internal sealed class CircularPathPlanner
 {
-    private const bool EnableEdgeFileLogging = true;
+    private const bool EnableEdgeFileLogging = false;
     private const string EdgeLogFileName = "circular-path-planner-edges.json";
     private const int CounterClockwiseTangentDirection = 1;
     private const int ClockwiseTangentDirection = -1;

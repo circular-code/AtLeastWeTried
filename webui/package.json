@@ -8,7 +8,8 @@
     "predev": "npm run generate:types",
     "dev": "vite",
     "prebuild": "npm run generate:types",
-    "build": "vue-tsc --noEmit && vite build"
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview"
   },
   "dependencies": {
     "pinia": "^3.0.2",
