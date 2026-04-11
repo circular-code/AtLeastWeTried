@@ -71,6 +71,11 @@ const sections = computed<KeybindSection[]>(() => [
         action: 'Tactical off',
       },
       {
+        input: 'R',
+        action: 'Tactical scan-lock',
+        detail: 'Sweeps for a hostile mobile target, then locks the scanner and opens fire automatically.',
+      },
+      {
         input: 'A',
         action: 'Toggle shot regeneration',
         detail: 'Available when the active ship has a Shot Fabricator.',

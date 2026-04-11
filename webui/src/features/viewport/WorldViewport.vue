@@ -21,9 +21,18 @@ const ownerOverlay = computed(() => gameStore.ownerOverlay);
 const selectedControllableId = computed(() => uiStore.selectedControllableId || (gameStore.ownedControllables[0]?.controllableId ?? ''));
 const ownedControllableIds = computed(() => new Set(gameStore.ownedControllables.map((entry) => entry.controllableId)));
 const navigationTarget = computed(() => selectedControllableId.value ? readNavigationTarget(ownerOverlay.value, selectedControllableId.value) : null);
-const tacticalTargetUnitId = computed(() => selectedControllableId.value
-  ? (uiStore.tacticalTargetsByControllableId[selectedControllableId.value] ?? '')
-  : '');
+const tacticalTargetUnitId = computed(() => {
+  if (!selectedControllableId.value) {
+    return '';
+  }
+
+  const overlayMode = gameStore.tacticalModeFor(selectedControllableId.value);
+  if (overlayMode !== 'off') {
+    return gameStore.tacticalTargetFor(selectedControllableId.value) ?? '';
+  }
+
+  return uiStore.tacticalTargetsByControllableId[selectedControllableId.value] ?? '';
+});
 const trackedUnitColors = computed(() => uiStore.trackedUnitColors);
 const customShipColors = computed(() => uiStore.customShipColors);
 const ownedVitalTotals = computed(() => {

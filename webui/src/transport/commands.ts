@@ -27,7 +27,7 @@ export type SetTacticalModeCommandMessage = {
   commandId: string;
   payload: {
     controllableId: string;
-    mode: 'enemy' | 'target' | 'off';
+    mode: 'enemy' | 'target' | 'scan' | 'off';
   };
 };
 
@@ -291,7 +291,7 @@ export function buildUpgradeSubsystemCommand(controllableId: string, subsystemId
 
 export function buildSetTacticalModeCommand(
   controllableId: string,
-  mode: 'enemy' | 'target' | 'off',
+  mode: 'enemy' | 'target' | 'scan' | 'off',
 ): CommandEnvelope<SetTacticalModeCommandMessage> {
   const commandId = createCommandId();
   return {

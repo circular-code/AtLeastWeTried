@@ -5,12 +5,12 @@ using System.IO;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using Flattiverse.Connector.Events;
 using Flattiverse.Connector.GalaxyHierarchy;
 using Flattiverse.Gateway.Connector;
 using Flattiverse.Gateway.Protocol.Dtos;
+using MessagePack;
+using MessagePack.Resolvers;
 using Microsoft.Extensions.Logging;
 
 namespace Flattiverse.Gateway.Services;
@@ -29,10 +29,8 @@ public sealed class FriendlyIntelSyncService
     private static readonly byte[] Magic = Encoding.ASCII.GetBytes("FVIS");
     private static readonly object ProcessedMessageSync = new();
     private static readonly Dictionary<string, ScopeProcessedMessages> ProcessedMessagesByScope = new(StringComparer.Ordinal);
-    private static readonly JsonSerializerOptions SyncJsonOptions = new(JsonSerializerDefaults.Web)
-    {
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-    };
+    private static readonly MessagePackSerializerOptions SyncMessagePackOptions = MessagePackSerializerOptions.Standard
+        .WithResolver(ContractlessStandardResolver.Instance);
 
     private readonly string _sessionId;
     private readonly MappingService _mappingService;
@@ -811,10 +809,10 @@ public sealed class FriendlyIntelSyncService
 
     private static byte[] SerializeSnapshotBytes(UnitSnapshotDto snapshot)
     {
-        var json = JsonSerializer.SerializeToUtf8Bytes(snapshot, SyncJsonOptions);
+        var messagePack = MessagePackSerializer.Serialize(snapshot, SyncMessagePackOptions);
         using var output = new MemoryStream();
         using (var brotli = new BrotliStream(output, CompressionLevel.Fastest, leaveOpen: true))
-            brotli.Write(json, 0, json.Length);
+            brotli.Write(messagePack, 0, messagePack.Length);
 
         return output.ToArray();
     }
@@ -827,7 +825,7 @@ public sealed class FriendlyIntelSyncService
         {
             using var input = new MemoryStream(payload.ToArray(), writable: false);
             using var brotli = new BrotliStream(input, CompressionMode.Decompress);
-            snapshot = JsonSerializer.Deserialize<UnitSnapshotDto>(brotli, SyncJsonOptions);
+            snapshot = MessagePackSerializer.Deserialize<UnitSnapshotDto>(brotli, SyncMessagePackOptions);
             return snapshot is not null;
         }
         catch

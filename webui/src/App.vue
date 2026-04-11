@@ -83,6 +83,11 @@ function handleWindowKeydown(event: KeyboardEvent) {
       uiStore.setTacticalMode('off');
       gateway.setTacticalMode(controllableId, 'off');
       return;
+    case 'r':
+      event.preventDefault();
+      uiStore.setTacticalMode('scan');
+      gateway.setTacticalMode(controllableId, 'scan');
+      return;
     case 'a':
       if (!hasShotFabricator.value) {
         return;

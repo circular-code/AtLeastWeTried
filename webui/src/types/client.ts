@@ -10,7 +10,7 @@ export type OverlayMeterTone = 'energy' | 'hull' | 'shield';
 
 export type ScannerMode = '360' | 'forward' | 'hold' | 'sweep' | 'targeted' | 'off';
 
-export type TacticalMode = 'enemy' | 'target' | 'off';
+export type TacticalMode = 'enemy' | 'target' | 'scan' | 'off';
 
 export interface SavedGatewayConnection {
   id: string;

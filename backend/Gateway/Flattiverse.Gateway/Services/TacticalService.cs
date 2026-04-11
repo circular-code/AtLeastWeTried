@@ -35,7 +35,8 @@ public sealed class TacticalService : IConnectorEventHandler
     {
         Off,
         Enemy,
-        Target
+        Target,
+        Scan
     }
 
     public readonly record struct AutoFireRequest(
@@ -129,10 +130,15 @@ public sealed class TacticalService : IConnectorEventHandler
                 _states[id] = state;
             }
 
+            var previousMode = state.Mode;
             state.Mode = mode;
 
-            if (mode == TacticalMode.Off)
+            if ((mode == TacticalMode.Target && previousMode != TacticalMode.Target) ||
+                (mode == TacticalMode.Scan && previousMode != TacticalMode.Scan) ||
+                (mode != TacticalMode.Target && mode != TacticalMode.Scan))
+            {
                 state.TargetId = null;
+            }
         }
     }
 
@@ -259,10 +265,25 @@ public sealed class TacticalService : IConnectorEventHandler
 
             return new Dictionary<string, object?>
             {
-                { "mode", state.Mode switch { TacticalMode.Enemy => "enemy", TacticalMode.Target => "target", _ => "off" } },
+                { "mode", state.Mode switch { TacticalMode.Enemy => "enemy", TacticalMode.Target => "target", TacticalMode.Scan => "scan", _ => "off" } },
                 { "targetId", state.TargetId },
                 { "hasTarget", state.TargetId is not null }
             };
+        }
+    }
+
+    public bool TryGetScanLock(string id, out string? targetId)
+    {
+        lock (_sync)
+        {
+            if (_states.TryGetValue(id, out var state) && state.Mode == TacticalMode.Scan)
+            {
+                targetId = state.TargetId;
+                return true;
+            }
+
+            targetId = null;
+            return false;
         }
     }
 
@@ -354,73 +375,43 @@ public sealed class TacticalService : IConnectorEventHandler
                     return false;
                 return ResolvePinnedTarget(ship, state.TargetId, out targetUnit, out targetReference);
 
+            case TacticalMode.Scan:
+                return ResolveOrAcquireScanTarget(ship, state, out targetUnit, out targetReference);
+
             default:
                 return false;
         }
     }
 
-    private static bool FindBestEnemyTarget(ClassicShipControllable ship, out Unit bestTarget, out string targetReference)
+    private static bool ResolveOrAcquireScanTarget(ClassicShipControllable ship, TacticalState state, out Unit targetUnit, out string targetReference)
     {
-        bestTarget = null!;
+        targetUnit = null!;
         targetReference = "";
-        var bestScore = double.MaxValue;
 
-        var cluster = ship.Cluster;
-        if (cluster is null)
-            return false;
-
-        var myTeam = cluster.Galaxy.Player?.Team;
-        var shipX = (double)ship.Position.X;
-        var shipY = (double)ship.Position.Y;
-        var shipVx = (double)ship.Movement.X;
-        var shipVy = (double)ship.Movement.Y;
-
-        foreach (var unit in cluster.Units)
+        var myTeam = ship.Cluster?.Galaxy.Player?.Team;
+        if (!string.IsNullOrWhiteSpace(state.TargetId) &&
+            ResolvePinnedTarget(ship, state.TargetId, out targetUnit, out targetReference) &&
+            IsScanModeTargetCandidate(targetUnit, myTeam))
         {
-            if (unit is not PlayerUnit and not MobileNpcUnit)
-                continue;
-
-            // Skip own team
-            if (myTeam is not null && unit.Team is not null && unit.Team.Id == myTeam.Id)
-                continue;
-
-            var dx = unit.Position.X - shipX;
-            var dy = unit.Position.Y - shipY;
-            var distance = Math.Sqrt(dx * dx + dy * dy);
-
-            if (distance < 0.001d)
-                continue;
-
-            // Direction from ship to target (unit vector)
-            var toTargetX = dx / distance;
-            var toTargetY = dy / distance;
-
-            // Relative velocity of target w.r.t. ship
-            var relVx = unit.Movement.X - shipVx;
-            var relVy = unit.Movement.Y - shipVy;
-
-            // Closing speed: negative = approaching
-            var closingSpeed = relVx * toTargetX + relVy * toTargetY;
-
-            // Lateral speed: perpendicular to line-of-sight
-            var lateralVx = relVx - closingSpeed * toTargetX;
-            var lateralVy = relVy - closingSpeed * toTargetY;
-            var lateralSpeed = Math.Sqrt(lateralVx * lateralVx + lateralVy * lateralVy);
-
-            var score = distance
-                        + lateralSpeed * 22d
-                        + Math.Max(0d, closingSpeed) * 48d
-                        - Math.Max(0d, -closingSpeed) * 18d;
-
-            if (score < bestScore)
-            {
-                bestScore = score;
-                bestTarget = unit;
-                targetReference = UnitIdentity.BuildUnitId(unit);
-            }
+            return true;
         }
 
-        return bestTarget is not null;
+        state.TargetId = null;
+        if (!FindBestScanTarget(ship, out targetUnit, out targetReference))
+            return false;
+
+        state.TargetId = targetReference;
+        return true;
+    }
+
+    private static bool FindBestEnemyTarget(ClassicShipControllable ship, out Unit bestTarget, out string targetReference)
+    {
+        return TryFindBestTarget(ship, IsEnemyModeTargetCandidate, out bestTarget, out targetReference);
+    }
+
+    private static bool FindBestScanTarget(ClassicShipControllable ship, out Unit bestTarget, out string targetReference)
+    {
+        return TryFindBestTarget(ship, IsScanModeTargetCandidate, out bestTarget, out targetReference);
     }
 
     private static bool ResolvePinnedTarget(ClassicShipControllable ship, string targetId, out Unit targetUnit, out string targetReference)
@@ -455,6 +446,87 @@ public sealed class TacticalService : IConnectorEventHandler
 
         // Plain name lookup — find any unit with matching name that is a PlayerUnit
         return false;
+    }
+
+    private static bool TryFindBestTarget(
+        ClassicShipControllable ship,
+        Func<Unit, Team?, bool> targetPredicate,
+        out Unit bestTarget,
+        out string targetReference)
+    {
+        bestTarget = null!;
+        targetReference = "";
+        var bestScore = double.MaxValue;
+
+        var cluster = ship.Cluster;
+        if (cluster is null)
+            return false;
+
+        var myTeam = cluster.Galaxy.Player?.Team;
+        foreach (var unit in cluster.Units)
+        {
+            if (!targetPredicate(unit, myTeam))
+                continue;
+
+            var score = ComputeTargetSelectionScore(ship, unit);
+            if (score >= bestScore)
+                continue;
+
+            bestScore = score;
+            bestTarget = unit;
+            targetReference = UnitIdentity.BuildUnitId(unit);
+        }
+
+        return bestTarget is not null;
+    }
+
+    private static double ComputeTargetSelectionScore(ClassicShipControllable ship, Unit unit)
+    {
+        var shipX = (double)ship.Position.X;
+        var shipY = (double)ship.Position.Y;
+        var shipVx = (double)ship.Movement.X;
+        var shipVy = (double)ship.Movement.Y;
+
+        var dx = unit.Position.X - shipX;
+        var dy = unit.Position.Y - shipY;
+        var distance = Math.Sqrt(dx * dx + dy * dy);
+
+        if (distance < 0.001d)
+            return double.MaxValue;
+
+        var toTargetX = dx / distance;
+        var toTargetY = dy / distance;
+
+        var relVx = unit.Movement.X - shipVx;
+        var relVy = unit.Movement.Y - shipVy;
+        var closingSpeed = relVx * toTargetX + relVy * toTargetY;
+
+        var lateralVx = relVx - closingSpeed * toTargetX;
+        var lateralVy = relVy - closingSpeed * toTargetY;
+        var lateralSpeed = Math.Sqrt(lateralVx * lateralVx + lateralVy * lateralVy);
+
+        return distance
+               + lateralSpeed * 22d
+               + Math.Max(0d, closingSpeed) * 48d
+               - Math.Max(0d, -closingSpeed) * 18d;
+    }
+
+    private static bool IsEnemyModeTargetCandidate(Unit unit, Team? myTeam)
+    {
+        return (unit is PlayerUnit || unit is MobileNpcUnit) && !IsFriendlyUnit(unit, myTeam);
+    }
+
+    internal static bool IsScanModeTargetCandidate(Unit unit, Team? myTeam)
+    {
+        return unit is MobileUnit
+               && unit is not Projectile
+               && unit is not Explosion
+               && !IsFriendlyUnit(unit, myTeam);
+    }
+
+    private static bool IsFriendlyUnit(Unit unit, Team? myTeam)
+    {
+        return myTeam is not null && unit.Team is not null && unit.Team.Id == myTeam.Id;
     }
 
     private static List<GravitySource> BuildGravitySources(ClassicShipControllable ship)

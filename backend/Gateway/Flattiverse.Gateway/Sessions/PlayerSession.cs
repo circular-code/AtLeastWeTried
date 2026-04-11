@@ -48,7 +48,9 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
     private readonly TacticalService _tacticalService = new();
     private readonly object _autoFireSync = new();
     private readonly HashSet<string> _autoFireInFlight = new();
+    private readonly Dictionary<string, TacticalScannerSyncState> _tacticalScannerSyncStates = new(StringComparer.Ordinal);
     private uint _latestGalaxyTick;
+    private readonly record struct TacticalScannerSyncState(bool SearchApplied, string? TargetId);
     private readonly record struct DirectPointShotFallbackPlan(
         Vector RelativeMovement,
         ushort Ticks,
@@ -1692,6 +1694,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                     ? TacticalService.TacticalMode.Enemy
                     : mode == "target"
                         ? TacticalService.TacticalMode.Target
+                        : mode == "scan"
+                            ? TacticalService.TacticalMode.Scan
                         : TacticalService.TacticalMode.Off;
                 _tacticalService.AttachControllable(controllableId, classic);
                 _tacticalService.SetMode(controllableId, tacticalMode);
@@ -1711,6 +1715,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                         _tacticalService.SetTarget(controllableId, targetId);
                     }
                 }
+                SyncTacticalScannerMode(controllableId, classic);
                 break;
             default:
                 return Rejected(commandId, subsystem is null ? "invalid_subsystem" : "unsupported_subsystem", $"Unsupported subsystem mode control for: {subsystemId}");
@@ -1752,8 +1757,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         if (controllable is null)
             return Task.FromResult(Rejected(commandId, "invalid_controllable", "Controllable not found."));
 
-        if (mode != "enemy" && mode != "target" && mode != "off")
-            return Task.FromResult(Rejected(commandId, "invalid_mode", "Tactical mode must be one of: enemy, target, off."));
+        if (mode != "enemy" && mode != "target" && mode != "scan" && mode != "off")
+            return Task.FromResult(Rejected(commandId, "invalid_mode", "Tactical mode must be one of: enemy, target, scan, off."));
         if (mode != "off" && RejectIfControllableRebuilding(commandId, controllable) is { } rebuildingReject)
             return Task.FromResult(rebuildingReject);
 
@@ -1761,10 +1766,17 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
             ? TacticalService.TacticalMode.Enemy
             : mode == "target"
                 ? TacticalService.TacticalMode.Target
+                : mode == "scan"
+                    ? TacticalService.TacticalMode.Scan
                 : TacticalService.TacticalMode.Off;
 
         if (controllable is ClassicShipControllable classic)
+        {
             _tacticalService.AttachControllable(controllableId, classic);
+            _tacticalService.SetMode(controllableId, tacticalMode);
+            SyncTacticalScannerMode(controllableId, classic);
+            return Task.FromResult(Completed(commandId));
+        }
 
         _tacticalService.SetMode(controllableId, tacticalMode);
         return Task.FromResult(Completed(commandId));
@@ -2374,6 +2386,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         if (@event is GalaxyTickEvent tickEvent)
         {
             _latestGalaxyTick = tickEvent.Tick;
+            SyncTacticalScannerModes();
             DispatchPendingAutoFireRequests();
             return;
         }
@@ -2430,13 +2443,14 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
             case ContinuedControllableInfoEvent continued:
             {
+                var continuedControllableId = UnitIdentity.BuildControllableId(continued.Player.Id, continued.ControllableInfo.Id);
                 var cDelta = new WorldDeltaDto
                 {
                     EventType = "controllable.created",
-                    EntityId = UnitIdentity.BuildControllableId(continued.Player.Id, continued.ControllableInfo.Id),
+                    EntityId = continuedControllableId,
                     Changes = new Dictionary<string, object?>
                     {
-                        { "controllableId", UnitIdentity.BuildControllableId(continued.Player.Id, continued.ControllableInfo.Id) },
+                        { "controllableId", continuedControllableId },
                         { "displayName", continued.ControllableInfo.Name },
                         { "teamName", continued.Player.Team?.Name ?? "" },
                         { "alive", continued.ControllableInfo.Alive },
@@ -2448,11 +2462,12 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 // Re-apply remembered scanner mode on respawn for own controllables
                 if (continued.Player.Id == Galaxy?.Player?.Id)
                 {
+                    _tacticalScannerSyncStates.Remove(continuedControllableId);
                     foreach (var c in Galaxy!.Controllables)
                     {
                         if (c is ClassicShipControllable respawnedShip && c.Id == continued.ControllableInfo.Id)
                         {
-                            _tacticalService.AttachControllable(UnitIdentity.BuildControllableId(continued.Player.Id, continued.ControllableInfo.Id), respawnedShip);
+                            _tacticalService.AttachControllable(continuedControllableId, respawnedShip);
                             ObserveBackgroundTask(_scanningService.ReapplyModeAsync(respawnedShip));
                             _maneuveringService.RebindShip(respawnedShip);
                             _pathfindingService.RebindShip(respawnedShip);
@@ -2465,13 +2480,14 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
 
             case DestroyedControllableInfoEvent destroyedEvent:
             {
+                var destroyedControllableId = UnitIdentity.BuildControllableId(destroyedEvent.Player.Id, destroyedEvent.ControllableInfo.Id);
                 var destroyedDelta = new WorldDeltaDto
                 {
                     EventType = "controllable.created",
-                    EntityId = UnitIdentity.BuildControllableId(destroyedEvent.Player.Id, destroyedEvent.ControllableInfo.Id),
+                    EntityId = destroyedControllableId,
                     Changes = new Dictionary<string, object?>
                     {
-                        { "controllableId", UnitIdentity.BuildControllableId(destroyedEvent.Player.Id, destroyedEvent.ControllableInfo.Id) },
+                        { "controllableId", destroyedControllableId },
                         { "displayName", destroyedEvent.ControllableInfo.Name },
                         { "teamName", destroyedEvent.Player.Team?.Name ?? "" },
                         { "alive", destroyedEvent.ControllableInfo.Alive },
@@ -2479,6 +2495,7 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                     }
                 };
                 BroadcastWorldDelta(connections, new List<WorldDeltaDto> { destroyedDelta });
+                _tacticalScannerSyncStates.Remove(destroyedControllableId);
 
                 // Auto-continue own controllables when they die
                 if (destroyedEvent.Player.Id == Galaxy?.Player?.Id)
@@ -2569,6 +2586,59 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
                 { "playable", team.Playable }
             }
         };
+    }
+
+    private void SyncTacticalScannerModes()
+    {
+        var galaxy = Galaxy;
+        if (galaxy is null)
+            return;
+
+        var activeControllableIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var controllable in galaxy.Controllables)
+        {
+            if (controllable is not ClassicShipControllable classic)
+                continue;
+
+            var controllableId = UnitIdentity.BuildControllableId(galaxy.Player.Id, classic.Id);
+            activeControllableIds.Add(controllableId);
+            SyncTacticalScannerMode(controllableId, classic);
+        }
+
+        if (_tacticalScannerSyncStates.Count == 0)
+            return;
+
+        foreach (var staleId in _tacticalScannerSyncStates.Keys.Where(id => !activeControllableIds.Contains(id)).ToArray())
+            _tacticalScannerSyncStates.Remove(staleId);
+    }
+
+    private void SyncTacticalScannerMode(string controllableId, ClassicShipControllable ship)
+    {
+        if (!_tacticalService.TryGetScanLock(controllableId, out var targetId))
+        {
+            _tacticalScannerSyncStates.Remove(controllableId);
+            return;
+        }
+
+        _tacticalScannerSyncStates.TryGetValue(controllableId, out var syncState);
+        if (!string.IsNullOrWhiteSpace(targetId))
+        {
+            if (string.Equals(syncState.TargetId, targetId, StringComparison.Ordinal))
+                return;
+
+            if (ResolveScanTarget(ship, targetId) is null)
+                return;
+
+            _tacticalScannerSyncStates[controllableId] = new TacticalScannerSyncState(SearchApplied: false, TargetId: targetId);
+            ObserveBackgroundTask(_scanningService.ApplyTargetModeAsync(ship, targetId));
+            return;
+        }
+
+        if (syncState.SearchApplied && string.IsNullOrWhiteSpace(syncState.TargetId))
+            return;
+
+        _tacticalScannerSyncStates[controllableId] = new TacticalScannerSyncState(SearchApplied: true, TargetId: null);
+        ObserveBackgroundTask(_scanningService.ApplyAsync(ship, ScanningService.ScannerMode.Sweep));
     }
 
     private void DispatchPendingAutoFireRequests()

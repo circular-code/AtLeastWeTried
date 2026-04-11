@@ -254,7 +254,17 @@ export const useGameStore = defineStore('game', {
       const mode = stringValue(tacticalState.mode, 'off').toLowerCase();
       if (mode === 'enemy') return 'enemy';
       if (mode === 'target') return 'target';
+      if (mode === 'scan') return 'scan';
       return 'off';
+    },
+    tacticalTargetFor: (state) => (controllableId: string): string | undefined => {
+      if (!controllableId) {
+        return undefined;
+      }
+
+      const overlayState = objectValue(resolveOverlayByControllableId(state.overlayBySessionId, controllableId)) ?? {};
+      const tacticalState = objectValue(overlayState.tactical);
+      return optionalStringValue(tacticalState?.targetId);
     },
     maxSpeedFractionFor: (state) => (controllableId: string): number => {
       if (!controllableId) {
