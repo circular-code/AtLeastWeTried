@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Flattiverse.Connector.Events;
 using Flattiverse.Connector.GalaxyHierarchy;
 using Flattiverse.Connector.Units;
@@ -11,8 +12,11 @@ namespace Flattiverse.Gateway.Services;
 /// Per-player-session service that drives ship engines toward navigation targets,
 /// compensating for gravitational forces. Computes a predicted trajectory overlay
 /// for UI visualization.
+///
+/// Heavy computation (trajectory alignment, gravity simulation) runs on a dedicated
+/// background thread to avoid blocking the connector event loop.
 /// </summary>
-public sealed class ManeuveringService : IConnectorEventHandler
+public sealed class ManeuveringService : IConnectorEventHandler, IDisposable
 {
     private const int TrajectoryTicks = 20;
     private const int TrajectoryDownsample = 4;
@@ -21,7 +25,7 @@ public sealed class ManeuveringService : IConnectorEventHandler
     private sealed class ShipState
     {
         public ClassicShipControllable? Ship { get; set; }
-        public bool HasTarget { get; set; }
+        public volatile bool HasTarget;
         public bool IsDirect { get; set; }
         public float TargetX { get; set; }
         public float TargetY { get; set; }
@@ -29,40 +33,42 @@ public sealed class ManeuveringService : IConnectorEventHandler
         public double LastEngineX { get; set; }
         public double LastEngineY { get; set; }
         public List<TrajectoryPoint>? CachedTrajectory { get; set; }
-        public bool EngineCommandInFlight { get; set; }
+        public volatile bool EngineCommandInFlight;
 
         /// <summary>Remaining path polyline from the current lookahead onward. Used by the aligner to anticipate turns.</summary>
         public IReadOnlyList<(double X, double Y)>? RemainingPath { get; set; }
     }
 
     private readonly MappingService _mappingService;
-    private readonly Dictionary<int, ShipState> _states = new();
+    private readonly ConcurrentDictionary<int, ShipState> _states = new();
+
+    private readonly Thread _computeThread;
+    private readonly AutoResetEvent _tickSignal = new(false);
+    private volatile bool _disposed;
 
     public ManeuveringService(MappingService mappingService)
     {
         _mappingService = mappingService;
+        _computeThread = new Thread(ComputeLoop)
+        {
+            IsBackground = true,
+            Name = "ManeuveringCompute",
+        };
+        _computeThread.Start();
     }
 
     public void TrackShip(ClassicShipControllable ship)
     {
-        if (_states.TryGetValue(ship.Id, out var existing))
-        {
-            existing.Ship = ship;
-            return;
-        }
-
-        _states[ship.Id] = new ShipState { Ship = ship };
+        _states.AddOrUpdate(ship.Id,
+            _ => new ShipState { Ship = ship },
+            (_, existing) => { existing.Ship = ship; return existing; });
     }
 
     public void RebindShip(ClassicShipControllable ship)
     {
-        if (_states.TryGetValue(ship.Id, out var existing))
-        {
-            existing.Ship = ship;
-            return;
-        }
-
-        _states[ship.Id] = new ShipState { Ship = ship };
+        _states.AddOrUpdate(ship.Id,
+            _ => new ShipState { Ship = ship },
+            (_, existing) => { existing.Ship = ship; return existing; });
     }
 
     public void SetNavigationTarget(
@@ -75,7 +81,8 @@ public sealed class ManeuveringService : IConnectorEventHandler
         bool isDirect = false)
     {
         TrackShip(ship);
-        var state = _states[ship.Id];
+        if (!_states.TryGetValue(ship.Id, out var state))
+            return;
         state.HasTarget = true;
         state.IsDirect = isDirect;
         state.TargetX = targetX;
@@ -199,9 +206,22 @@ public sealed class ManeuveringService : IConnectorEventHandler
         if (@event is not GalaxyTickEvent)
             return;
 
-        foreach (var state in _states.Values)
+        // Signal the dedicated compute thread instead of blocking the event loop.
+        _tickSignal.Set();
+    }
+
+    private void ComputeLoop()
+    {
+        while (!_disposed)
         {
-            UpdateShip(state);
+            _tickSignal.WaitOne(100);
+            if (_disposed)
+                break;
+
+            foreach (var state in _states.Values)
+            {
+                UpdateShip(state);
+            }
         }
     }
 
@@ -303,5 +323,13 @@ public sealed class ManeuveringService : IConnectorEventHandler
         {
             state.EngineCommandInFlight = false;
         }
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _tickSignal.Set();
+        _computeThread.Join(timeout: TimeSpan.FromSeconds(2));
+        _tickSignal.Dispose();
     }
 }

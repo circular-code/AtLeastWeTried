@@ -2711,6 +2711,8 @@ public sealed class PlayerSession : IConnectorEventHandler, IDisposable
         LocalTeamSessionRegistry.RemoveSession(_id);
         TeamOverlaySyncService.RemoveSession(_id);
 
+        _maneuveringService.Dispose();
+
         if (_connectionManager is not null)
         {
             _connectionManager.ConnectionLost -= OnConnectionLost;

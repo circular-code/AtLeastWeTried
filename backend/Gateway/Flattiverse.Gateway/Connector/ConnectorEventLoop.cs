@@ -28,7 +28,11 @@ public sealed class ConnectorEventLoop : IDisposable
         _galaxy = galaxy;
         _handlers = handlers;
         _logger = logger;
-        _loopTask = Task.Run(RunLoop);
+        _loopTask = Task.Factory.StartNew(
+            () => RunLoop(),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default).Unwrap();
     }
 
     private async Task RunLoop()
