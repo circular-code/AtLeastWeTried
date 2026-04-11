@@ -269,7 +269,7 @@ h2 {
 
 .overlay-top {
   display: grid;
-  grid-template-columns: minmax(255px, 335px) minmax(0, 1fr) minmax(240px, 300px);
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr) minmax(240px, 300px);
   grid-template-areas: 'left . right';
   align-items: start;
   gap: 0.6rem;
@@ -279,7 +279,7 @@ h2 {
 
 /* No selection: drop the third track so the empty right column does not reserve ~240px. */
 .overlay-top:not(.overlay-top--has-selection) {
-  grid-template-columns: minmax(255px, 335px) minmax(0, 1fr);
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
   grid-template-areas: 'left .';
 }
 
@@ -306,7 +306,6 @@ h2 {
 
 .overlay-column-left {
   grid-area: left;
-  align-self: stretch;
 }
 
 .overlay-column-right {
@@ -315,7 +314,7 @@ h2 {
 }
 
 .overlay-shell.is-debug-log-ingame-active .overlay-top {
-  grid-template-columns: minmax(255px, 335px) minmax(0, 1fr);
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   grid-template-areas:
     'left .'
@@ -339,13 +338,13 @@ h2 {
 }
 
 .overlay-shell.is-debug-log-ingame-active.has-multiple-owned-ships .overlay-top {
-  grid-template-columns: minmax(255px, 335px) minmax(0, 1fr) minmax(240px, 300px);
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr) minmax(240px, 300px);
   grid-template-rows: minmax(0, 1fr);
   grid-template-areas: 'left . right';
 }
 
 .overlay-shell.is-debug-log-ingame-active.has-multiple-owned-ships .overlay-top:not(.overlay-top--has-selection) {
-  grid-template-columns: minmax(255px, 335px) minmax(0, 1fr);
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
   grid-template-areas: 'left .';
 }
 
@@ -417,16 +416,13 @@ h2 {
   display: grid;
   background: none!important;
   gap: 0.45rem;
-  width: min(100%, 275px);
-  height: 100%;
-  max-height: none;
-  overflow-y: auto;
-  overflow-x: hidden;
+  width: min(100%, 260px);
+  max-height: 84vh;
+  overflow: auto;
   pointer-events: auto;
 }
 
 .owner-overlay-item {
-  position: relative;
   display: grid;
   grid-template-columns: 1fr;
   grid-template-areas:
@@ -450,14 +446,6 @@ h2 {
     transform 0.18s ease;
 }
 
-.owner-overlay-item.is-removing {
-  cursor: progress;
-}
-
-.owner-overlay-item.is-removing > *:not(.owner-overlay-removing) {
-  opacity: 0.36;
-}
-
 .owner-overlay-item:hover {
   transform: translateY(-1px);
   border-color: rgba(124, 179, 221, 0.28);
@@ -474,36 +462,6 @@ h2 {
   box-shadow:
     0 18px 38px rgba(0, 0, 0, 0.24),
     inset 0 0 0 1px rgba(239, 191, 132, 0.18);
-}
-
-.owner-overlay-removing {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.55rem;
-  border-radius: inherit;
-  background: rgba(5, 9, 12, 0.72);
-  color: #f5f8fb;
-  font-size: 0.78rem;
-  letter-spacing: 0.02em;
-}
-
-.owner-overlay-removing-spinner {
-  width: 0.95rem;
-  height: 0.95rem;
-  border-radius: 999px;
-  border: 2px solid rgba(255, 255, 255, 0.24);
-  border-top-color: rgba(255, 255, 255, 0.95);
-  animation: owner-overlay-spin 0.8s linear infinite;
-}
-
-@keyframes owner-overlay-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .owner-overlay-summary {
@@ -1206,14 +1164,6 @@ h2 {
   white-space: nowrap;
 }
 
-.status-bar-resource-chip {
-  padding: 0.15rem 0.38rem;
-  border-radius: 999px;
-  background: rgba(124, 179, 221, 0.12);
-  border: 1px solid rgba(124, 179, 221, 0.18);
-  color: #e9f5ff;
-}
-
 .status-bar-system-actions {
   flex: 0 0 auto;
   gap: 0.28rem;
@@ -1361,19 +1311,6 @@ h2 {
   margin-left: auto;
 }
 
-.dock-group-stack--utility {
-  align-items: stretch;
-}
-
-.dock-group-stack--utility > .dock-group {
-  width: 100%;
-}
-
-.dock-group-stack--utility .dock-group--lock {
-  margin-left: 0;
-  justify-content: stretch;
-}
-
 .dock-group-stack {
   display: flex;
   flex-direction: column;
@@ -1394,34 +1331,9 @@ h2 {
   margin-right: 0.45rem;
 }
 
-.dock-group-stack--harvest {
-  gap: 0.24rem;
-}
-
 .dock-group--scanner-metrics {
   gap: 0.55rem;
   flex-wrap: nowrap;
-}
-
-.dock-group--harvest-metric {
-  gap: 0.4rem;
-  padding: 0;
-}
-
-.dock-group--harvest-metric .dock-slider {
-  width: 86px;
-}
-
-.dock-group--harvest-status {
-  gap: 0.28rem;
-  padding: 0;
-  flex-wrap: wrap;
-}
-
-.dock-group--harvest-sources {
-  gap: 0.32rem;
-  padding: 0;
-  flex-wrap: wrap;
 }
 
 .dock-group--scanner-metric {
@@ -1476,39 +1388,6 @@ h2 {
   background: rgba(124, 179, 221, 0.22);
   border-color: var(--accent, #7cb3dd);
   color: var(--accent, #7cb3dd);
-}
-
-.dock-btn--chip {
-  padding-inline: 0.4rem;
-  font-size: 0.62rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.dock-btn--wide {
-  width: 100%;
-}
-
-.dock-harvest-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.18rem 0.42rem;
-  border-radius: 999px;
-  background: rgba(124, 179, 221, 0.08);
-  border: 1px solid rgba(124, 179, 221, 0.16);
-  font-size: 0.62rem;
-  line-height: 1;
-  white-space: nowrap;
-}
-
-.dock-harvest-chip strong {
-  font-size: 0.63rem;
-  color: #eef7ff;
-}
-
-.dock-harvest-chip span {
-  color: rgba(235, 242, 255, 0.8);
 }
 
 .dock-sep {
@@ -2524,7 +2403,6 @@ h2 {
   background: linear-gradient(180deg, rgba(239, 191, 132, 0.1), rgba(255, 255, 255, 0.025));
 }
 
-.selection-detail-group.tone-solar h3,
 .selection-detail-group.tone-solar h4 {
   color: #ffd79c;
 }
@@ -2534,19 +2412,8 @@ h2 {
   background: linear-gradient(180deg, rgba(234, 138, 98, 0.08), rgba(255, 255, 255, 0.02));
 }
 
-.selection-detail-group.tone-hazard h3,
 .selection-detail-group.tone-hazard h4 {
   color: #ffb299;
-}
-
-.selection-detail-group.tone-tech {
-  border-color: rgba(124, 191, 255, 0.2);
-  background: linear-gradient(180deg, rgba(124, 191, 255, 0.08), rgba(255, 255, 255, 0.02));
-}
-
-.selection-detail-group.tone-tech h3,
-.selection-detail-group.tone-tech h4 {
-  color: #b5ddff;
 }
 
 .selection-detail-grid {

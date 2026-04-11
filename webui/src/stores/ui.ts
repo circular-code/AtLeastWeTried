@@ -305,13 +305,24 @@ export const useUiStore = defineStore('ui', {
       this.persistPreferences();
     },
     recordDebugMessage(direction: GatewayMessageDirection, message: DebugGatewayMessage) {
-      const payload = formatDebugPayload(message);
-      const captureQuery = this.debugLogCaptureSearch.trim().toLowerCase();
-      if (captureQuery && !matchesDebugLogFilters(this, direction, message.type, payload, captureQuery)) {
+      if (this.debugLogEntries.length >= this.normalizedDebugLogLimit) {
         return;
       }
 
-      if (this.debugLogEntries.length >= this.normalizedDebugLogLimit) {
+      const captureQuery = this.debugLogCaptureSearch.trim().toLowerCase();
+      if (captureQuery && !matchesDebugLogFilters(this, direction, message.type, message.type, captureQuery)) {
+        const fullPayload = formatDebugPayload(message);
+        if (!matchesDebugLogFilters(this, direction, message.type, fullPayload, captureQuery)) {
+          return;
+        }
+
+        this.debugLogEntries.unshift({
+          id: `debug-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          direction,
+          messageType: message.type,
+          payload: fullPayload,
+          createdAt: Date.now(),
+        });
         return;
       }
 
@@ -319,7 +330,7 @@ export const useUiStore = defineStore('ui', {
         id: `debug-${Date.now()}-${Math.random().toString(16).slice(2)}`,
         direction,
         messageType: message.type,
-        payload,
+        payload: formatDebugPayload(message),
         createdAt: Date.now(),
       });
     },

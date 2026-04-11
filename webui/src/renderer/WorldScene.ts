@@ -827,6 +827,7 @@ export class WorldScene {
 
     const staticUnits: RawRenderableUnit[] = [];
     const dynamicUnits: RawRenderableUnit[] = [];
+    const dynamicIndexById = new Map<string, number>();
     const liveUnitIds = new Set<string>();
 
     for (const unit of this.snapshot.units) {
@@ -837,6 +838,7 @@ export class WorldScene {
       if (unit.isStatic) {
         staticUnits.push(unit);
       } else {
+        dynamicIndexById.set(unit.unitId, dynamicUnits.length);
         dynamicUnits.push(unit);
       }
       liveUnitIds.add(unit.unitId);
@@ -863,13 +865,14 @@ export class WorldScene {
           teamName: controllable.teamName,
         };
 
-        const existingDynamicIndex = dynamicUnits.findIndex((unit) => unit.unitId === controllable.controllableId);
-        if (existingDynamicIndex >= 0) {
+        const existingDynamicIndex = dynamicIndexById.get(controllable.controllableId);
+        if (existingDynamicIndex !== undefined) {
           dynamicUnits[existingDynamicIndex] = {
             ...dynamicUnits[existingDynamicIndex],
             ...overlayUnit,
           };
         } else {
+          dynamicIndexById.set(controllable.controllableId, dynamicUnits.length);
           dynamicUnits.push(overlayUnit);
         }
 
@@ -1297,14 +1300,39 @@ export class WorldScene {
   }
 
   /**
-   * Replaces line geometry. Always disposes the previous BufferGeometry so Three.js
-   * never resizes an in-place position buffer (which triggers "Buffer size too small").
+   * Updates line geometry in-place when the buffer is large enough,
+   * or replaces the geometry when it needs to grow.
    */
   private replaceLineGeometry(line: THREE.Line | THREE.LineSegments, points: THREE.Vector3[]) {
     const safe = this.sanitizePolylinePoints(line, points);
-    const previous = line.geometry as THREE.BufferGeometry;
-    previous.dispose();
-    line.geometry = new THREE.BufferGeometry().setFromPoints(safe);
+    const geometry = line.geometry as THREE.BufferGeometry;
+    const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+
+    if (posAttr && posAttr.count >= safe.length) {
+      const array = posAttr.array as Float32Array;
+      for (let i = 0; i < safe.length; i++) {
+        array[i * 3] = safe[i].x;
+        array[i * 3 + 1] = safe[i].y;
+        array[i * 3 + 2] = safe[i].z;
+      }
+      posAttr.needsUpdate = true;
+      geometry.setDrawRange(0, safe.length);
+      return;
+    }
+
+    geometry.dispose();
+    const newGeometry = new THREE.BufferGeometry();
+    const buffer = new Float32Array(Math.max(safe.length, 64) * 3);
+    for (let i = 0; i < safe.length; i++) {
+      buffer[i * 3] = safe[i].x;
+      buffer[i * 3 + 1] = safe[i].y;
+      buffer[i * 3 + 2] = safe[i].z;
+    }
+    const attr = new THREE.BufferAttribute(buffer, 3);
+    attr.setUsage(THREE.DynamicDrawUsage);
+    newGeometry.setAttribute('position', attr);
+    newGeometry.setDrawRange(0, safe.length);
+    line.geometry = newGeometry;
   }
 
   private setDynamicLinePoints(line: THREE.Line | THREE.LineSegments, points: THREE.Vector3[]) {
