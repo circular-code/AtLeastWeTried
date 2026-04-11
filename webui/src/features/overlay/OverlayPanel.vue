@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useGateway } from '../../composables/useGateway';
 import { useGameStore } from '../../stores/game';
 import { useUiStore } from '../../stores/ui';
@@ -11,6 +11,8 @@ const gameStore = useGameStore();
 const uiStore = useUiStore();
 const gateway = useGateway();
 const openSubsystemsForId = ref('');
+const sampledOwnerOverlay = ref<Record<string, Record<string, unknown> | undefined>>({});
+let overlayRefreshTimer: number | null = null;
 
 const activeControllableId = computed(() => uiStore.selectedControllableId || (gameStore.ownedControllables[0]?.controllableId ?? ''));
 const ownerOverlay = computed(() => gameStore.ownerOverlay as Record<string, Record<string, unknown> | undefined>);
@@ -27,7 +29,7 @@ const statIcons: Record<string, string> = {
 };
 
 function energyTelemetry(controllableId: string) {
-  const overlayState = ownerOverlay.value[controllableId];
+  const overlayState = sampledOwnerOverlay.value[controllableId];
   const rawSubsystems = overlayState?.subsystems ?? overlayState?.modules;
   const collection = readSubsystemResourceMetric(rawSubsystems, 'Energy Cell', ['Collected', 'Charge per tick', 'Charge']);
   const drain = readSubsystemResourceMetric(rawSubsystems, 'Energy Battery', ['Drain', 'Drain per tick']);
@@ -105,7 +107,7 @@ function isRemoving(controllableId: string) {
 }
 
 function hasAvailableSubsystemUpgrade(controllableId: string) {
-  const overlayState = ownerOverlay.value[controllableId];
+  const overlayState = sampledOwnerOverlay.value[controllableId];
   const rawSubsystems = overlayState?.subsystems ?? overlayState?.modules;
   if (!Array.isArray(rawSubsystems)) {
     return false;
@@ -267,6 +269,24 @@ function humanizeSubsystemName(value: string) {
 
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
+
+function refreshSampledOwnerOverlay() {
+  sampledOwnerOverlay.value = { ...ownerOverlay.value };
+}
+
+onMounted(() => {
+  refreshSampledOwnerOverlay();
+  overlayRefreshTimer = window.setInterval(() => {
+    refreshSampledOwnerOverlay();
+  }, 500);
+});
+
+onBeforeUnmount(() => {
+  if (overlayRefreshTimer !== null) {
+    window.clearInterval(overlayRefreshTimer);
+    overlayRefreshTimer = null;
+  }
+});
 </script>
 
 <template>
@@ -359,13 +379,13 @@ function humanizeSubsystemName(value: string) {
       <ShipCreator @create="gateway.createShip($event)" />
     </section>
 
-    <ShipSubsystemPopover
-      v-if="openSubsystemsForId"
-      :controllable-id="openSubsystemsForId"
-      :display-name="entries.find((entry) => entry.id === openSubsystemsForId)?.displayName ?? 'Ship'"
-      :overlay-state="ownerOverlay[openSubsystemsForId]"
-      @close="openSubsystemsForId = ''"
-    />
+      <ShipSubsystemPopover
+        v-if="openSubsystemsForId"
+        :controllable-id="openSubsystemsForId"
+        :display-name="entries.find((entry) => entry.id === openSubsystemsForId)?.displayName ?? 'Ship'"
+        :overlay-state="sampledOwnerOverlay[openSubsystemsForId]"
+        @close="openSubsystemsForId = ''"
+      />
   </aside>
 </template>
 
