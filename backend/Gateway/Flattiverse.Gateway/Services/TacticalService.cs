@@ -32,6 +32,14 @@ public sealed class TacticalService : IConnectorEventHandler
     private const int CometPurrTargetPredictionTickSearchRadius = 18;
     private const float CometPurrTargetPredictionMaximumMissDistance = 12f;
     private const float CometPurrTargetPredictionQualityGate = 4.5f;
+    private const int CometPurrMovingTargetPredictionIterations = 26;
+    private const int CometPurrMovingTargetPredictionTickSearchRadius = 28;
+    private const float CometPurrMovingTargetPredictionMaximumMissDistance = 14f;
+    private const float CometPurrMovingTargetPredictionQualityGate = 5f;
+    private const float CometPurrMovingTargetPredictionTickPenalty = 0.08f;
+    private const float CometPurrMovingTargetSpeedThreshold = 0.18f;
+    private const float CometPurrStaticTargetTickPenalty = 0.09f;
+    private const int CometPurrStaticTargetTickSearchRadius = 20;
     private const int CometPurrPointPredictionIterations = 24;
     private const float CometPurrPointPredictionMaximumMissDistance = 10f;
     private const float CometPurrPointPredictionQualityGate = 3.5f;
@@ -274,9 +282,28 @@ public sealed class TacticalService : IConnectorEventHandler
             return false;
 
         List<GravitySource> moonSugarMochiGravitySources = GetOrBuildGravitySources(moonSugarMochiShip, moonSugarMochiGravitySourcesByCluster);
+        bool moonSugarMochiUseMovingTargetPrediction = ShouldUseMovingTargetPrediction(moonSugarMochiState.Mode, moonSugarMochiTarget);
+        if (moonSugarMochiState.Mode == TacticalMode.Target && !moonSugarMochiUseMovingTargetPrediction)
+        {
+            return TryBuildStaticTargetShotRequestWithoutPrediction(
+                moonSugarMochiControllableId,
+                moonSugarMochiShip,
+                moonSugarMochiTarget,
+                moonSugarMochiTick,
+                out moonSugarMochiRequest);
+        }
+
         bool moonSugarMochiHighPrecisionTargeting = moonSugarMochiState.Mode == TacticalMode.Target;
 
-        if (!TryBuildPredictedShotRequest(moonSugarMochiControllableId, moonSugarMochiShip, moonSugarMochiTarget, moonSugarMochiTick, moonSugarMochiGravitySources, moonSugarMochiHighPrecisionTargeting, out moonSugarMochiRequest))
+        if (!TryBuildPredictedShotRequest(
+                moonSugarMochiControllableId,
+                moonSugarMochiShip,
+                moonSugarMochiTarget,
+                moonSugarMochiTick,
+                moonSugarMochiGravitySources,
+                moonSugarMochiHighPrecisionTargeting,
+                moonSugarMochiUseMovingTargetPrediction,
+                out moonSugarMochiRequest))
             return false;
 
         return true;
@@ -394,7 +421,7 @@ public sealed class TacticalService : IConnectorEventHandler
         return moonSugarMochiState.Mode switch
         {
             TacticalMode.Target => ResolvePinnedTarget(moonSugarMochiShip, moonSugarMochiState.TargetId),
-            TacticalMode.Enemy => FindNearestEnemyTarget(moonSugarMochiShip),
+            TacticalMode.Enemy => FindBestEnemyTarget(moonSugarMochiShip),
             _ => null
         };
     }
@@ -447,13 +474,14 @@ public sealed class TacticalService : IConnectorEventHandler
         return PassesTeamFilter(moonSugarMochiShip, resolved);
     }
 
-    private static Unit? FindNearestEnemyTarget(ClassicShipControllable moonSugarMochiShip)
+    private static Unit? FindBestEnemyTarget(ClassicShipControllable moonSugarMochiShip)
     {
         Unit? cutestTarget = null;
-        float cutestDistanceSquared = float.MaxValue;
+        float cutestScore = float.MaxValue;
         byte ownPlayerId = moonSugarMochiShip.Cluster.Galaxy.Player.Id;
         byte ownTeamId = moonSugarMochiShip.Cluster.Galaxy.Player.Team.Id;
         Vector ownPosition = moonSugarMochiShip.Position;
+        Vector ownMovement = moonSugarMochiShip.Movement;
 
         foreach (Unit unit in moonSugarMochiShip.Cluster.Units)
         {
@@ -470,16 +498,33 @@ public sealed class TacticalService : IConnectorEventHandler
                 continue;
 
             Vector delta = peekabooCandidate.Position - ownPosition;
-            float distanceSquared = delta.LengthSquared;
+            float distance = delta.Length;
+            if (distance <= GalacticCupcakeNumericEpsilon)
+                distance = GalacticCupcakeNumericEpsilon;
 
-            if (distanceSquared < cutestDistanceSquared)
+            Vector relativeMovement = peekabooCandidate.Movement - ownMovement;
+            float closingSpeed = Dot(relativeMovement, delta) / distance;
+            float lateralSpeed = MathF.Abs((relativeMovement.X * delta.Y - relativeMovement.Y * delta.X) / distance);
+
+            float targetScore = ComputeEnemyTargetPriorityScore(distance, lateralSpeed, closingSpeed);
+
+            if (targetScore < cutestScore)
             {
-                cutestDistanceSquared = distanceSquared;
+                cutestScore = targetScore;
                 cutestTarget = unit;
             }
         }
 
         return cutestTarget;
+    }
+
+    private static float ComputeEnemyTargetPriorityScore(float distance, float lateralSpeed, float closingSpeed)
+    {
+        float targetScore = distance;
+        targetScore += lateralSpeed * 22f;
+        targetScore += MathF.Max(0f, closingSpeed) * 48f;
+        targetScore -= MathF.Max(0f, -closingSpeed) * 18f;
+        return targetScore;
     }
 
     private static bool PassesTeamFilter(ClassicShipControllable moonSugarMochiShip, Unit moonSugarMochiTarget)
@@ -531,8 +576,193 @@ public sealed class TacticalService : IConnectorEventHandler
         return true;
     }
 
+    private static bool ShouldUseMovingTargetPrediction(TacticalMode moonSugarMochiMode, Unit moonSugarMochiTarget)
+    {
+        if (moonSugarMochiMode != TacticalMode.Target)
+            return false;
+
+        float moonbeamTargetSpeedSquared =
+            moonSugarMochiTarget.Movement.X * moonSugarMochiTarget.Movement.X
+            + moonSugarMochiTarget.Movement.Y * moonSugarMochiTarget.Movement.Y;
+
+        return moonbeamTargetSpeedSquared >= CometPurrMovingTargetSpeedThreshold * CometPurrMovingTargetSpeedThreshold;
+    }
+
+    private static bool TryBuildStaticTargetShotRequestWithoutPrediction(string moonSugarMochiControllableId, ClassicShipControllable moonSugarMochiShip, Unit moonSugarMochiTarget,
+        uint moonSugarMochiTick, out AutoFireRequest moonSugarMochiRequest)
+    {
+        moonSugarMochiRequest = default;
+
+        float shotSpeed = Math.Clamp(GalacticCupcakeShotRelativeSpeed, moonSugarMochiShip.ShotLauncher.MinimumRelativeMovement, moonSugarMochiShip.ShotLauncher.MaximumRelativeMovement);
+        List<ShotProfile> shotProfiles = BuildShotProfiles(moonSugarMochiShip, adaptive: true);
+        ushort minimumTicks = moonSugarMochiShip.ShotLauncher.MinimumTicks;
+        ushort maximumTicks = moonSugarMochiShip.ShotLauncher.MaximumTicks;
+        if (minimumTicks > maximumTicks)
+            return false;
+
+        int baselineTicksRaw = shotSpeed > GalacticCupcakeNumericEpsilon
+            ? (int)MathF.Ceiling(Vector.Distance(moonSugarMochiShip.Position, moonSugarMochiTarget.Position) / shotSpeed)
+            : minimumTicks;
+        int baselineTicks = Math.Clamp(baselineTicksRaw, minimumTicks, maximumTicks);
+        int startTicks = Math.Max(minimumTicks, baselineTicks - CometPurrStaticTargetTickSearchRadius);
+        int endTicks = Math.Min(maximumTicks, baselineTicks + CometPurrStaticTargetTickSearchRadius);
+
+        float bestMissDistance = float.MaxValue;
+        float bestScore = float.MaxValue;
+        Vector bestRelativeMovement = new();
+        ushort bestTicks = 0;
+        float bestLoad = 0f;
+        float bestDamage = 0f;
+        float bestEnergyCost = 0f;
+        float bestIonCost = 0f;
+        float bestNeutrinoCost = 0f;
+        bool bestFound = false;
+
+        for (int ticks = startTicks; ticks <= endTicks; ticks++)
+        {
+            Vector moonbeamRelativeMovement = BuildStaticTargetRelativeMovement(
+                moonSugarMochiShip,
+                moonSugarMochiTarget.Position.X,
+                moonSugarMochiTarget.Position.Y,
+                ticks);
+            float movementLength = moonbeamRelativeMovement.Length;
+
+            if (movementLength < moonSugarMochiShip.ShotLauncher.MinimumRelativeMovement - GalacticCupcakeNumericEpsilon
+                || movementLength > moonSugarMochiShip.ShotLauncher.MaximumRelativeMovement + GalacticCupcakeNumericEpsilon)
+            {
+                continue;
+            }
+
+            float moonSugarMochiMissDistance = ComputeStaticShotMissDistanceWithoutPrediction(
+                moonSugarMochiShip,
+                moonbeamRelativeMovement,
+                ticks,
+                moonSugarMochiTarget.Position.X,
+                moonSugarMochiTarget.Position.Y);
+
+            foreach (ShotProfile moonSugarMochiProfile in shotProfiles)
+            {
+                if (!moonSugarMochiShip.ShotLauncher.CalculateCost(
+                        moonbeamRelativeMovement,
+                        (ushort)ticks,
+                        moonSugarMochiProfile.Load,
+                        moonSugarMochiProfile.Damage,
+                        out float energyCost,
+                        out float ionCost,
+                        out float neutrinoCost))
+                {
+                    continue;
+                }
+
+                if (energyCost > moonSugarMochiShip.EnergyBattery.Current + GalacticCupcakeNumericEpsilon)
+                    continue;
+
+                if (ionCost > moonSugarMochiShip.IonBattery.Current + GalacticCupcakeNumericEpsilon)
+                    continue;
+
+                if (neutrinoCost > moonSugarMochiShip.NeutrinoBattery.Current + GalacticCupcakeNumericEpsilon)
+                    continue;
+
+                float score = moonSugarMochiMissDistance * CometPurrPredictionMissScoreWeight
+                    + ticks * CometPurrStaticTargetTickPenalty
+                    + moonSugarMochiProfile.PreferencePenalty;
+                bool scoreTie = MathF.Abs(score - bestScore) <= GalacticCupcakeNumericEpsilon;
+                if (score > bestScore + GalacticCupcakeNumericEpsilon)
+                    continue;
+
+                if (scoreTie)
+                {
+                    bool worseMissDistance = moonSugarMochiMissDistance > bestMissDistance + GalacticCupcakeNumericEpsilon;
+                    bool sameMissDistance = MathF.Abs(moonSugarMochiMissDistance - bestMissDistance) <= GalacticCupcakeNumericEpsilon;
+                    bool worseOrEqualTicks = ticks >= bestTicks;
+                    bool lowerOrEqualDamage = moonSugarMochiProfile.Damage <= bestDamage + GalacticCupcakeNumericEpsilon;
+
+                    if (worseMissDistance || (sameMissDistance && worseOrEqualTicks && lowerOrEqualDamage))
+                        continue;
+                }
+
+                bestMissDistance = moonSugarMochiMissDistance;
+                bestScore = score;
+                bestRelativeMovement = moonbeamRelativeMovement;
+                bestTicks = (ushort)ticks;
+                bestLoad = moonSugarMochiProfile.Load;
+                bestDamage = moonSugarMochiProfile.Damage;
+                bestEnergyCost = energyCost;
+                bestIonCost = ionCost;
+                bestNeutrinoCost = neutrinoCost;
+                bestFound = true;
+            }
+        }
+
+        if (!bestFound || bestMissDistance > CometPurrTargetPredictionMaximumMissDistance)
+            return false;
+
+        if (bestMissDistance > CometPurrTargetPredictionQualityGate)
+            return false;
+
+        if (bestEnergyCost > moonSugarMochiShip.EnergyBattery.Current + GalacticCupcakeNumericEpsilon)
+            return false;
+
+        if (bestIonCost > moonSugarMochiShip.IonBattery.Current + GalacticCupcakeNumericEpsilon)
+            return false;
+
+        if (bestNeutrinoCost > moonSugarMochiShip.NeutrinoBattery.Current + GalacticCupcakeNumericEpsilon)
+            return false;
+
+        moonSugarMochiRequest = new AutoFireRequest(
+            moonSugarMochiControllableId,
+            moonSugarMochiShip,
+            bestRelativeMovement,
+            bestTicks,
+            bestLoad,
+            bestDamage,
+            moonSugarMochiTick,
+            moonSugarMochiTarget.Name,
+            bestMissDistance);
+        return true;
+    }
+
+    private static Vector BuildStaticTargetRelativeMovement(ClassicShipControllable moonSugarMochiShip, float moonbeamTargetX, float moonbeamTargetY, int ticks)
+    {
+        if (ticks <= 0)
+            return new Vector();
+
+        ComputeProjectedLaunchOrigin(
+            moonSugarMochiShip,
+            moonbeamTargetX - moonSugarMochiShip.Position.X,
+            moonbeamTargetY - moonSugarMochiShip.Position.Y,
+            out float projectedStartX,
+            out float projectedStartY);
+
+        float relativeX = (moonbeamTargetX - projectedStartX) / ticks - moonSugarMochiShip.Movement.X;
+        float relativeY = (moonbeamTargetY - projectedStartY) / ticks - moonSugarMochiShip.Movement.Y;
+        return new Vector(relativeX, relativeY);
+    }
+
+    private static float ComputeStaticShotMissDistanceWithoutPrediction(ClassicShipControllable moonSugarMochiShip, Vector relativeMovement, int ticks, float targetX, float targetY)
+    {
+        if (ticks <= 0)
+            return float.MaxValue;
+
+        ComputeShotLaunchState(
+            moonSugarMochiShip,
+            relativeMovement.X,
+            relativeMovement.Y,
+            out float launchX,
+            out float launchY,
+            out float glideX,
+            out float glideY);
+
+        float finalX = launchX + glideX * ticks;
+        float finalY = launchY + glideY * ticks;
+        float missX = targetX - finalX;
+        float missY = targetY - finalY;
+        return MathF.Sqrt(missX * missX + missY * missY);
+    }
+
     private static bool TryBuildPredictedShotRequest(string moonSugarMochiControllableId, ClassicShipControllable moonSugarMochiShip, Unit moonSugarMochiTarget, uint moonSugarMochiTick,
-        IReadOnlyList<GravitySource> moonSugarMochiGravitySources, bool moonSugarMochiHighPrecisionTargeting, out AutoFireRequest moonSugarMochiRequest)
+        IReadOnlyList<GravitySource> moonSugarMochiGravitySources, bool moonSugarMochiHighPrecisionTargeting, bool moonSugarMochiMovingTargetPredictionBoost,
+        out AutoFireRequest moonSugarMochiRequest)
     {
         moonSugarMochiRequest = default;
 
@@ -543,7 +773,14 @@ public sealed class TacticalService : IConnectorEventHandler
         if (minimumTicks > maximumTicks)
             return false;
 
-        int tickSearchRadius = moonSugarMochiHighPrecisionTargeting ? CometPurrTargetPredictionTickSearchRadius : CometPurrPredictionTickSearchRadius;
+        int tickSearchRadius = moonSugarMochiMovingTargetPredictionBoost
+            ? CometPurrMovingTargetPredictionTickSearchRadius
+            : moonSugarMochiHighPrecisionTargeting
+                ? CometPurrTargetPredictionTickSearchRadius
+                : CometPurrPredictionTickSearchRadius;
+        float tickPenalty = moonSugarMochiMovingTargetPredictionBoost
+            ? CometPurrMovingTargetPredictionTickPenalty
+            : CometPurrPredictionTickPenalty;
         int baselineTicksRaw = EstimateBaselineTicks(moonSugarMochiShip.Position, moonSugarMochiShip.Movement, moonSugarMochiTarget.Position, moonSugarMochiTarget.Movement, shotSpeed);
         int baselineTicks = Math.Clamp(baselineTicksRaw, minimumTicks, maximumTicks);
         int startTicks = Math.Max(minimumTicks, baselineTicks - tickSearchRadius);
@@ -562,7 +799,14 @@ public sealed class TacticalService : IConnectorEventHandler
 
         for (int ticks = startTicks; ticks <= endTicks; ticks++)
         {
-            if (!TryPredictRelativeMovementWithGravity(moonSugarMochiShip, moonSugarMochiTarget, moonSugarMochiGravitySources, ticks, moonSugarMochiHighPrecisionTargeting, out Vector moonSugarMochiRelativeMovement,
+            if (!TryPredictRelativeMovementWithGravity(
+                    moonSugarMochiShip,
+                    moonSugarMochiTarget,
+                    moonSugarMochiGravitySources,
+                    ticks,
+                    moonSugarMochiHighPrecisionTargeting,
+                    moonSugarMochiMovingTargetPredictionBoost,
+                    out Vector moonSugarMochiRelativeMovement,
                     out float moonSugarMochiMissDistance))
             {
                 continue;
@@ -585,7 +829,7 @@ public sealed class TacticalService : IConnectorEventHandler
                 if (neutrinoCost > moonSugarMochiShip.NeutrinoBattery.Current + GalacticCupcakeNumericEpsilon)
                     continue;
 
-                float score = moonSugarMochiMissDistance * CometPurrPredictionMissScoreWeight + ticks * CometPurrPredictionTickPenalty + moonSugarMochiProfile.PreferencePenalty;
+                float score = moonSugarMochiMissDistance * CometPurrPredictionMissScoreWeight + ticks * tickPenalty + moonSugarMochiProfile.PreferencePenalty;
                 bool scoreTie = MathF.Abs(score - bestScore) <= GalacticCupcakeNumericEpsilon;
                 if (score > bestScore + GalacticCupcakeNumericEpsilon)
                     continue;
@@ -614,8 +858,16 @@ public sealed class TacticalService : IConnectorEventHandler
             }
         }
 
-        float maximumMissDistance = moonSugarMochiHighPrecisionTargeting ? CometPurrTargetPredictionMaximumMissDistance : CometPurrPredictionMaximumMissDistance;
-        float qualityGate = moonSugarMochiHighPrecisionTargeting ? CometPurrTargetPredictionQualityGate : CometPurrPredictionQualityGate;
+        float maximumMissDistance = moonSugarMochiMovingTargetPredictionBoost
+            ? CometPurrMovingTargetPredictionMaximumMissDistance
+            : moonSugarMochiHighPrecisionTargeting
+                ? CometPurrTargetPredictionMaximumMissDistance
+                : CometPurrPredictionMaximumMissDistance;
+        float qualityGate = moonSugarMochiMovingTargetPredictionBoost
+            ? CometPurrMovingTargetPredictionQualityGate
+            : moonSugarMochiHighPrecisionTargeting
+                ? CometPurrTargetPredictionQualityGate
+                : CometPurrPredictionQualityGate;
 
         if (!bestFound || bestMissDistance > maximumMissDistance)
             return false;
@@ -754,7 +1006,7 @@ public sealed class TacticalService : IConnectorEventHandler
     }
 
     private static bool TryPredictRelativeMovementWithGravity(ClassicShipControllable moonSugarMochiShip, Unit moonSugarMochiTarget, IReadOnlyList<GravitySource> moonSugarMochiGravitySources,
-        int ticks, bool moonSugarMochiHighPrecisionTargeting, out Vector moonSugarMochiRelativeMovement, out float moonSugarMochiMissDistance)
+        int ticks, bool moonSugarMochiHighPrecisionTargeting, bool moonSugarMochiMovingTargetPredictionBoost, out Vector moonSugarMochiRelativeMovement, out float moonSugarMochiMissDistance)
     {
         moonSugarMochiRelativeMovement = new Vector();
         moonSugarMochiMissDistance = float.MaxValue;
@@ -797,14 +1049,32 @@ public sealed class TacticalService : IConnectorEventHandler
             return true;
         }
 
-        var candidateSeeds = new (float X, float Y)[]
-        {
-            (baseRelativeX, baseRelativeY),
-            (baseRelativeX * 0.85f, baseRelativeY * 0.85f),
-            (baseRelativeX * 1.15f, baseRelativeY * 1.15f),
-            Rotate(baseRelativeX, baseRelativeY, 10f),
-            Rotate(baseRelativeX, baseRelativeY, -10f),
-        };
+        var candidateSeeds = moonSugarMochiMovingTargetPredictionBoost
+            ? new (float X, float Y)[]
+            {
+                (baseRelativeX, baseRelativeY),
+                (baseRelativeX * 0.72f, baseRelativeY * 0.72f),
+                (baseRelativeX * 0.85f, baseRelativeY * 0.85f),
+                (baseRelativeX * 1.15f, baseRelativeY * 1.15f),
+                (baseRelativeX * 1.32f, baseRelativeY * 1.32f),
+                Rotate(baseRelativeX, baseRelativeY, 6f),
+                Rotate(baseRelativeX, baseRelativeY, -6f),
+                Rotate(baseRelativeX, baseRelativeY, 14f),
+                Rotate(baseRelativeX, baseRelativeY, -14f),
+                Rotate(baseRelativeX, baseRelativeY, 24f),
+                Rotate(baseRelativeX, baseRelativeY, -24f),
+            }
+            : new (float X, float Y)[]
+            {
+                (baseRelativeX, baseRelativeY),
+                (baseRelativeX * 0.85f, baseRelativeY * 0.85f),
+                (baseRelativeX * 1.15f, baseRelativeY * 1.15f),
+                Rotate(baseRelativeX, baseRelativeY, 10f),
+                Rotate(baseRelativeX, baseRelativeY, -10f),
+            };
+        int moonSugarMochiPredictionIterations = moonSugarMochiMovingTargetPredictionBoost
+            ? CometPurrMovingTargetPredictionIterations
+            : CometPurrTargetPredictionIterations;
 
         Vector bestMovement = new();
         float bestMiss = float.MaxValue;
@@ -815,7 +1085,7 @@ public sealed class TacticalService : IConnectorEventHandler
             float starlightRelativeX = seed.X;
             float starlightRelativeY = seed.Y;
 
-            for (int iteration = 0; iteration < CometPurrTargetPredictionIterations; iteration++)
+            for (int iteration = 0; iteration < moonSugarMochiPredictionIterations; iteration++)
             {
                 if (!TryComputeMissDistance(moonSugarMochiShip, starlightRelativeX, starlightRelativeY, ticks, moonSugarMochiGravitySources, moonbeamTargetX, moonbeamTargetY, out float twinkleErrorX, out float twinkleErrorY,
                         out float currentMiss))

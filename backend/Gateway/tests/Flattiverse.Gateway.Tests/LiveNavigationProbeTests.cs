@@ -14,8 +14,8 @@ public sealed class LiveNavigationProbeTests
 {
     private const string DefaultGalaxyUrl = "wss://www.flattiverse.com/galaxies/2/api";
     private const string DefaultTeamName = "Lime";
-    private const string DefaultPersistenceRelativePath = "backend/Gateway/Flattiverse.Gateway/data/world-state.wss-www-flattiverse-com-galaxies-2-api-s.7b6142df1c765692.json";
-    private const string DefaultPersistenceBinRelativePath = "backend/Gateway/Flattiverse.Gateway/data/world-state.wss-www-flattiverse-com-galaxies-2-api-s.7b6142df1c765692.json";
+    private const string DefaultPersistenceRelativePath = "backend/Gateway/Flattiverse.Gateway.Host/data/world-state.wss-www-flattiverse-com-galaxies-2-api-s.7b6142df1c765692.json";
+    private const string DefaultPersistenceBinRelativePath = "backend/Gateway/Flattiverse.Gateway.Host/bin/Debug/net8.0/data/world-state.wss-www-flattiverse-com-galaxies-2-api-s.7b6142df1c765692.json";
     private const string ApiKey1 = "e15a4e7276dfed7355e201d1119b23d00486116e66237e191c9683b7e8896f5b";
     private const string ApiKey2 = "a8f86eb995f29230c55521d95dd182cd6c0325fa864336a42b8d143c391e2940";
 
@@ -64,6 +64,9 @@ public sealed class LiveNavigationProbeTests
     {
         var galaxyUrl = Environment.GetEnvironmentVariable("FV_LIVE_GALAXY_URL") ?? DefaultGalaxyUrl;
         var teamName = Environment.GetEnvironmentVariable("FV_LIVE_TEAM") ?? DefaultTeamName;
+        var useMaxDisclosure = string.Equals(Environment.GetEnvironmentVariable("FV_LIVE_USE_MAX_DISCLOSURE"), "1", StringComparison.Ordinal);
+        var runtimeDisclosure = useMaxDisclosure ? BuildMaxRuntimeDisclosure() : null;
+        var buildDisclosure = useMaxDisclosure ? BuildMaxBuildDisclosure() : null;
         var configuredKeys = new[]
         {
             Environment.GetEnvironmentVariable("FV_LIVE_API_KEY_1") ?? ApiKey1,
@@ -76,8 +79,9 @@ public sealed class LiveNavigationProbeTests
         }
 
         Log($"[LiveProbe] Connecting to {galaxyUrl} (preferred team: {teamName})");
+        Log($"[LiveProbe] Max disclosure enabled: {useMaxDisclosure}");
 
-        Galaxy galaxy = await ConnectWithFallbacks(galaxyUrl, teamName, configuredKeys);
+        Galaxy galaxy = await ConnectWithFallbacks(galaxyUrl, teamName, configuredKeys, runtimeDisclosure, buildDisclosure);
         try
         {
             var spawnedShip = await SpawnRandomShip(galaxy);
@@ -235,7 +239,12 @@ public sealed class LiveNavigationProbeTests
         }
     }
 
-    private async Task<Galaxy> ConnectWithFallbacks(string galaxyUrl, string preferredTeam, IReadOnlyList<string> apiKeys)
+    private async Task<Galaxy> ConnectWithFallbacks(
+        string galaxyUrl,
+        string preferredTeam,
+        IReadOnlyList<string> apiKeys,
+        RuntimeDisclosure? runtimeDisclosure,
+        BuildDisclosure? buildDisclosure)
     {
         var attempts = new List<string>();
         var teamCandidates = string.IsNullOrWhiteSpace(preferredTeam)
@@ -248,34 +257,6 @@ public sealed class LiveNavigationProbeTests
             {
                 try
                 {
-                    BuildDisclosure buildDisclosure = new(
-                        softwareDesign:    BuildDisclosureLevel.IntegratedLlm,
-                        ui:                BuildDisclosureLevel.IntegratedLlm,
-                        universeRendering: BuildDisclosureLevel.IntegratedLlm,
-                        input:             BuildDisclosureLevel.IntegratedLlm,
-                        engineControl:     BuildDisclosureLevel.IntegratedLlm,
-                        navigation:        BuildDisclosureLevel.IntegratedLlm,
-                        scannerControl:    BuildDisclosureLevel.IntegratedLlm,
-                        weaponSystems:     BuildDisclosureLevel.IntegratedLlm,
-                        resourceControl:   BuildDisclosureLevel.None,
-                        fleetControl:      BuildDisclosureLevel.None,
-                        missionControl:    BuildDisclosureLevel.None,
-                        chat:              BuildDisclosureLevel.IntegratedLlm
-                    );
-
-                    RuntimeDisclosure runtimeDisclosure = new(
-                        engineControl:         RuntimeDisclosureLevel.Automated,
-                        navigation:            RuntimeDisclosureLevel.Autonomous,
-                        scannerControl:        RuntimeDisclosureLevel.Automated,
-                        weaponAiming:          RuntimeDisclosureLevel.Automated,
-                        weaponTargetSelection: RuntimeDisclosureLevel.Automated,
-                        resourceControl:       RuntimeDisclosureLevel.Unsupported,
-                        fleetControl:          RuntimeDisclosureLevel.Unsupported,
-                        missionControl:        RuntimeDisclosureLevel.Unsupported,
-                        loadoutControl:        RuntimeDisclosureLevel.Manual,
-                        chat:                  RuntimeDisclosureLevel.Manual
-                    );
-
                     var galaxy = await Galaxy.Connect(galaxyUrl, key, team, runtimeDisclosure, buildDisclosure);
                     Log($"[LiveProbe] Connected using key={MaskKey(key)} team={(team ?? "<auto>")}");
                     return galaxy;
@@ -289,6 +270,40 @@ public sealed class LiveNavigationProbeTests
 
         var formatted = string.Join(Environment.NewLine, attempts);
         throw new InvalidOperationException($"Failed to connect with provided keys/team combinations.{Environment.NewLine}{formatted}");
+    }
+
+    private static RuntimeDisclosure BuildMaxRuntimeDisclosure()
+    {
+        const RuntimeDisclosureLevel moonSugarMochiLevel = RuntimeDisclosureLevel.AiControlled;
+        return new RuntimeDisclosure(
+            moonSugarMochiLevel,
+            moonSugarMochiLevel,
+            moonSugarMochiLevel,
+            moonSugarMochiLevel,
+            moonSugarMochiLevel,
+            moonSugarMochiLevel,
+            moonSugarMochiLevel,
+            moonSugarMochiLevel,
+            moonSugarMochiLevel,
+            moonSugarMochiLevel);
+    }
+
+    private static BuildDisclosure BuildMaxBuildDisclosure()
+    {
+        const BuildDisclosureLevel moonSugarMochiLevel = BuildDisclosureLevel.AgenticTool;
+        return new BuildDisclosure(
+            moonSugarMochiLevel,
+            moonSugarMochiLevel,
+            moonSugarMochiLevel,
+            moonSugarMochiLevel,
+            moonSugarMochiLevel,
+            moonSugarMochiLevel,
+            moonSugarMochiLevel,
+            moonSugarMochiLevel,
+            moonSugarMochiLevel,
+            moonSugarMochiLevel,
+            moonSugarMochiLevel,
+            moonSugarMochiLevel);
     }
 
     private async Task<ClassicShipControllable> SpawnRandomShip(Galaxy galaxy)
