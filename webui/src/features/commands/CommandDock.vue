@@ -42,15 +42,25 @@ const shotFabricator = computed(() => activeSubsystems.value.find((entry) => ent
 const shotFabricatorRunning = computed(() => shotFabricator.value ? isShotFabricatorRunning(shotFabricator.value) : false);
 const shotFabricatorMaximumRate = computed(() => shotFabricator.value ? readSubsystemMaximumMetric(shotFabricator.value, 'Rate') : null);
 const shotMagazine = computed(() => activeSubsystems.value.find((entry) => entry.name === 'Shot Magazine' && entry.exists) ?? null);
-const shotMagazineCurrentShots = computed(() => readSubsystemMetric(shotMagazine.value, 'Shots') ?? 0);
-const shotMagazineMaximumShots = computed(() => readSubsystemMaximumMetric(shotMagazine.value, 'Shots') ?? 0);
+const shotMagazineCurrentShots = computed(() => {
+  const overlayAmmo = Number(activeOverlayState.value.ammo);
+  if (Number.isFinite(overlayAmmo)) {
+    return overlayAmmo;
+  }
+
+  return readSubsystemMetric(shotMagazine.value, 'Shots') ?? 0;
+});
+const shotMagazineMaximumShots = computed(() => {
+  const maximumShots = readSubsystemMaximumMetric(shotMagazine.value, 'Shots') ?? 0;
+  return maximumShots > 0 ? Math.round(maximumShots) : 0;
+});
 const shotMagazineIsFull = computed(() => {
   const maximumShots = shotMagazineMaximumShots.value;
   if (maximumShots <= 0) {
     return false;
   }
 
-  return shotMagazineCurrentShots.value >= (maximumShots - 0.001);
+  return shotMagazineCurrentShots.value >= maximumShots;
 });
 const shotRegenerationEnabled = computed(() => {
   const controllableId = activeControllableId.value;
