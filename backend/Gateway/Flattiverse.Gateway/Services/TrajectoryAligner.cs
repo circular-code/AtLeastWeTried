@@ -50,15 +50,14 @@ public static class TrajectoryAligner
     /// is too generous for discrete-time control.  Chosen so the ship reaches
     /// ≈0.5 speed at typical arrival thresholds (~14 units).
     /// </summary>
-    private const double StopApproachRate = 0.035d;
+    private const double StopApproachRate = 0.06d;
 
     /// <summary>
-    /// Distance threshold (in world units) at which destination-stop braking activates.
-    /// Beyond this distance the ship only obeys curvature braking and the speed limit
-    /// so it can maintain enough velocity to survive gravity wells mid-path.
-    /// Roughly 3× the ideal stopping distance from speed limit.
+    /// Multiplier on the ideal stopping distance to determine when destination-stop
+    /// braking activates.  3× gives a comfortable margin for the braking curve to
+    /// work within discrete-time control.
     /// </summary>
-    private const double StopBrakeActivationDistance = 500d;
+    private const double StopBrakeActivationMultiplier = 3.0d;
 
     /// <summary>
     /// Compute the engine vector that best steers the ship from its current position
@@ -270,33 +269,63 @@ public static class TrajectoryAligner
         // Only apply destination-stop braking when close enough to matter.
         // Far from the destination, the ship must maintain speed to survive
         // gravity wells along the path.  Curvature braking still applies.
-        var vMaxForStop = speedLimit;
-        if (totalRemainingDist < StopBrakeActivationDistance)
-        {
-            // Use gravity at the ship's current position (what it's fighting right now)
-            // rather than gravity at the far-away endpoint.
-            var (egx, egy) = ComputeGravityAcceleration(shipX, shipY, sources);
-            var gravMag = Math.Sqrt(egx * egx + egy * egy);
+        // Compute effective braking using worst-case gravity along the remaining path.
+        // This determines both the activation distance and the braking curve.
+        var (egx, egy) = ComputeGravityAcceleration(shipX, shipY, sources);
+        var currentGravMag = Math.Sqrt(egx * egx + egy * egy);
 
-            // Use the same adaptive lookahead as the engine vector computation
-            // so the braking estimate matches actual gravity-compensation cost.
+        // Sample gravity at the destination to anticipate stronger fields ahead.
+        var worstGravMag = currentGravMag;
+        var (tgx, tgy) = ComputeGravityAcceleration(targetX, targetY, sources);
+        worstGravMag = Math.Max(worstGravMag, Math.Sqrt(tgx * tgx + tgy * tgy));
+        if (path is not null && path.Count > 0)
+        {
+            var (dgx, dgy) = ComputeGravityAcceleration(path[^1].X, path[^1].Y, sources);
+            worstGravMag = Math.Max(worstGravMag, Math.Sqrt(dgx * dgx + dgy * dgy));
+        }
+
+        // Compute effective braking from worst-case gravity to size the activation zone.
+        var worstAdaptiveLookahead = GravityLookaheadTicks;
+        if (worstGravMag > 1e-9d)
+        {
+            worstAdaptiveLookahead = Math.Min(worstAdaptiveLookahead,
+                (int)Math.Max(1d, maxThrust * 0.5d / worstGravMag));
+        }
+        var worstGravCost = Math.Min(worstGravMag * worstAdaptiveLookahead, maxThrust * 0.7d);
+        var worstEffBraking = Math.Max(maxThrust - worstGravCost, maxThrust * 0.15d);
+
+        // Dynamic activation distance: 3× the stopping distance from speed limit
+        // using worst-case braking.  This keeps the ship at full speed until it
+        // actually needs to start decelerating.
+        var stopBrakeActivationDist = speedLimit * speedLimit / (2d * worstEffBraking) * StopBrakeActivationMultiplier;
+
+        var vMaxForStop = speedLimit;
+        if (totalRemainingDist < stopBrakeActivationDist)
+        {
+            // Blend from current gravity to worst-case as ship approaches destination.
+            var blendRange = Math.Max(stopBrakeActivationDist * 0.5d, 100d);
+            var blendFactor = Math.Clamp(1d - totalRemainingDist / blendRange, 0d, 1d);
+            var gravMag = currentGravMag + (worstGravMag - currentGravMag) * blendFactor;
+
             var adaptiveLookahead = GravityLookaheadTicks;
             if (gravMag > 1e-9d)
             {
-                var maxCompMag = maxThrust * 0.5d;
-                var maxTicks = maxCompMag / gravMag;
-                adaptiveLookahead = Math.Min(adaptiveLookahead, (int)Math.Max(1d, maxTicks));
+                adaptiveLookahead = Math.Min(adaptiveLookahead,
+                    (int)Math.Max(1d, maxThrust * 0.5d / gravMag));
             }
 
             var gravCompCost = Math.Min(gravMag * adaptiveLookahead, maxThrust * 0.7d);
-
-            // Effective braking = thrust left after gravity compensation.
             var effectiveBraking = Math.Max(maxThrust - gravCompCost, maxThrust * 0.15d);
+
+            // Safety margin: 70% of effective braking to account for cross-track
+            // correction stealing engine budget.  Higher than before (was 55%)
+            // because the activation distance is now correctly sized.
+            var formulaBraking = effectiveBraking * 0.7d;
 
             // Two braking limits, take the tighter one:
             // 1) Physics sqrt curve:  v = sqrt(2 · a_eff · d)
             // 2) Proportional stop:   v = d · StopApproachRate  (dominates near the endpoint)
-            var vMaxSqrt = Math.Sqrt(2d * effectiveBraking * totalRemainingDist);
+            var vMaxSqrt = Math.Sqrt(2d * formulaBraking * totalRemainingDist);
             var vMaxProp = totalRemainingDist * StopApproachRate;
             vMaxForStop = Math.Min(vMaxSqrt, vMaxProp);
 
@@ -304,10 +333,21 @@ public static class TrajectoryAligner
             // fraction of engine thrust, the ship must maintain enough speed to
             // resist cross-track drift.  Without this floor, braking near gravity
             // wells leaves the ship too slow and gravity pulls it off-path.
+            // Taper the floor toward zero as the ship approaches the destination
+            // so the braking curve can bring the ship to a stop.
             if (gravMag > maxThrust * 0.15d)
             {
                 var gravityRatio = gravMag / maxThrust;
                 var minGravSpeed = Math.Clamp(gravityRatio * speedLimit * 0.4d, 0.5d, speedLimit * 0.5d);
+
+                // Compute safe taper start: 3.5× ideal stopping distance from floor speed.
+                // This gives the braking curve room to bring speed below the floor.
+                var taperStart = Math.Max(200d, minGravSpeed * minGravSpeed / (2d * effectiveBraking) * 3.5d);
+                if (totalRemainingDist < taperStart)
+                {
+                    minGravSpeed *= totalRemainingDist / taperStart;
+                }
+
                 vMaxForStop = Math.Max(vMaxForStop, minGravSpeed);
             }
         }

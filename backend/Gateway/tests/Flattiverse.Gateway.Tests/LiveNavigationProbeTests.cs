@@ -19,7 +19,7 @@ public sealed class LiveNavigationProbeTests
     private const string ApiKey1 = "e15a4e7276dfed7355e201d1119b23d00486116e66237e191c9683b7e8896f5b";
     private const string ApiKey2 = "a8f86eb995f29230c55521d95dd182cd6c0325fa864336a42b8d143c391e2940";
 
-    private static readonly NavigationPoint Destination = new(1459.5d, -178.6d);
+    private static readonly NavigationPoint Destination = new(1569.3d, 10.3d);
     private static readonly TimeSpan SpawnTimeout = TimeSpan.FromSeconds(25);
     private static readonly TimeSpan NavigationTimeout = TimeSpan.FromMinutes(3);
     private static readonly TimeSpan SampleInterval = TimeSpan.FromMilliseconds(250);
@@ -151,6 +151,10 @@ public sealed class LiveNavigationProbeTests
                 var distanceToGoal = current.DistanceTo(Destination);
                 if (distanceToGoal <= arrivalThreshold)
                 {
+                    var aVx = (double)spawnedShip.Movement.X;
+                    var aVy = (double)spawnedShip.Movement.Y;
+                    var aSpd = Math.Sqrt(aVx * aVx + aVy * aVy);
+                    Log($"[LiveProbe] ARRIVED at ({current.X:0.###}, {current.Y:0.###}) dist={distanceToGoal:0.##} speed={aSpd:0.###} vel=({aVx:0.###}, {aVy:0.###})");
                     reachedGoal = true;
                     break;
                 }
@@ -177,7 +181,7 @@ public sealed class LiveNavigationProbeTests
                     if (d < closestSunDist) { closestSunDist = d; closestSunName = u.UnitId; }
                 }
 
-                if (actualSamples.Count % 4 == 1) // Log every ~1 second
+                if (actualSamples.Count % 4 == 1 || distanceToGoal < 100d) // Log every ~1s, or every tick near goal
                 {
                     Log(
                         $"[LiveProbe] T={actualSamples.Count:000} pos=({current.X:0.#}, {current.Y:0.#}) " +
