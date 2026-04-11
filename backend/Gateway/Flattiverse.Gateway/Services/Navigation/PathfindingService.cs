@@ -273,31 +273,7 @@ public sealed class PathfindingService : IConnectorEventHandler
                     { "y", point.Y },
                 })
                 .ToArray();
-            overlay["searchNodes"] = (plan.SearchNodes ?? Array.Empty<NavigationPreviewPoint>())
-                .Select(point => new Dictionary<string, object?>
-                {
-                    { "x", point.X },
-                    { "y", point.Y },
-                })
-                .ToArray();
-            overlay["searchEdges"] = (plan.SearchEdges ?? Array.Empty<NavigationPreviewSegment>())
-                .Select(segment => new Dictionary<string, object?>
-                {
-                    { "startX", segment.StartX },
-                    { "startY", segment.StartY },
-                    { "endX", segment.EndX },
-                    { "endY", segment.EndY },
-                })
-                .ToArray();
-            overlay["inflatedObstacles"] = (plan.Obstacles ?? Array.Empty<NavigationObstacle>())
-                .Select(obstacle => new Dictionary<string, object?>
-                {
-                    { "kind", obstacle.Kind },
-                    { "x", obstacle.Center.X },
-                    { "y", obstacle.Center.Y },
-                    { "radius", obstacle.Radius },
-                })
-                .ToArray();
+
         }
 
         return overlay;

@@ -3,20 +3,6 @@ export interface NavigationOverlayPoint {
   y: number;
 }
 
-export interface NavigationOverlaySegment {
-  startX: number;
-  startY: number;
-  endX: number;
-  endY: number;
-}
-
-export interface NavigationOverlayCircle {
-  x: number;
-  y: number;
-  radius: number;
-  kind?: string;
-}
-
 export interface NavigationOverlayState {
   active: boolean;
   pathStatus?: string;
@@ -29,8 +15,5 @@ export interface NavigationOverlayState {
   pointerX?: number;
   pointerY?: number;
   path?: NavigationOverlayPoint[];
-  searchNodes?: NavigationOverlayPoint[];
-  searchEdges?: NavigationOverlaySegment[];
-  inflatedObstacles?: NavigationOverlayCircle[];
   trajectory?: NavigationOverlayPoint[];
 }

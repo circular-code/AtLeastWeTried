@@ -11,7 +11,7 @@ import { type TrackedTargetVisual, createTrackedTargetVisual, disposeTrackedTarg
 import { createNavigationLookaheadMarker } from './navigationLookaheadMarker';
 import { type GravitySource, type GravityStrengthGrid, createGrid, createGlowField, createGravityStrengthGrid } from './grid';
 import { type ShipStatusVisual, createShipStatusVisual, disposeShipStatusVisual, hideShipStatusVisual, updateShipStatusVisual } from './shipStatusOverlay';
-import type { NavigationOverlayPoint, NavigationOverlaySegment, NavigationOverlayState as TypedNavigationOverlayState } from '../types/navigation';
+import type { NavigationOverlayPoint, NavigationOverlayState as TypedNavigationOverlayState } from '../types/navigation';
 import { isPlayerShipUnitKind, isShortLivedTransientUnitKind } from '../lib/unitKinds';
 
 const DEFAULT_DOMINATION_CAPTURE_RADIUS = 350;
@@ -40,8 +40,6 @@ type WorldSceneNavigationPointer = {
 } | null;
 
 type WorldSceneNavigationPath = NavigationOverlayPoint[] | null;
-
-type WorldSceneNavigationSearch = NavigationOverlaySegment[] | null;
 
 type WorldSceneTrajectory = NavigationOverlayPoint[] | null;
 
@@ -107,7 +105,6 @@ export class WorldScene {
   private readonly navigationPointer: THREE.LineSegments;
   private readonly trackedTargetVisuals: Map<string, TrackedTargetVisual>;
   private readonly navigationPathPreview: THREE.Line;
-  private readonly navigationSearchPreview: THREE.LineSegments;
   private readonly trajectoryPreview: THREE.Line;
   private readonly unseenTrajectoryPreview: THREE.LineSegments;
   private readonly unitBodyMaterial: UnitShaderMaterial;
@@ -209,16 +206,6 @@ export class WorldScene {
         depthWrite: false,
       }),
     );
-    this.navigationSearchPreview = new THREE.LineSegments(
-      new THREE.BufferGeometry(),
-      new THREE.LineBasicMaterial({
-        color: 0x4f6f8f,
-        transparent: true,
-        opacity: 0.4,
-        depthTest: false,
-        depthWrite: false,
-      }),
-    );
     this.trajectoryPreview = new THREE.Line(
       new THREE.BufferGeometry(),
       new THREE.LineBasicMaterial({
@@ -242,9 +229,6 @@ export class WorldScene {
     this.navigationPathPreview.visible = false;
     this.navigationPathPreview.frustumCulled = false;
     this.navigationPathPreview.renderOrder = 39;
-    this.navigationSearchPreview.visible = false;
-    this.navigationSearchPreview.frustumCulled = false;
-    this.navigationSearchPreview.renderOrder = 38;
     this.trajectoryPreview.visible = false;
     this.trajectoryPreview.frustumCulled = false;
     this.trajectoryPreview.renderOrder = 42;
@@ -264,7 +248,6 @@ export class WorldScene {
     this.root.add(this.navigationMarker);
     this.root.add(this.pendingNavigationMarker);
     this.root.add(this.navigationPointer);
-    this.root.add(this.navigationSearchPreview);
     this.root.add(this.navigationPathPreview);
     this.root.add(this.unseenTrajectoryPreview);
     this.root.add(this.trajectoryPreview);
@@ -416,7 +399,6 @@ export class WorldScene {
         this.updatePendingNavigationMarker();
         this.updateNavigationPointer();
         this.updateNavigationPathPreview();
-        this.updateNavigationSearchPreview();
         this.updateTrajectoryPreview();
       }
     }
@@ -746,7 +728,6 @@ export class WorldScene {
     this.updatePendingNavigationMarker();
     this.updateNavigationPointer();
     this.updateNavigationPathPreview();
-    this.updateNavigationSearchPreview();
     this.updateUnseenTrajectoryPreview();
     this.updateTrajectoryPreview();
     this.updateScannerCones();
@@ -1437,24 +1418,6 @@ export class WorldScene {
     this.unseenTrajectoryPreview.visible = true;
   }
 
-  private updateNavigationSearchPreview() {
-    const searchEdges = readNavigationSearch(this.ownerOverlay, this.selectedControllableId);
-    if (!searchEdges || searchEdges.length === 0) {
-      this.navigationSearchPreview.visible = false;
-      this.setDynamicLinePoints(this.navigationSearchPreview, []);
-      return;
-    }
-
-    const points = searchEdges.flatMap((segment) => [
-      new THREE.Vector3(segment.startX, -segment.startY, 2.8),
-      new THREE.Vector3(segment.endX, -segment.endY, 2.8),
-    ]);
-    this.navigationSearchPreview.renderOrder = 38;
-    this.navigationSearchPreview.frustumCulled = false;
-    this.setDynamicLinePoints(this.navigationSearchPreview, points);
-    this.navigationSearchPreview.visible = true;
-  }
-
   /**
    * Updates line geometry in-place when the buffer is large enough,
    * or replaces the geometry when it needs to grow.
@@ -1773,8 +1736,6 @@ export class WorldScene {
     (this.navigationPointer.material as THREE.Material).dispose();
     this.navigationPathPreview.geometry.dispose();
     (this.navigationPathPreview.material as THREE.Material).dispose();
-    this.navigationSearchPreview.geometry.dispose();
-    (this.navigationSearchPreview.material as THREE.Material).dispose();
     this.unseenTrajectoryPreview.geometry.dispose();
     (this.unseenTrajectoryPreview.material as THREE.Material).dispose();
     this.trajectoryPreview.geometry.dispose();
@@ -2055,23 +2016,6 @@ export function readNavigationPath(ownerOverlay: Record<string, unknown>, contro
     .map((point) => ({
       x: numberValue(point.x, 0),
       y: numberValue(point.y, 0),
-    }));
-}
-
-export function readNavigationSearch(ownerOverlay: Record<string, unknown>, controllableId: string): WorldSceneNavigationSearch {
-  const navigationState = readNavigationOverlay(ownerOverlay, controllableId);
-  if (!navigationState || navigationState.active !== true || !Array.isArray(navigationState.searchEdges)) {
-    return null;
-  }
-
-  return navigationState.searchEdges
-    .map((value) => objectValue(value))
-    .filter((value): value is Record<string, unknown> => value !== undefined)
-    .map((segment) => ({
-      startX: numberValue(segment.startX, 0),
-      startY: numberValue(segment.startY, 0),
-      endX: numberValue(segment.endX, 0),
-      endY: numberValue(segment.endY, 0),
     }));
 }
 
